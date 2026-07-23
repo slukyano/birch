@@ -12,3 +12,36 @@ agent-driven, this is not a PR-first project — as its own genre, distinct from
 workflow doc. **Design-heavy**: the content, where it lives (`CONTRIBUTING.md` vs. a short
 README "Development" note), and how it points at `tasks/workflow.md` without pretending to
 be it.
+
+## Design
+
+Decisions: a root `CONTRIBUTING.md`; standard PRs welcome.
+
+Create `CONTRIBUTING.md` at the repo root — the functional-contribution guide (its proper
+genre: how to build, test, and submit changes), distinct from `tasks/workflow.md` (how the
+project is produced). Contents:
+
+- **Getting started** — `cargo build`, `cargo test`, `cargo run -p birch`; toolchain via
+  `mise` (pinned `rust = "stable"`).
+- **Before submitting** — the gates stay green: `cargo fmt --check`,
+  `cargo clippy --all-targets`, `cargo test`; new behavior carries tests.
+- **Commits** — Conventional Commits (`<type>(<scope>): <subject>`), per `AGENTS.md`.
+- **Pull requests** — welcome, standard flow: fork, branch, PR against `main`; keep the gates
+  green and the change focused.
+- **Scope** — features are whitelisted: check the scope fence in `docs/design.md` (the feature
+  whitelist and the permanent out-of-scope list) before proposing a feature, so a PR is not
+  rejected as out of scope. Bug fixes, docs, and adapters are always welcome.
+- **Context (not a requirement)** — the project is developed via an agent-driven sprint
+  workflow ([`tasks/workflow.md`](tasks/workflow.md)); that is the internal production process
+  and nothing a contributor must follow.
+
+**Reconcile the "no PRs" wording.** `AGENTS.md` and `workflow.md` say development runs "in
+sprints (no PRs)" — that describes the *internal* maintainer+agent flow, not external
+contribution. Add a short clarifying clause where that phrase appears so the two are not read
+as contradictory: internal development is PR-less; external contributions come as standard
+issues and PRs. (This AGENTS.md touch overlaps `split-workflow-doc`'s hook edit — apply once,
+consistently.)
+
+**Verification.** `CONTRIBUTING.md` renders on GitHub with a Contributing link; the build/test
+commands are accurate; links to `docs/design.md` and `tasks/workflow.md` resolve.
+
