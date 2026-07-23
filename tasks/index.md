@@ -36,6 +36,24 @@ okf_version: "0.1"
 * [Add "Open with…" to the context menu](add-open-with.md) - Choose an alternative open command for the selected node.
 * [Verify the herdr integration live](verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
 
+# Publication
+
+Pre-publication work — repo hygiene, distribution, and process docs. Not product features,
+so outside the `docs/design.md` scope fence.
+
+* [Add the MIT LICENSE file](add-license-file.md) - Root LICENSE matching Cargo's `license = "MIT"`.
+* [Remove tracked scratch fixtures and tighten .gitignore](remove-scratch-fixtures.md) - Drop bar.md / bar2.md / foo/; ignore scratch/editor/tooling dirs.
+* [Add the CI workflow](add-ci-workflow.md) - GitHub Actions: fmt --check, clippy --all-targets, test on push/PR.
+* [Split the workflow doc into operational core and meta](split-workflow-doc.md) - Trim tasks/workflow.md to the run-time core; move rationale to the sprint-workflow skill.
+* [Define the external contribution flow](define-contribution-flow.md) - Honest issues-welcome / agent-driven framing, distinct from the workflow doc.
+* [Set up the Homebrew tap and formula](set-up-homebrew-tap.md) - slukyano/homebrew-tap installing the binary and the contrib adapters (ADR 0002).
+* [Automate tagged releases](automate-releases.md) - Tag-driven Actions building macOS/Linux binaries into a GitHub Release.
+* [Document installation in the README](document-installation.md) - Install section: brew install and cargo install --git, with the adapter caveat.
+* [Add a demo recording to the README](add-repo-demo.md) - asciinema/GIF of the tree, search, and git badges.
+* [Fill in Cargo package metadata](add-cargo-metadata.md) - repository / homepage / keywords / categories for discoverability.
+* [Decide the crates.io publishing story](decide-crates-io-publish.md) - Publish as birch-tree (ADR 0002 fallback) vs Homebrew-only.
+* [Add a changelog and issue templates](add-changelog.md) - CHANGELOG.md and optional GitHub templates.
+
 # Done
 
 * [Verify the name "birch" is available](verify-name-availability.md) - Name kept per ADR 0002; crates.io conflict noted, Homebrew free.

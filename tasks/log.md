@@ -84,3 +84,12 @@
   `--socket`/`--open-cmd`/`--open-detached`/`birch-ctl set-root`. Rides the Dock beta.
   Executed autonomously and consolidated onto `main` (retiring the `mvp` branch) per
   maintainer direction.
+* **Publication prep**: Collapsed development history into a single `prepare for
+  publication` root commit and stripped authoring dates from the `tasks/` and `docs/adr/`
+  bundles (sprints kept, dates removed; the workflow no longer stamps dates). Pushed to a
+  new public GitHub repo (the old private repo renamed to `birch-private` as a backup).
+  Seeded a `# Publication` backlog — twelve `Draft` tasks spanning repo hygiene (LICENSE,
+  scratch-fixture removal, CI), distribution (Homebrew tap, release automation, install
+  docs), external polish (README demo, Cargo metadata, crates.io decision, changelog), and
+  process docs (splitting `workflow.md` into operational core vs. skill meta, and defining
+  an external contribution flow).
