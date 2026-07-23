@@ -46,6 +46,7 @@ so outside the `docs/design.md` scope fence.
 * [Add the CI workflow](add-ci-workflow.md) - GitHub Actions: fmt --check, clippy --all-targets, test on push/PR.
 * [Split the workflow doc into operational core and meta](split-workflow-doc.md) - Trim tasks/workflow.md to the run-time core; move rationale to the sprint-workflow skill.
 * [Define the external contribution flow](define-contribution-flow.md) - Honest issues-welcome / agent-driven framing, distinct from the workflow doc.
+* [Restructure the tasks bundle](restructure-tasks-bundle.md) - Numbered task slugs, closed tasks to tasks/archive/, sprint files to tasks/sprints/.
 * [Set up the Homebrew tap and formula](set-up-homebrew-tap.md) - slukyano/homebrew-tap installing the binary and the contrib adapters (ADR 0002).
 * [Automate tagged releases](automate-releases.md) - Tag-driven Actions building macOS/Linux binaries into a GitHub Release.
 * [Document installation in the README](document-installation.md) - Install section: brew install and cargo install --git, with the adapter caveat.
