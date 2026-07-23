@@ -1,0 +1,12 @@
+[package]
+name = "birch-ctl"
+description = "Thin socket client for controlling a running birch instance."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+birch-core = { path = "../birch-core" }
+clap.workspace = true
+serde_json.workspace = true

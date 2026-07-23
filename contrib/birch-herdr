@@ -1,0 +1,81 @@
+#!/bin/sh
+# birch-herdr — reference host adapter for herdr (see docs/integrations.md).
+#
+# Same pattern as birch-tmux over herdr's pane CLI: spawn birch in a side
+# pane with an adapter-chosen socket and an open-cmd that targets the pane
+# the adapter was invoked from. birch's promise to this script is only: the
+# socket protocol, --socket, --open-cmd with --open-detached, and clean exit
+# on SIGHUP.
+#
+# Usage:
+#   birch-herdr open [dir]    split a birch side pane off the current pane
+#   birch-herdr toggle [dir]  open the pane, or close it if it exists
+#   birch-herdr socket        print the adapter's socket path
+#   birch-herdr open-in-main <file>
+#                             internal: run the editor in the main pane
+#                             (used as birch's --open-cmd)
+#
+# Reverse-reveal from an editor in the main pane:
+#   birch-ctl --socket "$(birch-herdr socket)" reveal <file>
+
+set -eu
+
+# Socket and state in a private per-user dir (world-writable /tmp is not a
+# rendezvous; a pre-created dir owned by someone else must not be trusted).
+# macOS's $TMPDIR carries a trailing slash; strip it before composing paths.
+tmp="${TMPDIR:-/tmp}"
+state_dir="${XDG_RUNTIME_DIR:-${tmp%/}/birch-adapter-$(id -u)}"
+[ -d "$state_dir" ] || mkdir -m 700 "$state_dir"
+owner="$(stat -f %u "$state_dir" 2>/dev/null || stat -c %u "$state_dir" 2>/dev/null)"
+if [ "$owner" != "$(id -u)" ]; then
+    echo "birch adapter: $state_dir is not owned by the current user" >&2
+    exit 1
+fi
+socket="$state_dir/birch-herdr.sock"
+pane_file="$state_dir/herdr-pane"
+main_file="$state_dir/herdr-main-pane"
+
+# POSIX single-quote escaping: the only safe way to hand a string to a shell.
+shquote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+current_pane() {
+    herdr pane current | awk '{ print $1; exit }'
+}
+
+case "${1:-open}" in
+open)
+    dir="${2:-$PWD}"
+    main="$(current_pane)"
+    printf '%s\n' "$main" > "$main_file"
+    pane="$(herdr pane split --pane "$main" --direction right --ratio 0.25 --cwd "$dir" --no-focus \
+        | awk '{ print $1; exit }')"
+    printf '%s\n' "$pane" > "$pane_file"
+    # Inner shquote protects a $0 with spaces inside birch's shell-words
+    # split; outer shquotes protect everything from the pane's shell.
+    open_cmd="$(shquote "$0") open-in-main {}"
+    herdr pane run "$pane" \
+        "birch --socket $(shquote "$socket") --open-cmd $(shquote "$open_cmd") --open-detached $(shquote "$dir")"
+    ;;
+toggle)
+    if [ -f "$pane_file" ] && herdr pane get "$(cat "$pane_file")" >/dev/null 2>&1; then
+        herdr pane close "$(cat "$pane_file")"   # birch exits cleanly on SIGHUP
+        rm -f "$pane_file"
+    else
+        exec "$0" open "${2:-}"
+    fi
+    ;;
+open-in-main)
+    main="$(cat "$main_file")"
+    # The file path is argv here; shquote makes it inert in the pane's shell.
+    herdr pane run "$main" "${EDITOR:-vi} $(shquote "$2")"
+    ;;
+socket)
+    printf '%s\n' "$socket"
+    ;;
+*)
+    echo "usage: birch-herdr [open|toggle|socket] [dir]" >&2
+    exit 64
+    ;;
+esac

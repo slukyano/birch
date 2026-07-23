@@ -1,0 +1,16 @@
+[package]
+name = "birch"
+description = "Lean and beautiful interactive file tree for the terminal."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+birch-core = { path = "../birch-core" }
+birch-tui = { path = "../birch-tui" }
+ratatui.workspace = true
+crossterm.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+signal-hook.workspace = true

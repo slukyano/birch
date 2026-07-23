@@ -1,0 +1,14 @@
+[tools]
+rust = "stable"
+
+# `mise run dev`: build, then drop into a subshell where the debug birch and
+# the contrib adapters are on PATH (the env patch lives in mise.dev.toml, so
+# outside this subshell a globally installed birch is untouched).
+[tasks.dev]
+description = "build and enter a dev shell with target/debug and contrib/ on PATH"
+raw = true
+run = """
+set -e
+cargo build
+MISE_ENV=dev exec "${SHELL:-/bin/zsh}"
+"""

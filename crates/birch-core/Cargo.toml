@@ -1,0 +1,16 @@
+[package]
+name = "birch-core"
+description = "Real tree, sources-as-delta-streams, watcher, git status, search, file ops. Must build without ratatui."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+ignore.workspace = true
+notify = "8"
+nucleo-matcher.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shell-words.workspace = true
+unicode-segmentation.workspace = true

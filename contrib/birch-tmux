@@ -1,0 +1,92 @@
+#!/bin/sh
+# birch-tmux — reference host adapter for tmux (see docs/integrations.md).
+#
+# The adapter pattern in ~a screen of code: spawn birch in a side pane with a
+# host-chosen socket and an open-cmd that targets the main pane, and wire a
+# toggle. birch's promise to this script is only: the socket protocol,
+# --socket, --open-cmd with --open-detached, and clean exit on SIGHUP when
+# the pane dies.
+#
+# Usage:
+#   birch-tmux open [dir]     spawn (or focus) the birch side pane
+#   birch-tmux toggle [dir]   open the pane, or kill it if it exists
+#   birch-tmux socket         print the socket path for this tmux session
+#   birch-tmux open-in-main <file>
+#                             internal: run the editor in the main pane
+#                             (birch invokes this as its --open-cmd; the path
+#                             arrives as one argv element, never via a shell)
+#
+# Suggested binding (~/.tmux.conf):
+#   bind-key b run-shell "birch-tmux toggle #{pane_current_path}"
+#
+# Reverse-reveal from an editor inside the same session:
+#   birch-ctl --socket "$(birch-tmux socket)" reveal <file>
+
+set -eu
+
+# Socket in a private per-user dir (world-writable /tmp is not a rendezvous).
+# macOS's $TMPDIR carries a trailing slash; strip it before composing paths.
+tmp="${TMPDIR:-/tmp}"
+state_dir="${XDG_RUNTIME_DIR:-${tmp%/}/birch-adapter-$(id -u)}"
+[ -d "$state_dir" ] || mkdir -m 700 "$state_dir"
+owner="$(stat -f %u "$state_dir" 2>/dev/null || stat -c %u "$state_dir" 2>/dev/null)"
+if [ "$owner" != "$(id -u)" ]; then
+    echo "birch adapter: $state_dir is not owned by the current user" >&2
+    exit 1
+fi
+session="$(tmux display-message -p '#{session_id}' | tr -d '$')"
+socket="$state_dir/birch-tmux-${session}.sock"
+pane_title="birch-tree"
+
+# POSIX single-quote escaping: the only safe way to type a string into an
+# interactive shell.
+shquote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+find_pane() {
+    tmux list-panes -F '#{pane_id} #{pane_title}' \
+        | awk -v t="$pane_title" '$2 == t { print $1; exit }'
+}
+
+case "${1:-open}" in
+open)
+    dir="${2:-$(tmux display-message -p '#{pane_current_path}')}"
+    existing="$(find_pane)"
+    if [ -n "$existing" ]; then
+        tmux select-pane -t "$existing"
+        exit 0
+    fi
+    main_pane="$(tmux display-message -p '#{pane_id}')"
+    tmux set-environment "BIRCH_MAIN_PANE" "$main_pane"
+    # birch splits --open-cmd shell-words-style and then executes it as argv
+    # (no shell), so the inner shquote protects a $0 with spaces and {} stays
+    # a plain token the adapter receives as one argument.
+    open_cmd="$(shquote "$0") open-in-main {}"
+    tmux split-window -hb -l 32 -c "$dir" \
+        "printf '\\033]2;%s\\033\\\\' $(shquote "$pane_title"); exec birch --socket $(shquote "$socket") --open-cmd $(shquote "$open_cmd") --open-detached $(shquote "$dir")"
+    tmux select-pane -T "$pane_title"
+    ;;
+toggle)
+    existing="$(find_pane)"
+    if [ -n "$existing" ]; then
+        tmux kill-pane -t "$existing"   # birch exits cleanly on SIGHUP
+    else
+        exec "$0" open "${2:-}"
+    fi
+    ;;
+open-in-main)
+    main="$(tmux show-environment BIRCH_MAIN_PANE | cut -d= -f2)"
+    # The file path is argv here; shquote makes it safe to type into the
+    # main pane's shell (spaces, quotes, backticks all inert).
+    tmux send-keys -t "$main" -l "${EDITOR:-vi} $(shquote "$2")"
+    tmux send-keys -t "$main" Enter
+    ;;
+socket)
+    printf '%s\n' "$socket"
+    ;;
+*)
+    echo "usage: birch-tmux [open|toggle|socket] [dir]" >&2
+    exit 64
+    ;;
+esac

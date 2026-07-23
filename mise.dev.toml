@@ -1,0 +1,6 @@
+# Dev-shell environment, loaded only when MISE_ENV=dev (see the `dev` task in
+# mise.toml): the debug build and the contrib adapters go on PATH so `birch`,
+# `birch-ctl`, `birch-cmux`, … run with no prefixes. Deliberately not in
+# mise.toml — everywhere else, a globally installed stock birch wins.
+[env]
+_.path = ["{{config_root}}/contrib", "{{config_root}}/target/debug"]
