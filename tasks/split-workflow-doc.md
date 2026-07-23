@@ -42,3 +42,22 @@ the authority statements; the rest of `workflow.md` is impersonal too.
 
 Mechanical check: does the sentence name an actor? If so, is it an authority statement in
 `workflow.md`? If not, rewrite it nominally.
+
+## Notes — a formal scope-presentation format for cutting a sprint
+
+Close-out has a rich, mandated presentation format (§6c); scope approval has none — the chat
+protocol (§"Asking for approval") only says to list tasks with one-liners. Cutting a sprint
+is a real gate (it writes `sprint-NNN.md` to `main` and branches) and deserves a symmetric,
+formal format. Define one, parallel to §6c, requiring:
+
+- **Sprint id, theme, and branch** — `sprint-NNN`, a short theme, `sprint/NNN`.
+- **In-scope task ledger** — every task as: slug, priority, one-line description, and a
+  design-weight flag (trivial vs. design-heavy).
+- **Ordering / dependencies** among in-scope tasks (`blocked_by`, natural sequence).
+- **Considered but out of scope** — tasks weighed and deferred, each with a one-line why.
+- **Scope rationale** — the theme that ties the set together and what is deliberately held back.
+- **The sprint-start action requested** — commit `tasks/sprint-NNN.md` (status `Designing`) to
+  `main`, then cut `sprint/NNN`.
+
+Presented per the chat protocol (§"Asking for approval"): separator, short summary,
+self-contained context, file references, explicit questions.
