@@ -1,7 +1,6 @@
 # Contributing to birch
 
-Thanks for your interest in birch. Bug reports, documentation, host adapters, and code
-changes are all welcome.
+Bug reports, documentation, host adapters, and code changes to birch are all welcome.
 
 ## Getting started
 

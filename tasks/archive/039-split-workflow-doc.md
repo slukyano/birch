@@ -2,7 +2,7 @@
 type: Task
 title: Split the workflow doc into operational core and meta
 description: Trim tasks/workflow.md to what an agent executes; move rationale and cross-repo meta back to the sprint-workflow skill.
-status: Designed
+status: Done
 priority: high
 ---
 

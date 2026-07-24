@@ -2,7 +2,7 @@
 type: Task
 title: Restructure the tasks bundle — numbering, archive, and sprints subdir
 description: Number task slugs (001-, 002-, …), move closed tasks to tasks/archive/, and move sprint files to tasks/sprints/.
-status: Designed
+status: Done
 priority: medium
 ---
 

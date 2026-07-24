@@ -2,7 +2,7 @@
 type: Task
 title: Add the MIT LICENSE file
 description: Add a root LICENSE (MIT) matching Cargo's license = "MIT"; without it GitHub reads the repo as all-rights-reserved.
-status: Designed
+status: Done
 priority: high
 ---
 

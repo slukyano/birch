@@ -93,3 +93,12 @@
   docs), external polish (README demo, Cargo metadata, crates.io decision, changelog), and
   process docs (splitting `workflow.md` into operational core vs. skill meta, and defining
   an external contribution flow).
+* **Sprint 012 done**: Publishable repo & process docs. Root `LICENSE` (MIT) and
+  `CONTRIBUTING.md` (standard PRs welcome, distinct from the maintainer's sprint flow) added;
+  scratch fixtures removed and `.gitignore` tightened; `workflow.md` reworked — the
+  publication-hygiene gate reformulated into hygiene + voice, a scope-presentation format
+  added, and the new bundle layout documented. Bundle restructured: task files renamed to
+  `NNN-slug.md` with the number in the concept name, closed tasks moved to `tasks/archive/`,
+  sprint records to `tasks/sprints/`, and every `blocked_by` / sprint `tasks:` reference
+  renumbered. The distribution and polish tasks (CI, Homebrew, releases, install docs, demo,
+  Cargo metadata, crates.io decision, changelog) stay `Draft` for a later infrastructure sprint.

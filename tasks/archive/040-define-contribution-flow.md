@@ -2,7 +2,7 @@
 type: Task
 title: Define the external contribution flow
 description: A minimal, honest contribution framing distinct from the agentic development workflow.
-status: Designed
+status: Done
 priority: high
 ---
 

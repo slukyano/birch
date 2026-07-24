@@ -19,7 +19,7 @@ okf_version: "0.1"
 * [Sprint 009 — cmux adapter live-use refinements](sprints/sprint-009.md) - Done.
 * [Sprint 010 — Click model and detached open commands](sprints/sprint-010.md) - Done.
 * [Sprint 011 — cmux Dock integration](sprints/sprint-011.md) - Done.
-* [Sprint 012 — Publishable repo & process docs](sprints/sprint-012.md) - Implementing.
+* [Sprint 012 — Publishable repo & process docs](sprints/sprint-012.md) - Done.
 
 # Tasks
 
@@ -42,12 +42,7 @@ okf_version: "0.1"
 Pre-publication work — repo hygiene, distribution, and process docs. Not product features,
 so outside the `docs/design.md` scope fence.
 
-* [Add the MIT LICENSE file](036-add-license-file.md) - Root LICENSE matching Cargo's `license = "MIT"`.
-* [Remove tracked scratch fixtures and tighten .gitignore](037-remove-scratch-fixtures.md) - Drop bar.md / bar2.md / foo/; ignore scratch/editor/tooling dirs.
 * [Add the CI workflow](038-add-ci-workflow.md) - GitHub Actions: fmt --check, clippy --all-targets, test on push/PR.
-* [Split the workflow doc into operational core and meta](039-split-workflow-doc.md) - Trim tasks/workflow.md to the run-time core; move rationale to the sprint-workflow skill.
-* [Define the external contribution flow](040-define-contribution-flow.md) - Honest issues-welcome / agent-driven framing, distinct from the workflow doc.
-* [Restructure the tasks bundle](041-restructure-tasks-bundle.md) - Numbered task slugs, closed tasks to tasks/archive/, sprint files to tasks/sprints/.
 * [Set up the Homebrew tap and formula](042-set-up-homebrew-tap.md) - slukyano/homebrew-tap installing the binary and the contrib adapters (ADR 0002).
 * [Automate tagged releases](043-automate-releases.md) - Tag-driven Actions building macOS/Linux binaries into a GitHub Release.
 * [Document installation in the README](044-document-installation.md) - Install section: brew install and cargo install --git, with the adapter caveat.
@@ -82,5 +77,10 @@ so outside the `docs/design.md` scope fence.
 * [Click selects, double-click activates](archive/022-click-selects-first.md) - 450 ms path-keyed double-click; chevrons immediate (ADR 0015).
 * [Detached open commands — --open-detached](archive/023-detach-open-cmd.md) - Fire-and-forget open-cmds; adapters flash-free.
 * [Adopt the cmux Dock integration](archive/024-adopt-cmux-dock-integration.md) - birch-cmux rewritten around the Dock: per-window socket, preview-as-tab, workspace-follow watcher (ADR 0016).
+* [Add the MIT LICENSE file](archive/036-add-license-file.md) - Root LICENSE (MIT), Copyright (c) 2026 Stanislav Lukyanov.
+* [Remove tracked scratch fixtures and tighten .gitignore](archive/037-remove-scratch-fixtures.md) - Dropped bar.md / bar2.md / foo/; ignore .claude/ .cmux/ .readb.
+* [Split the workflow doc into operational core and meta](archive/039-split-workflow-doc.md) - Reformulated hygiene gate (hygiene + voice), scope-presentation format, new bundle layout documented.
+* [Define the external contribution flow](archive/040-define-contribution-flow.md) - Root CONTRIBUTING.md; standard PRs welcome, distinct from the workflow doc.
+* [Restructure the tasks bundle](archive/041-restructure-tasks-bundle.md) - Numbered task slugs, closed tasks to tasks/archive/, sprint files to tasks/sprints/.
 
 # Dropped
