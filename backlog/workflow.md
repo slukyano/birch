@@ -9,7 +9,7 @@ tags:
 
 # Overview
 
-This `tasks/` directory is the project backlog **and** an OKF bundle — one markdown file per
+This `backlog/` directory is the project backlog **and** an OKF bundle — one markdown file per
 concept, with YAML frontmatter carrying the machine-readable state.
 
 This workflow is how the **maintainer** (the project's human owner) develops birch; the two
@@ -31,8 +31,8 @@ The bundle holds three concept types:
 - `Sprint` — one `sprint-NNN.md` per sprint: the durable state of active and past work.
 - `Process` — this document.
 
-**Layout.** Active tasks (`Draft`, `Designed`) live in `tasks/`; closed tasks (`Done`,
-`Dropped`) move to `tasks/archive/`; sprint records live in `tasks/sprints/`. `index.md`,
+**Layout.** Active tasks (`Draft`, `Designed`) live in `backlog/tasks/`; closed tasks (`Done`,
+`Dropped`) move to `backlog/archive/`; sprint records live in `backlog/sprints/`. `index.md`,
 `log.md`, and `workflow.md` stay at the bundle root. `index.md` and `log.md` are OKF-reserved
 (a listing and a change log), not concepts. Architecture Decision Records live in a separate
 bundle, [`docs/adr/`](../docs/adr/index.md).
@@ -77,7 +77,7 @@ One sprint moves through:
 ## 1. Session start
 
 Every session begins by checking for unfinished work: is there any `Sprint` concept in
-`tasks/sprints/` whose `status` is not `Done` or `Aborted`?
+`backlog/sprints/` whose `status` is not `Done` or `Aborted`?
 
 - **An active sprint exists** → check out its branch (the branch always has the freshest
   sprint state) and resume from the sprint body: the task checklist, open questions, and
@@ -91,7 +91,7 @@ The agent reviews the open backlog (`Draft` tasks, unblocked) and proposes a set
 sprint — proposing *all* open tasks is fine when the scope feels right. The maintainer adjusts and
 approves.
 
-**Scope approval is the sprint-start commit on `main`**: create `tasks/sprints/sprint-NNN.md`
+**Scope approval is the sprint-start commit on `main`**: create `backlog/sprints/sprint-NNN.md`
 (status `Designing`, the task list, the branch name), commit it to `main`, then create the
 sprint branch `sprint/NNN` from it. All subsequent work happens on the branch.
 
@@ -103,7 +103,7 @@ The scope is **presented for approval** in the chat protocol (below), with:
 - **ordering / dependencies** among the in-scope tasks;
 - **considered but out of scope** — tasks weighed and deferred, each with a one-line why;
 - the **scope rationale** — what ties the set together and what is deliberately held back;
-- the **sprint-start action** requested (commit `tasks/sprints/sprint-NNN.md`, cut `sprint/NNN`).
+- the **sprint-start action** requested (commit `backlog/sprints/sprint-NNN.md`, cut `sprint/NNN`).
 
 ## 3. Design phase (interactive)
 
@@ -162,11 +162,11 @@ merge itself.
 ### 6a. Close-out bookkeeping (committed to the branch, before presenting)
 
 1. Flip every delivered task `Designed → Done` (surgical frontmatter edit: `status` only) and
-   move its file into `tasks/archive/`.
+   move its file into `backlog/archive/`.
 2. Flip the sprint `Implementing → Done`, the same way.
 3. Write a `## Sprint summary` into the sprint body and a close-out `## Session log` line.
-4. Bring the hand-maintained `tasks/index.md` and `tasks/log.md` current (move Done tasks to a
-   `# Done` section, linking their `tasks/archive/` path; mark the sprint Done; add a log entry).
+4. Bring the hand-maintained `backlog/index.md` and `backlog/log.md` current (move Done tasks to a
+   `# Done` section, linking their `backlog/archive/` path; mark the sprint Done; add a log entry).
 5. **Every open question / deferred idea must have a home.** If something was left undone —
    deliberately or by omission — it is either done now or captured as a `Draft` task. Never
    say "carried to the backlog" without a concrete task name; create the task if none exists.

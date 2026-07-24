@@ -32,7 +32,7 @@ project is produced). Contents:
   whitelist and the permanent out-of-scope list) before proposing a feature, so a PR is not
   rejected as out of scope. Bug fixes, docs, and adapters are always welcome.
 - **How this project is developed (context, not a requirement)** — the maintainer develops
-  birch through the sprint workflow in [`tasks/workflow.md`](tasks/workflow.md), driven by the
+  birch through the sprint workflow in [`tasks/workflow.md`](../workflow.md), driven by the
   in-repo task and sprint markdown files under `tasks/`. Contributors do **not** need to
   follow that flow or touch those files: open GitHub issues and pull requests in the normal
   way. The in-repo workflow is the maintainer's process; the contributor path is standard

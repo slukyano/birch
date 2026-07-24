@@ -6,7 +6,7 @@ status: Done
 priority: high
 ---
 
-Phase 0.1 of [the design doc](../docs/design.md): navigable lazy-loading tree with Nerd Font
+Phase 0.1 of [the design doc](../../docs/design.md): navigable lazy-loading tree with Nerd Font
 icons, `--open-cmd` (with `{line}` in the template contract from day one), click/scroll mouse
 support — and, load-bearing, the real-tree/render split plus the sources-as-delta-streams
 interface in place from the start.

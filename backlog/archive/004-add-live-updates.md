@@ -8,7 +8,7 @@ blocked_by:
 - 002-build-core-tree-view
 ---
 
-Phase 0.2 (partial) of [the design doc](../docs/design.md): watcher-driven live updates for
+Phase 0.2 (partial) of [the design doc](../../docs/design.md): watcher-driven live updates for
 filesystem and git state. Watch only expanded dirs (the constraint shapes the architecture);
 selection stays stable when rows appear/disappear above it.
 
@@ -17,7 +17,7 @@ churn — build systems generating files while the user navigates.
 
 ## Design
 
-Per [ADR 0006](../docs/adr/0006-snapshot-deltas-stateless-sources.md), a watcher event
+Per [ADR 0006](../../docs/adr/0006-snapshot-deltas-stateless-sources.md), a watcher event
 degrades to "re-scan one level of one dir": the `Snapshot` delta carries the authoritative
 listing and `Tree::apply` reconciles (insert/update/remove) while preserving surviving
 children's state.

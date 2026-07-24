@@ -8,13 +8,13 @@ blocked_by:
 - 002-build-core-tree-view
 ---
 
-Phase 0.2 (partial) of [the design doc](../docs/design.md): pure single-child dir chains
+Phase 0.2 (partial) of [the design doc](../../docs/design.md): pure single-child dir chains
 render as one row (`a/b/c`), visibility-aware, keyboard treats a chain as one node, chains
 split/fuse on live updates. Strictly a paint-time transform — the real tree is untouched.
 
 ## Design
 
-Per [ADR 0007](../docs/adr/0007-compaction-peek-loading.md):
+Per [ADR 0007](../../docs/adr/0007-compaction-peek-loading.md):
 
 - **Flatten-time transform** in `flat_view`: while a visible dir's only visible child is a
   single dir, extend the chain; emit one `Row` labeled with the joined names (separators

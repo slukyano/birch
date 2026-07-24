@@ -8,7 +8,7 @@ blocked_by:
 - 002-build-core-tree-view
 ---
 
-Phase 0.5 of [the design doc](../docs/design.md): exactly four ops (rename, delete-to-trash,
+Phase 0.5 of [the design doc](../../docs/design.md): exactly four ops (rename, delete-to-trash,
 new file, new dir) as inline row editing; git-aware delete confirmation; the right-click
 context menu as the primary action surface; hover highlight; copy name / relative path /
 absolute path with the OSC 52-first clipboard fallback chain.

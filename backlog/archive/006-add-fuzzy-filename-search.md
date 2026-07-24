@@ -8,15 +8,15 @@ blocked_by:
 - 002-build-core-tree-view
 ---
 
-Phase 0.3 of [the design doc](../docs/design.md): typing starts a whole-tree fuzzy jump —
+Phase 0.3 of [the design doc](../../docs/design.md): typing starts a whole-tree fuzzy jump —
 non-matches dim, matches highlight, arrows cycle, tree stays spatially stable, auto-expands
 to reveal matches, matches compacted labels. The same engine later powers picker-mode
 filtering.
 
 ## Design
 
-Per [ADR 0009](../docs/adr/0009-search-index-and-engine.md) (engine) and
-[ADR 0008](../docs/adr/0008-q-types-into-search.md) (`q` types; `Ctrl-C` quits).
+Per [ADR 0009](../../docs/adr/0009-search-index-and-engine.md) (engine) and
+[ADR 0008](../../docs/adr/0008-q-types-into-search.md) (`q` types; `Ctrl-C` quits).
 
 **birch-core** gains a `search` module:
 

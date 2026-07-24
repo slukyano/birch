@@ -47,7 +47,7 @@ scope. Bug fixes, documentation, and host adapters are always welcome.
 ## How this project is developed
 
 The maintainer develops birch through the sprint workflow described in
-[`tasks/workflow.md`](tasks/workflow.md), driven by the task and sprint markdown files under
-[`tasks/`](tasks/). That is the maintainer's internal process — contributors do not need to
+[`backlog/workflow.md`](backlog/workflow.md), driven by the task and sprint markdown files under
+[`backlog/`](backlog/). That is the maintainer's internal process — contributors do not need to
 follow it or touch those files. The contributor path is standard GitHub: issues and pull
 requests.

@@ -16,7 +16,7 @@ non-dock fallback (tmux/herdr keep the split-pane pattern).
 
 ## Design
 
-Recorded as [ADR 0016](../docs/adr/0016-cmux-integrates-via-the-dock.md). Established
+Recorded as [ADR 0016](../../docs/adr/0016-cmux-integrates-via-the-dock.md). Established
 live (throwaway cmux windows) before implementing:
 
 - **One dock birch per window.** The dock's control shell has no `CMUX_WORKSPACE_ID`;

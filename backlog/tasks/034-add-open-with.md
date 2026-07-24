@@ -8,6 +8,6 @@ blocked_by:
 - 029-add-file-operations
 ---
 
-Listed as "(later)" in the context-menu sketch of [the design doc](../docs/design.md):
+Listed as "(later)" in the context-menu sketch of [the design doc](../../docs/design.md):
 an "Open with…" entry offering alternative open commands. Needs a design for where the
 alternatives come from (config?) before it can be scheduled; post-MVP.

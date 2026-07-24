@@ -16,11 +16,11 @@ lands.
 - `OpenCmd::build` loses its `line` parameter and the `{line}` substitution/dropping
   logic; templates are `{}`-only. `--open-cmd` help, design doc, README, and
   integration examples say only that.
-- [add-content-search](add-content-search.md) now owns the open-at-line contract: it
+- [add-content-search](../tasks/030-add-content-search.md) now owns the open-at-line contract: it
   reintroduces `{line}` (with the drop-args-when-absent behavior) as part of phase
   0.6, and says so explicitly.
 - Backlog audit — every not-yet-built part of the design doc must be a task. Sweep
   result: all sections map to existing drafts; two mentions added to
-  [add-file-operations](add-file-operations.md) that were only in the design doc
+  [add-file-operations](../tasks/029-add-file-operations.md) that were only in the design doc
   (F2 on a chain edits the full `a/b/c` fragment; mouse segment-clicks scope the
   context menu to individual chain members).

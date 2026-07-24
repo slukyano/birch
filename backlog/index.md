@@ -23,33 +23,33 @@ okf_version: "0.1"
 
 # Tasks
 
-* [Add visual styles](025-add-visual-styles.md) - default / vscode / plain presets.
-* [Support multiple roots](026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
-* [Add a picker file filter](027-add-picker-filter.md) - Glob/regex corpus restriction for picker mode.
-* [Add copy name and paths](028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
+* [Add visual styles](tasks/025-add-visual-styles.md) - default / vscode / plain presets.
+* [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
+* [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob/regex corpus restriction for picker mode.
+* [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
 
 
-* [Add file operations, context menu, and copy paths](029-add-file-operations.md) - Rename/delete/new inline ops, right-click context menu, hover highlight, copy name/paths over OSC 52.
-* [Add the content search source](030-add-content-search.md) - Ctrl-F swaps the pane's source to files-with-matches, built on the ripgrep crates.
-* [Add the config file](031-add-config-file.md) - Personal defaults in ~/.config/birch/birch.toml; CLI flags override; birch-ctl set changes at runtime.
-* [Add the Git Changes source](032-add-git-changes-source.md) - A third source listing changed files, reusing the source-as-delta-stream interface.
-* [Add the Project View source](033-add-project-view-source.md) - A curated/virtual tree source, reusing the source-as-delta-stream interface.
-* [Add "Open with…" to the context menu](034-add-open-with.md) - Choose an alternative open command for the selected node.
-* [Verify the herdr integration live](035-verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
+* [Add file operations, context menu, and copy paths](tasks/029-add-file-operations.md) - Rename/delete/new inline ops, right-click context menu, hover highlight, copy name/paths over OSC 52.
+* [Add the content search source](tasks/030-add-content-search.md) - Ctrl-F swaps the pane's source to files-with-matches, built on the ripgrep crates.
+* [Add the config file](tasks/031-add-config-file.md) - Personal defaults in ~/.config/birch/birch.toml; CLI flags override; birch-ctl set changes at runtime.
+* [Add the Git Changes source](tasks/032-add-git-changes-source.md) - A third source listing changed files, reusing the source-as-delta-stream interface.
+* [Add the Project View source](tasks/033-add-project-view-source.md) - A curated/virtual tree source, reusing the source-as-delta-stream interface.
+* [Add "Open with…" to the context menu](tasks/034-add-open-with.md) - Choose an alternative open command for the selected node.
+* [Verify the herdr integration live](tasks/035-verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
 
 # Publication
 
 Pre-publication work — repo hygiene, distribution, and process docs. Not product features,
 so outside the `docs/design.md` scope fence.
 
-* [Add the CI workflow](038-add-ci-workflow.md) - GitHub Actions: fmt --check, clippy --all-targets, test on push/PR.
-* [Set up the Homebrew tap and formula](042-set-up-homebrew-tap.md) - slukyano/homebrew-tap installing the binary and the contrib adapters (ADR 0002).
-* [Automate tagged releases](043-automate-releases.md) - Tag-driven Actions building macOS/Linux binaries into a GitHub Release.
-* [Document installation in the README](044-document-installation.md) - Install section: brew install and cargo install --git, with the adapter caveat.
-* [Add a demo recording to the README](045-add-repo-demo.md) - asciinema/GIF of the tree, search, and git badges.
-* [Fill in Cargo package metadata](046-add-cargo-metadata.md) - repository / homepage / keywords / categories for discoverability.
-* [Decide the crates.io publishing story](047-decide-crates-io-publish.md) - Publish as birch-tree (ADR 0002 fallback) vs Homebrew-only.
-* [Add a changelog and issue templates](048-add-changelog.md) - CHANGELOG.md and optional GitHub templates.
+* [Add the CI workflow](tasks/038-add-ci-workflow.md) - GitHub Actions: fmt --check, clippy --all-targets, test on push/PR.
+* [Set up the Homebrew tap and formula](tasks/042-set-up-homebrew-tap.md) - slukyano/homebrew-tap installing the binary and the contrib adapters (ADR 0002).
+* [Automate tagged releases](tasks/043-automate-releases.md) - Tag-driven Actions building macOS/Linux binaries into a GitHub Release.
+* [Document installation in the README](tasks/044-document-installation.md) - Install section: brew install and cargo install --git, with the adapter caveat.
+* [Add a demo recording to the README](tasks/045-add-repo-demo.md) - asciinema/GIF of the tree, search, and git badges.
+* [Fill in Cargo package metadata](tasks/046-add-cargo-metadata.md) - repository / homepage / keywords / categories for discoverability.
+* [Decide the crates.io publishing story](tasks/047-decide-crates-io-publish.md) - Publish as birch-tree (ADR 0002 fallback) vs Homebrew-only.
+* [Add a changelog and issue templates](tasks/048-add-changelog.md) - CHANGELOG.md and optional GitHub templates.
 
 # Done
 

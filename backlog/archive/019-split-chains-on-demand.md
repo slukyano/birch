@@ -12,7 +12,7 @@ become reachable as individual rows.
 
 ## Design
 
-Per [ADR 0014](../docs/adr/0014-chains-split-on-demand.md):
+Per [ADR 0014](../../docs/adr/0014-chains-split-on-demand.md):
 
 - `→` on an expanded chain row **splits** it: every member dir becomes its own nested
   row, all expanded (middles have exactly one visible child, so expansion is free —

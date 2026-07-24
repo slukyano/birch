@@ -8,7 +8,7 @@ blocked_by:
 - 002-build-core-tree-view
 ---
 
-Phase 0.2 (partial) of [the design doc](../docs/design.md): git status badges + colors
+Phase 0.2 (partial) of [the design doc](../../docs/design.md): git status badges + colors
 (modified, added, untracked, deleted, renamed; ignored dimmed), status propagating to
 ancestor dirs, deleted-but-tracked files rendered in deleted state.
 
@@ -18,7 +18,7 @@ auto-expanded, searched, or recursively watched.
 
 ## Design
 
-Per [ADR 0005](../docs/adr/0005-git-status-via-git-cli.md), git state is a side-table
+Per [ADR 0005](../../docs/adr/0005-git-status-via-git-cli.md), git state is a side-table
 snapshot produced by a worker thread shelling out to
 `git status --porcelain=v2 -z --ignored=traditional --untracked-files=all`.
 

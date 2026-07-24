@@ -8,7 +8,7 @@ blocked_by:
 - 002-build-core-tree-view
 ---
 
-Phase 0.4 (partial) of [the design doc](../docs/design.md): persist per-root state at
+Phase 0.4 (partial) of [the design doc](../../docs/design.md): persist per-root state at
 `~/.cache/birch/<root-hash>.json`, keyed on real paths so visibility toggles don't corrupt
 restored state. Crash/reboot resilience for an always-running pane.
 

@@ -102,3 +102,4 @@
   sprint records to `tasks/sprints/`, and every `blocked_by` / sprint `tasks:` reference
   renumbered. The distribution and polish tasks (CI, Homebrew, releases, install docs, demo,
   Cargo metadata, crates.io decision, changelog) stay `Draft` for a later infrastructure sprint.
+* **Bundle relocated**: `tasks/` renamed to `backlog/`, with active task concepts moved under `backlog/tasks/`; the bundle root now holds only `index.md`, `log.md`, and `workflow.md` (plus the `tasks/`, `archive/`, and `sprints/` subdirectories). Fixed the relative `../docs` links in the archived and sprint files that the sprint-012 restructure had left one level too shallow. A structural change, made directly on `main`.

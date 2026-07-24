@@ -8,7 +8,7 @@ blocked_by:
 - 002-build-core-tree-view
 ---
 
-Phase 0.4 (partial) of [the design doc](../docs/design.md): socket per instance under
+Phase 0.4 (partial) of [the design doc](../../docs/design.md): socket per instance under
 `$XDG_RUNTIME_DIR/birch/`, per-root symlink resolution, host-dictated `--socket` rendezvous,
 newline-delimited JSON with additive-only evolution, the closed verb set (`reveal`,
 `get-path`, `get-root`, `set`, `set-root`, `open`, `quit` — no mutation verbs), clean
@@ -17,13 +17,13 @@ SIGHUP/SIGTERM exit. Socket dir `0700`; filesystem permissions are the auth mode
 Design-phase open questions (from the design doc): is `set-root` above the original root
 allowed, and is the by-root "most recent instance" symlink enough for multi-instance, or
 does `birch-ctl` need instance listing? Both resolved in
-[ADR 0010](../docs/adr/0010-socket-addressing-and-lifecycle.md): `set-root` goes anywhere;
+[ADR 0010](../../docs/adr/0010-socket-addressing-and-lifecycle.md): `set-root` goes anywhere;
 most-recent-wins stands.
 
 ## Design
 
-Addressing/lifecycle per [ADR 0010](../docs/adr/0010-socket-addressing-and-lifecycle.md);
-wire protocol per [ADR 0011](../docs/adr/0011-ndjson-protocol.md).
+Addressing/lifecycle per [ADR 0010](../../docs/adr/0010-socket-addressing-and-lifecycle.md);
+wire protocol per [ADR 0011](../../docs/adr/0011-ndjson-protocol.md).
 
 **birch-core** gains a `protocol` module: serde `Request`/`Response` types (+ verb and
 setting enums), shared by server and client so shapes cannot drift; `socket_dir()`,

@@ -9,7 +9,7 @@ tags:
 - packaging
 ---
 
-Flagged as an open question in [the design doc](../docs/design.md): verify `birch` (and
+Flagged as an open question in [the design doc](../../docs/design.md): verify `birch` (and
 `birch-ctl`) availability on crates.io and Homebrew before the name hardens into docs, the
 socket path scheme, and adapter names. If taken, decide on an alternative early.
 
@@ -33,6 +33,6 @@ happens now, before the socket path scheme and adapter names harden.
 | `birch-core`, `birch-tui`, `birch-tree`, `birchtree` | free | — |
 
 Decision: keep the name — see
-[ADR 0002](../docs/adr/0002-keep-the-name-birch.md). Homebrew is the distribution channel
+[ADR 0002](../../docs/adr/0002-keep-the-name-birch.md). Homebrew is the distribution channel
 of record; if cargo-install distribution ever becomes concrete, the binary crate publishes
 as `birch-tree` with a `birch` binary name.

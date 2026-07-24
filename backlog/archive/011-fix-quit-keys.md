@@ -11,7 +11,7 @@ only way out, which feels wrong for a TUI.
 
 ## Design
 
-Per [ADR 0012](../docs/adr/0012-esc-backs-out.md): Esc is layered dismissal — it clears
+Per [ADR 0012](../../docs/adr/0012-esc-backs-out.md): Esc is layered dismissal — it clears
 an active search (restoring the pre-search view), will close the context menu when that
 exists (0.5), and with nothing to dismiss it quits the app. This matches the picker,
 which already quits on Esc with an empty query, and the common convention (lazygit, fzf)

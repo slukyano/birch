@@ -8,7 +8,7 @@ blocked_by:
 - 009-add-control-socket
 ---
 
-Phase 0.4 (partial) of [the design doc](../docs/design.md): one reference adapter
+Phase 0.4 (partial) of [the design doc](../../docs/design.md): one reference adapter
 (birch-herdr) documenting the pattern — spawn with `--socket` + `--open-cmd`, toggle binding,
 reverse-reveal via `birch-ctl reveal` — plus plain recipes for tmux and editors without
 adapter hooks. Adapters live with the host; the repo ships the reference and the recipes.

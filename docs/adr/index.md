@@ -6,7 +6,7 @@ okf_version: "0.1"
 
 An OKF bundle: one `type: ADR` concept per decision, named `NNNN-short-slug.md`. Statuses:
 `Proposed` → `Accepted` (maintainer-only) | `Rejected`; reversals use a new ADR and `Superseded`.
-Process: see [the task workflow](../../tasks/workflow.md#adrs).
+Process: see [the task workflow](../../backlog/workflow.md#adrs).
 
 # Accepted
 

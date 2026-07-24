@@ -9,7 +9,7 @@ blocked_by:
 ---
 
 All crates are `publish = false` and the crates.io name `birch` is taken
-([ADR 0002](../docs/adr/0002-keep-the-name-birch.md)). Decide whether to publish the
+([ADR 0002](../../docs/adr/0002-keep-the-name-birch.md)). Decide whether to publish the
 binary crate as `birch-tree` with `[[bin]] name = "birch"` (enabling `cargo install
 birch-tree`) or to stay Homebrew-only. The outcome is a decision, likely a new ADR, with
 little or no code beyond metadata.

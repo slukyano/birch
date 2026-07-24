@@ -13,7 +13,7 @@ matched fragments. The policy must be identical in tree and picker mode.
 
 ## Design
 
-Per [ADR 0013](../docs/adr/0013-match-what-is-displayed.md):
+Per [ADR 0013](../../docs/adr/0013-match-what-is-displayed.md):
 
 - **Corpus**: the entry's simple name (basename). A query containing `/` switches that
   query to full relative-path matching — the explicit escape hatch for duplicated names

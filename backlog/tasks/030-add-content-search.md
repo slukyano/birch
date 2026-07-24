@@ -8,7 +8,7 @@ blocked_by:
 - 002-build-core-tree-view
 ---
 
-Phase 0.6 of [the design doc](../docs/design.md): content search as a second source — same
+Phase 0.6 of [the design doc](../../docs/design.md): content search as a second source — same
 tree widget, nodes are files-with-matches expandable to match lines, live debounced
 incremental search on the ripgrep crates (`grep-searcher`, `grep-regex`, `ignore`), Enter
 on a match line opens at that line. Validates the source interface.

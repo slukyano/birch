@@ -8,7 +8,7 @@ blocked_by:
 - 006-add-fuzzy-filename-search
 ---
 
-Phase 0.4 (partial) of [the design doc](../docs/design.md): transient picker on the same UI —
+Phase 0.4 (partial) of [the design doc](../../docs/design.md): transient picker on the same UI —
 search filters instead of jumps, Enter prints to stdout and exits, mutations disabled by
 default. The adoption funnel: picker first, persistent pane once hooked.
 
