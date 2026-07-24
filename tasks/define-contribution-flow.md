@@ -31,9 +31,12 @@ project is produced). Contents:
 - **Scope** — features are whitelisted: check the scope fence in `docs/design.md` (the feature
   whitelist and the permanent out-of-scope list) before proposing a feature, so a PR is not
   rejected as out of scope. Bug fixes, docs, and adapters are always welcome.
-- **Context (not a requirement)** — the project is developed via an agent-driven sprint
-  workflow ([`tasks/workflow.md`](tasks/workflow.md)); that is the internal production process
-  and nothing a contributor must follow.
+- **How this project is developed (context, not a requirement)** — the maintainer develops
+  birch through the sprint workflow in [`tasks/workflow.md`](tasks/workflow.md), driven by the
+  in-repo task and sprint markdown files under `tasks/`. Contributors do **not** need to
+  follow that flow or touch those files: open GitHub issues and pull requests in the normal
+  way. The in-repo workflow is the maintainer's process; the contributor path is standard
+  GitHub.
 
 **Reconcile the "no PRs" wording.** `AGENTS.md` and `workflow.md` say development runs "in
 sprints (no PRs)" — that describes the *internal* maintainer+agent flow, not external
