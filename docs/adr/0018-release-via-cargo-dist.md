@@ -21,9 +21,9 @@ Use **cargo-dist** for release automation. `cargo dist init` generates the tag-t
 `release.yml`, builds prebuilt binaries for the target matrix, publishes a GitHub Release, and
 generates and publishes a single Homebrew formula (one binary, `birch`, with `birch ctl` as its
 control subcommand — see [ADR 0019](0019-control-client-is-a-birch-subcommand.md)) to
-`slukyano/homebrew-tap`. Configuration lives in
-`[workspace.metadata.dist]` in `Cargo.toml`; the release workflow is generated, not hand-edited
-(regenerate with `cargo dist generate`).
+`slukyano/homebrew-tap`. Configuration lives in `dist-workspace.toml` (`[dist]`) plus
+`[package.metadata.dist]` on the distributed crate; the release workflow is generated, not
+hand-edited (regenerate with `dist generate`).
 
 Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` (extend via
 config). The contrib adapters ship alongside the binaries via dist's `include`. The tap push

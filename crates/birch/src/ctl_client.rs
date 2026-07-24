@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand};
 
 /// Control a running birch instance.
 #[derive(Parser, Debug)]
-#[command(name = "birch ctl")]
+#[command(name = "birch ctl", version)]
 struct CtlCli {
     /// Socket path (default: $BIRCH_SOCKET, else the nearest instance found
     /// by walking up from the current directory).
