@@ -34,8 +34,8 @@ The bundle holds three concept types:
 **Layout.** Active tasks (`Draft`, `Designed`) live in `backlog/tasks/`; closed tasks (`Done`,
 `Dropped`) move to `backlog/archive/`; sprint records live in `backlog/sprints/`. `index.md`,
 `log.md`, and `workflow.md` stay at the bundle root. `index.md` and `log.md` are OKF-reserved
-(a listing and a change log), not concepts. Architecture Decision Records live in a separate
-bundle, [`docs/adr/`](../docs/adr/index.md).
+(a listing and a change log), not concepts. Architecture Decision Records live in the
+[`docs/`](../docs/index.md) bundle (the `adr/` subdirectory).
 
 ## Editing rule
 

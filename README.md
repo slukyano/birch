@@ -68,7 +68,7 @@ Git badges need `git` on PATH and degrade to a plain tree without it.
 
 Development runs in maintainer-approved sprints; the backlog and Architecture Decision
 Records are [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf)
-bundles in [`backlog/`](backlog/index.md) and [`docs/adr/`](docs/adr/index.md). Process:
+bundles in [`backlog/`](backlog/index.md) and [`docs/`](docs/index.md). Process:
 [`backlog/workflow.md`](backlog/workflow.md).
 
 ## License
