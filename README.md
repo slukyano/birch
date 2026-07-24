@@ -8,6 +8,8 @@ Tree view, Nerd Font icons, git status badges, compact folder chains, live
 filesystem updates, fuzzy find, mouse — designed to run persistently in a side
 pane (herdr, cmux, tmux) or as a transient picker.
 
+![birch — a file tree, git status, and fuzzy search in the terminal](docs/assets/demo.gif)
+
 **Status:** the MVP is shipped as **v0.1.0** — tree, git decorations, live updates, fuzzy
 search, picker mode, state persistence, and the control socket. File operations, content
 search, and a config file are next (see the [backlog](backlog/index.md)). Full product and
