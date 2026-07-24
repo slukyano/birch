@@ -2,7 +2,7 @@
 type: Task
 title: Set up the Homebrew tap and formula
 description: Personal slukyano/homebrew-tap with a birch formula installing the binary and the contrib adapters.
-status: Draft
+status: Designed
 priority: high
 ---
 

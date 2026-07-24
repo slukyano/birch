@@ -2,7 +2,7 @@
 type: Task
 title: Add the CI workflow
 description: GitHub Actions running fmt --check, clippy --all-targets, and test on push and PR.
-status: Draft
+status: Designed
 priority: high
 ---
 

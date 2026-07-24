@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: Distribute prebuilt binaries via a Homebrew tap, built on tag
-status: Proposed
+status: Accepted
 sprint: sprint-013
 ---
 

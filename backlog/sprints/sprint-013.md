@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Installable & CI-guarded
-status: Designing
+status: Implementing
 branch: sprint/013
 tasks:
 - 038-add-ci-workflow
