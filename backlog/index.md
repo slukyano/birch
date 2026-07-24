@@ -20,6 +20,7 @@ okf_version: "0.1"
 * [Sprint 010 — Click model and detached open commands](sprints/sprint-010.md) - Done.
 * [Sprint 011 — cmux Dock integration](sprints/sprint-011.md) - Done.
 * [Sprint 012 — Publishable repo & process docs](sprints/sprint-012.md) - Done.
+* [Sprint 013 — Installable & CI-guarded](sprints/sprint-013.md) - Designing.
 
 # Tasks
 
