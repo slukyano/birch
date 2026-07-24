@@ -7,6 +7,7 @@ tasks:
 - 038-add-ci-workflow
 - 042-set-up-homebrew-tap
 - 043-automate-releases
+- 050-unify-control-client
 ---
 
 # Scope rationale
@@ -31,6 +32,7 @@ README install docs (`044-document-installation`) and the documentation restruct
 - [x] 038-add-ci-workflow
 - [ ] 042-set-up-homebrew-tap
 - [ ] 043-automate-releases
+- [ ] 050-unify-control-client
 
 # Open questions
 
@@ -48,3 +50,10 @@ cannot be verified end-to-end until the touchpoints are resolved.
 - Scoped and cut: three tasks — CI workflow, Homebrew tap/formula, and release automation.
   Branch `sprint/013` cut from `main`; README install docs (`044`) and the docs restructure
   (`049`) held for a later docs sprint.
+- Course correction (maintainer-directed): the hand-rolled release pipeline of the original
+  design was replaced with **cargo-dist** (ADR 0018 supersedes 0017) — releasing a Rust CLI with
+  a Homebrew tap is cargo-dist's commodity case, and cargo-dist is actively maintained (Astral).
+  `038` (CI) landed as designed. Adopting cargo-dist surfaced that its per-package model would
+  emit two formulae (`birch`, `birch-ctl`); rather than special-case it, added `050` to fold the
+  control client into a `birch ctl` subcommand (tmux model) — one binary, one formula — then
+  finish `042`/`043` on cargo-dist.

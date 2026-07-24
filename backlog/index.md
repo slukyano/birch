@@ -52,6 +52,7 @@ so outside the `docs/design.md` scope fence.
 * [Decide the crates.io publishing story](tasks/047-decide-crates-io-publish.md) - Publish as birch-tree (ADR 0002 fallback) vs Homebrew-only.
 * [Add a changelog and issue templates](tasks/048-add-changelog.md) - CHANGELOG.md and optional GitHub templates.
 * [Deduplicate and route the documentation set](tasks/049-dedup-and-route-docs.md) - Single home per topic across README / AGENTS / CONTRIBUTING / workflow.md / docs/; add docs/index.md; date the logs.
+* [Fold the control client into a `birch ctl` subcommand](tasks/050-unify-control-client.md) - Remove the separate birch-ctl binary/crate; one binary, one Homebrew formula.
 
 # Done
 
