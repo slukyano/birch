@@ -4,13 +4,14 @@ members = [
     "crates/birch-core",
     "crates/birch-tui",
     "crates/birch",
-    "crates/birch-ctl",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/slukyano/birch"
+homepage = "https://github.com/slukyano/birch"
 
 [workspace.dependencies]
 ratatui = "0.29"
@@ -23,3 +24,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 signal-hook = "0.3"
 unicode-segmentation = "1"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

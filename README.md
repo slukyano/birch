@@ -18,7 +18,7 @@ full product and architecture spec lives in [`docs/design.md`](docs/design.md).
 ```
 birch [<options>] [<dir>]     # interactive tree rooted at <dir> (default: cwd)
 birch --pick [<dir>]          # picker: Enter prints the selection (file or dir)
-birch-ctl <verb> [...]        # control a running instance over its socket
+birch ctl <verb> [...]        # control a running instance over its socket
 ```
 
 Keys: arrows navigate, `→`/`←` expand/collapse, Enter opens (via
@@ -30,12 +30,12 @@ use the terminal's native text selection.
 
 ```sh
 nvim "$(birch --pick)"        # transient picker
-birch-ctl reveal src/main.rs  # make the tree follow your editor
-nvim "$(birch-ctl get-path --abs)"
+birch ctl reveal src/main.rs  # make the tree follow your editor
+nvim "$(birch ctl get-path --abs)"
 ```
 
 Flags mirror the defaults table in the design doc (`--no-git`, `--hide-ignored`,
-`--no-compact`, `--hide-hidden`, `--files-first`, …); `birch-ctl set` changes
+`--no-compact`, `--hide-hidden`, `--files-first`, …); `birch ctl set` changes
 them at runtime. `--open-cmd 'nvim {}'` templates how files open.
 
 ## Pane-host integration

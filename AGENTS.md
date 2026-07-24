@@ -27,8 +27,7 @@ Cargo workspace; internal crates under `crates/` (`publish = false` for now):
   compiler-enforces the real-tree/render split.
 - `birch-tui` — render layer: compaction, badges, widget, mouse, context menu,
   inline edit.
-- `birch` — the binary: wiring, flags, socket server.
-- `birch-ctl` — thin socket client.
+- `birch` — the binary: wiring, flags, socket server, and the `birch ctl` control client.
 
 Two boundaries are load-bearing (`docs/design.md`, Architecture section);
 everything else is negotiable:

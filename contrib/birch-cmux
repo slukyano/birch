@@ -15,7 +15,7 @@
 #                      (birch's --open-cmd target)
 #   dock-socket        print THIS window's dock-birch control socket path, for
 #                      reverse-reveal / scripting from a workspace pane:
-#                        birch-ctl --socket "$(birch-cmux dock-socket)" reveal <file>
+#                        birch ctl --socket "$(birch-cmux dock-socket)" reveal <file>
 #
 # Design facts about the cmux Dock (all verified, all beta):
 #   - one dock birch per window; the dock's shell has no CMUX_WORKSPACE_ID, so
@@ -30,7 +30,7 @@
 
 set -eu
 
-birch_ctl="${BIRCH_CTL:-birch-ctl}"
+birch="${BIRCH:-birch}"
 
 # cmux CLI: prefer PATH, fall back to the bundle path cmux exports into Dock
 # control shells (which do not always have the CLI shim on PATH).
@@ -112,7 +112,7 @@ follow_watcher() {
         # must not trip `set -e` and kill the watcher for the window's life.
         _dir="$(window_selected_dir "$_win")" || continue
         [ -n "$_dir" ] || continue
-        [ -S "$_sock" ] && "$birch_ctl" --socket "$_sock" set-root "$_dir" >/dev/null 2>&1 || true
+        [ -S "$_sock" ] && "$birch" ctl --socket "$_sock" set-root "$_dir" >/dev/null 2>&1 || true
     done
 }
 
@@ -127,8 +127,8 @@ dock-run)
     [ -n "$root" ] || root="${CMUX_DOCK_START_DIRECTORY:-$PWD}"
     case "$root" in /*) ;; *) root="$PWD/$root" ;; esac
     sock="$(socket_for "$win")"
-    birch_bin="$(command -v -- "${BIRCH:-birch}" 2>/dev/null || true)"
-    [ -n "$birch_bin" ] || { echo "birch-cmux: '${BIRCH:-birch}' not found (set BIRCH)" >&2; exit 1; }
+    birch_bin="$(command -v -- "$birch" 2>/dev/null || true)"
+    [ -n "$birch_bin" ] || { echo "birch-cmux: '$birch' not found (set BIRCH)" >&2; exit 1; }
     follow_watcher "$win" "$sock" &
     exec "$birch_bin" --socket "$sock" \
         --open-cmd "$(shquote "$self") preview {}" --open-detached "$root"

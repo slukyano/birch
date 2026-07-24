@@ -4,6 +4,7 @@
 
 mod app;
 mod ctl;
+mod ctl_client;
 mod term;
 
 use std::path::PathBuf;
@@ -24,6 +25,8 @@ use clap::Parser;
 use crate::app::Mode;
 
 /// Lean and beautiful interactive file tree for the terminal.
+///
+/// Run `birch ctl --help` to control a running instance over its socket.
 ///
 /// Tip: mouse capture disables the terminal's drag-to-copy; hold Shift while
 /// dragging to select text natively.
@@ -119,6 +122,14 @@ where
 }
 
 fn main() -> ExitCode {
+    // `birch ctl <verb>` controls a running instance; anything else launches the
+    // tree. Dispatch by hand: the launch form's optional [DIR] positional can't
+    // be cleanly disambiguated from a clap subcommand.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|arg| arg == "ctl") {
+        return ctl_client::run(&args[2..]);
+    }
+
     let cli = Cli::parse();
 
     let root = cli.dir.unwrap_or_else(|| PathBuf::from("."));

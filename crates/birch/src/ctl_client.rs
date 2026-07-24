@@ -1,9 +1,13 @@
-//! birch-ctl: thin control-socket client (ADRs 0010/0011). Resolves the
+//! The `birch ctl` control-socket client (ADRs 0010/0011). Resolves the
 //! instance socket, sends one NDJSON request, prints the response data.
+//!
+//! Reached via `birch ctl <verb>` — `main` pre-dispatches here when the first
+//! argument is `ctl`, so the launch form (`birch [DIR]`) is untouched.
 //!
 //! Exit codes: 0 ok, 1 the instance answered with an error or the transport
 //! failed mid-request, 2 no instance found / unreachable.
 
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -14,8 +18,8 @@ use clap::{Parser, Subcommand};
 
 /// Control a running birch instance.
 #[derive(Parser, Debug)]
-#[command(name = "birch-ctl", version, about)]
-struct Cli {
+#[command(name = "birch ctl", version)]
+struct CtlCli {
     /// Socket path (default: $BIRCH_SOCKET, else the nearest instance found
     /// by walking up from the current directory).
     #[arg(long, global = true, value_name = "path")]
@@ -83,13 +87,17 @@ impl From<SettingArg> for SettingKey {
     }
 }
 
-fn main() -> ExitCode {
-    let cli = Cli::parse();
+/// Run the control client for `birch ctl <rest…>`. `rest` is the arguments
+/// after `ctl`; a synthetic program name is prepended for clap's help/errors.
+pub fn run(rest: &[OsString]) -> ExitCode {
+    let cli = CtlCli::parse_from(
+        std::iter::once(OsString::from("birch ctl")).chain(rest.iter().cloned()),
+    );
 
     let request = match build_request(&cli.verb) {
         Ok(request) => request,
         Err(message) => {
-            eprintln!("birch-ctl: {message}");
+            eprintln!("birch ctl: {message}");
             return ExitCode::from(1);
         }
     };
@@ -99,7 +107,7 @@ fn main() -> ExitCode {
         .or_else(|| std::env::var_os("BIRCH_SOCKET").map(PathBuf::from))
         .or_else(resolve_by_walking_up);
     let Some(socket) = socket else {
-        eprintln!("birch-ctl: no running birch instance found for this directory");
+        eprintln!("birch ctl: no running birch instance found for this directory");
         return ExitCode::from(2);
     };
 
@@ -112,7 +120,7 @@ fn main() -> ExitCode {
         }
         Ok(response) => {
             eprintln!(
-                "birch-ctl: {}",
+                "birch ctl: {}",
                 response.error.as_deref().unwrap_or("request failed")
             );
             ExitCode::from(1)
@@ -124,7 +132,7 @@ fn main() -> ExitCode {
                     | std::io::ErrorKind::ConnectionRefused
                     | std::io::ErrorKind::PermissionDenied
             );
-            eprintln!("birch-ctl: cannot reach {}: {e}", socket.display());
+            eprintln!("birch ctl: cannot reach {}: {e}", socket.display());
             ExitCode::from(if unreachable { 2 } else { 1 })
         }
     }

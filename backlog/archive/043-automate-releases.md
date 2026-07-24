@@ -2,7 +2,7 @@
 type: Task
 title: Automate tagged releases
 description: Tag-driven GitHub Actions building macOS/Linux binaries and attaching them to a GitHub Release.
-status: Designed
+status: Done
 priority: medium
 ---
 
@@ -34,4 +34,12 @@ Couples to `042` (its formula is the bump target). `x86_64-unknown-linux-musl` a
 `aarch64-unknown-linux-gnu` are deferred until demand appears (noted, not silently dropped).
 Verification: a test tag yields a Release with three archives + checksums and a formula commit to
 the tap; installing from the tap gives a working binary.
+
+## Implementation note — cargo-dist ([ADR 0018](../../docs/adr/0018-release-via-cargo-dist.md))
+
+The tag-driven release is cargo-dist's **generated `.github/workflows/release.yml`** (config in
+`dist-workspace.toml`, `cargo-dist-version = "0.32.0"`), not the hand-rolled matrix above. On a
+`v*` tag it builds the three targets (`aarch64`/`x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`),
+packages each `.tar.xz` with the contrib adapters + LICENSE + README, publishes a GitHub Release,
+and bumps the tap formula. The hand-rolled `packaging/homebrew/render_formula.py` was removed.
 

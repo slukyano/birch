@@ -16,7 +16,7 @@
 #                             (used as birch's --open-cmd)
 #
 # Reverse-reveal from an editor in the main pane:
-#   birch-ctl --socket "$(birch-herdr socket)" reveal <file>
+#   birch ctl --socket "$(birch-herdr socket)" reveal <file>
 
 set -eu
 

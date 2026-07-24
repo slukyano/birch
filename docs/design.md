@@ -26,11 +26,11 @@ birch is designed to run persistently in a side pane (herdr, cmux, tmux) — the
 birch [<options>] [<dir>]
 ```
 
-`<dir>` defaults to cwd and becomes the tree root. The root is fixed for the life of the instance except via `Reveal Root Here` (context menu) or `birch-ctl set-root`.
+`<dir>` defaults to cwd and becomes the tree root. The root is fixed for the life of the instance except via `Reveal Root Here` (context menu) or `birch ctl set-root`.
 
 ```
 birch --pick [<dir>]      # picker mode: Enter prints the selection and exits
-birch-ctl <verb> [...]    # control a running instance (see Control socket)
+birch ctl <verb> [...]    # control a running instance (see Control socket)
 ```
 
 ## Appearance
@@ -63,7 +63,7 @@ birch-ctl <verb> [...]    # control a running instance (see Control socket)
 | Compact folders | on | `--no-compact` |
 | Mouse | on | `--no-mouse` |
 
-Flags set initial values; runtime changes go through `birch-ctl set` (and possibly a few hotkeys later — added sparingly).
+Flags set initial values; runtime changes go through `birch ctl set` (and possibly a few hotkeys later — added sparingly).
 
 Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and never recursively watched.
 
@@ -157,7 +157,7 @@ Content search swaps the pane's **source** (see Architecture): same tree widget,
   so `nvim +{line} {}` degrades to `nvim <path>` in the Files source).
 - `Esc` returns to the Files source, cursor/scroll restored.
 - Built on ripgrep's crates (`grep-searcher`, `grep-regex`, `ignore`) — no subprocess, no PATH dependency, incremental + cancellable. The `ignore` crate also provides the tree's gitignore logic: one dependency, both jobs.
-- Smart-case on; no regex/case/word toggles in the UI (available via `birch-ctl set`).
+- Smart-case on; no regex/case/word toggles in the UI (available via `birch ctl set`).
 - Respects the ignore boundary. Live updates re-search touched files only.
 - **No search-and-replace, ever** (mutation-across-files; different product).
 
@@ -211,18 +211,17 @@ Other notes:
 - **Workspace layout** (internal crates; `publish = false` for now):
   - `birch-core` — real tree, sources-as-delta-streams, watcher, git status, search, ops. **Must build without ratatui** — the crate boundary compiler-enforces the real-tree/render split.
   - `birch-tui` — render layer: compaction, badges, widget, mouse, context menu, inline edit.
-  - `birch` — binary: wiring, flags, socket server.
-  - `birch-ctl` — thin socket client.
+  - `birch` — binary: wiring, flags, socket server, and the `birch ctl` control client.
   - Publishing these as a library ("libbirch") is deliberately deferred: no named external consumer exists, and SemVer stability would tax exactly the interfaces (sources, deltas) most likely to change. Revisit if a concrete embedder appears — the live candidate is herdr wanting the tree in-process rather than as a pane. Extraction from well-factored crates is cheap; un-publishing an API is not.
 - **State persistence** (nice-to-have, cheap): expansion, selection, scroll per root at `~/.cache/birch/<root-hash>.json`; restored on launch. Crash/reboot resilience.
 - Actions (open, rename, copy-path, …) live in one action layer consumed by hotkeys, mouse, context menu, and socket alike. Menu-specific logic is a smell.
 
 ## Control socket
 
-A running birch instance exposes a Unix domain socket; `birch-ctl` is the thin client.
+A running birch instance exposes a Unix domain socket; `birch ctl` (a subcommand of the birch binary) is the thin client.
 
-- **Addressing**: socket per instance at `$XDG_RUNTIME_DIR/birch/<pid>.sock`; per-root symlink `by-root/<root-hash>.sock` → most recent instance. `birch-ctl` resolves by walking up from cwd to a matching root — `birch-ctl get-path` in a sibling pane just works.
-- **Host-dictated rendezvous**: `birch --socket <path>` binds exactly there, skipping default addressing (`--no-socket` skips binding entirely). A host that spawns birch shouldn't have to *discover* what it created — it picks the path and already knows it. `birch-ctl --socket <path>` targets it. This is the load-bearing flag for host adapters.
+- **Addressing**: socket per instance at `$XDG_RUNTIME_DIR/birch/<pid>.sock`; per-root symlink `by-root/<root-hash>.sock` → most recent instance. `birch ctl` resolves by walking up from cwd to a matching root — `birch ctl get-path` in a sibling pane just works.
+- **Host-dictated rendezvous**: `birch --socket <path>` binds exactly there, skipping default addressing (`--no-socket` skips binding entirely). A host that spawns birch shouldn't have to *discover* what it created — it picks the path and already knows it. `birch ctl --socket <path>` targets it. This is the load-bearing flag for host adapters.
 - **Lifecycle**: graceful exit on SIGHUP/SIGTERM (host closes pane → clean death, socket unlinked).
 - **Protocol**: newline-delimited JSON request/response with a `v` field. **Additive-only evolution; clients tolerate unknown fields.** Host adapters may be maintained out-of-tree on their own release cadence — the protocol is a public API commitment, not an internal detail.
 - **Verbs** (closed set — the whitelist applies to the protocol too):
@@ -239,7 +238,7 @@ A running birch instance exposes a Unix domain socket; `birch-ctl` is the thin c
 
 - **No mutation verbs.** Rename/delete over a socket is a scripting foot-gun with no user story. Mutations are human-initiated.
 - Security: socket dir `0700`; filesystem permissions are the auth model.
-- Killer primitive: `nvim "$(birch-ctl get-path)"` bound in the main pane is reverse integration with zero editor-specific code in birch.
+- Killer primitive: `nvim "$(birch ctl get-path)"` bound in the main pane is reverse integration with zero editor-specific code in birch.
 
 ## Picker mode
 
@@ -265,21 +264,21 @@ An adapter's job (~a screen of code):
 
 1. Spawn the side pane running `birch --socket <host-chosen-path> --open-cmd '<host open primitive> {}'`
 2. Wire the toggle keybinding — host kills/respawns the pane; birch needs nothing
-3. Wire reverse-reveal: host's file-focus hook → `birch-ctl --socket <path> reveal <file>` — the tree follows your editing, IDE-style
-4. Optionally: main-pane bindings for `birch-ctl open` / `get-path`
+3. Wire reverse-reveal: host's file-focus hook → `birch ctl --socket <path> reveal <file>` — the tree follows your editing, IDE-style
+4. Optionally: main-pane bindings for `birch ctl open` / `get-path`
 
 **Adapters live with the host, not in the birch repo.** The host knows its own pane, keybinding, and hook APIs; birch stays free of N host integrations (same instinct as "no plugins"). The birch repo ships one *reference* adapter as documentation of the pattern, plus plain recipes for hosts without adapter hooks:
 
 - **tmux**: pane spawn + `send-keys` open-cmd + toggle binding (recipe, not adapter — tmux has no hook surface worth wrapping).
 - **cmux**: integrates via cmux's native right-sidebar **Dock** rather than a workspace split — cmux owns the lifecycle from `dock.json`; the adapter supplies a per-window socket, preview-as-tab, and a workspace-follow watcher (ADR 0016, rides the Dock beta).
 - **Forward** (tree → editor) without any adapter: `--open-cmd` per target — `nvim --server $NVIM --remote`, `emacsclient`, `code -r`.
-- **Reverse** without any adapter: two-line editor autocmd calling `birch-ctl reveal <file>` on buffer switch.
+- **Reverse** without any adapter: two-line editor autocmd calling `birch ctl reveal <file>` on buffer switch.
 
 Single-instance discipline is the host's job; document it, don't build lockfiles. Verify SGR mouse passthrough in herdr early (flagship host).
 
 ## Config
 
-`~/.config/birch/birch.toml` for personal defaults (an always-running tool with flags-only config is hostile); CLI flags override; `birch-ctl set` changes at runtime.
+`~/.config/birch/birch.toml` for personal defaults (an always-running tool with flags-only config is hostile); CLI flags override; `birch ctl set` changes at runtime.
 
 ## Sequencing (scope cuts TBD)
 
@@ -290,7 +289,7 @@ Ordering reflects dependency + value, not release commitments; scope will be cut
 | 0.1 | Tree, arrows, lazy load, icons, open-cmd, basic mouse (click/scroll), **real-tree/render split + source interface in place** |
 | 0.2 | Git badges + ancestor propagation, live updates, compact folders |
 | 0.3 | Filename fuzzy search (jump-style) |
-| 0.4 | Control socket + `birch-ctl` + `--socket`, `--pick`, birch-herdr reference adapter + nvim/tmux recipes, state persistence |
+| 0.4 | Control socket + `birch ctl` + `--socket`, `--pick`, birch-herdr reference adapter + nvim/tmux recipes, state persistence |
 | 0.5 | File ops + context menu + hover + copy name/paths (OSC 52) |
 | 0.6 | Content search source |
 | Later | Git Changes source, Project View source, Open with…, config polish |
@@ -301,6 +300,6 @@ Guiding cut principle: pane integration beats features. A birch with flawless he
 
 - Selection stability details during heavy churn (build systems generating files while user navigates).
 - `set-root` above the original root — allowed, or only descend?
-- Multi-instance on the same root: symlink points to most recent — good enough, or does `birch-ctl` need instance listing?
+- Multi-instance on the same root: symlink points to most recent — good enough, or does `birch ctl` need instance listing?
 - Trash on exotic filesystems / NFS — fallback behavior when trash is unavailable.
 - Name availability: verify `birch` on crates.io / homebrew before attachment hardens.
