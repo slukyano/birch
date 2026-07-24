@@ -26,4 +26,9 @@ Process: see [the task workflow](../../backlog/workflow.md#adrs).
 * [0014 — Compact chains split on demand — → un-collapses, collapse re-fuses](0014-chains-split-on-demand.md)
 * [0015 — Click selects, double-click activates](0015-click-selects-double-click-activates.md)
 * [0016 — cmux integrates via the Dock, not a workspace-split adapter](0016-cmux-integrates-via-the-dock.md)
-* [0017 — Distribute prebuilt binaries via a Homebrew tap, built on tag](0017-prebuilt-binaries-and-homebrew-tap.md)
+* [0017 — Distribute prebuilt binaries via a Homebrew tap, built on tag](0017-prebuilt-binaries-and-homebrew-tap.md) — superseded by 0018
+
+# Proposed
+
+* [0018 — Release automation and the Homebrew tap via cargo-dist](0018-release-via-cargo-dist.md) (supersedes 0017)
+* [0019 — The control client is a `birch ctl` subcommand, not a separate binary](0019-control-client-is-a-birch-subcommand.md)

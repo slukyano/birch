@@ -26,8 +26,8 @@ An adapter is ~a screen of shell:
    `birch --socket <adapter-chosen-path> --open-cmd '<host open-in-main primitive> {}' --open-detached`.
 2. **Toggle**: the host kills or respawns the pane; birch needs nothing (SIGHUP exit).
 3. **Reverse-reveal**: the host's (or editor's) file-focus hook runs
-   `birch-ctl --socket <path> reveal <file>` — the tree follows your editing, IDE-style.
-4. Optionally, main-pane bindings for `birch-ctl open` / `birch-ctl get-path`.
+   `birch ctl --socket <path> reveal <file>` — the tree follows your editing, IDE-style.
+4. Optionally, main-pane bindings for `birch ctl open` / `birch ctl get-path`.
 
 Single-instance discipline is the host's job: one birch pane per session, keyed however
 the host keys things (the reference adapters use one socket per tmux session / per user).
@@ -88,7 +88,7 @@ already-open Dock). birch appears with previews and a tree that tracks your work
 **4. Reverse-reveal** — a hook computes the window's socket and calls `reveal`:
 
 ```sh
-birch-ctl --socket "$(birch-cmux dock-socket)" reveal <file>
+birch ctl --socket "$(birch-cmux dock-socket)" reveal <file>
 ```
 
 One dock birch per window; its socket is keyed on the window id, so `dock-socket`
@@ -120,13 +120,13 @@ vim.api.nvim_create_autocmd("BufEnter", {
   callback = function(args)
     local file = vim.api.nvim_buf_get_name(args.buf)
     if file ~= "" then
-      vim.system({ "birch-ctl", "reveal", file })
+      vim.system({ "birch", "ctl", "reveal", file })
     end
   end,
 })
 ```
 
-`birch-ctl` without `--socket` resolves the nearest instance by walking up from the
+`birch ctl` without `--socket` resolves the nearest instance by walking up from the
 current directory, so the plain form works whenever the editor runs under the tree's
 root. Set `$BIRCH_SOCKET` (or pass `--socket`) to target a host-managed instance.
 An instance started with `--no-socket` is not controllable at all.
@@ -134,7 +134,7 @@ An instance started with `--no-socket` is not controllable at all.
 **Scripting** — the selection is a first-class output:
 
 ```sh
-nvim "$(birch-ctl get-path --abs)"     # open birch's selection from any pane
+nvim "$(birch ctl get-path --abs)"     # open birch's selection from any pane
 nvim "$(birch --pick)"                 # transient picker (Enter picks files and dirs)
 cd "$(birch --pick)"                   # works for dirs too — Enter picks the selection
 ```
@@ -143,5 +143,5 @@ cd "$(birch --pick)"                   # works for dirs too — Enter picks the 
 
 Mouse capture disables the terminal's native drag-to-copy; hold Shift while dragging to
 select text natively (or run with `--no-mouse`). Copy-path commands arrive with the
-context menu in a later release; until then `birch-ctl get-path` covers the scripting
+context menu in a later release; until then `birch ctl get-path` covers the scripting
 need.

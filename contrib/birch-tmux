@@ -20,7 +20,7 @@
 #   bind-key b run-shell "birch-tmux toggle #{pane_current_path}"
 #
 # Reverse-reveal from an editor inside the same session:
-#   birch-ctl --socket "$(birch-tmux socket)" reveal <file>
+#   birch ctl --socket "$(birch-tmux socket)" reveal <file>
 
 set -eu
 

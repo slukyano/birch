@@ -4,7 +4,12 @@ description = "Lean and beautiful interactive file tree for the terminal."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 publish = false
+
+[package.metadata.dist]
+dist = true
 
 [dependencies]
 birch-core = { path = "../birch-core" }

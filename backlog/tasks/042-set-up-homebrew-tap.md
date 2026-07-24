@@ -36,3 +36,11 @@ Depends on `043` for the artifacts and the bump automation; the two are implemen
 Verification: `brew install slukyano/tap/birch` on a clean macOS installs a working `birch` plus
 adapters; `brew test birch` passes.
 
+## Implementation note — cargo-dist ([ADR 0018](../../docs/adr/0018-release-via-cargo-dist.md))
+
+Superseded by cargo-dist. The tap `slukyano/homebrew-tap` is created; the formula is **generated
+and pushed by cargo-dist's `publish-homebrew-formula` job** (config in `dist-workspace.toml`,
+`installers = ["shell", "homebrew"]` + `tap = "slukyano/homebrew-tap"`), not the hand-rolled
+formula above. One binary (`birch ctl` folded in, [ADR 0019](../../docs/adr/0019-control-client-is-a-birch-subcommand.md))
+→ a single `birch.rb`. The push uses a `HOMEBREW_TAP_TOKEN` secret (a fine-grained PAT).
+
