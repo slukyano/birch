@@ -10,25 +10,32 @@ tags:
 # Overview
 
 This `tasks/` directory is the project backlog **and** an OKF bundle — one markdown file per
-concept, with YAML frontmatter carrying the machine-readable state. Contributors work with the
-files directly or through OKF-aware tooling of their choice; the format assumes no tool.
+concept, with YAML frontmatter carrying the machine-readable state.
+
+This workflow is how the **maintainer** (the project's human owner) develops birch; the two
+roles throughout are the maintainer and the coding **agent**. It is not required of outside
+contributors — external contributions are standard GitHub issues and pull requests (see
+[`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 
 Development happens in **sprints**, driven interactively in **sessions**:
 
-- A **session** is one sitting with the **maintainer** (the project's human owner — the two
-  roles throughout this workflow are the maintainer and the coding **agent**): open the repo,
-  tell the agent to start or continue development.
+- A **session** is one sitting with the maintainer: open the repo, tell the agent to start or
+  continue development.
 - A **sprint** is one batch of tasks taken from scope approval through design and
   implementation to a final merge. A sprint usually spans several sessions.
 
 The bundle holds three concept types:
 
-- `Task` — one backlog item per file.
+- `Task` — one backlog item per file, named `NNN-slug.md` (a zero-padded number is part of the
+  concept name).
 - `Sprint` — one `sprint-NNN.md` per sprint: the durable state of active and past work.
 - `Process` — this document.
 
-`index.md` and `log.md` are OKF-reserved (a listing and a change log); they are not concepts.
-Architecture Decision Records live in a separate bundle, [`docs/adr/`](../docs/adr/index.md).
+**Layout.** Active tasks (`Draft`, `Designed`) live in `tasks/`; closed tasks (`Done`,
+`Dropped`) move to `tasks/archive/`; sprint records live in `tasks/sprints/`. `index.md`,
+`log.md`, and `workflow.md` stay at the bundle root. `index.md` and `log.md` are OKF-reserved
+(a listing and a change log), not concepts. Architecture Decision Records live in a separate
+bundle, [`docs/adr/`](../docs/adr/index.md).
 
 ## Editing rule
 
@@ -70,7 +77,7 @@ One sprint moves through:
 ## 1. Session start
 
 Every session begins by checking for unfinished work: is there any `Sprint` concept in
-`tasks/` whose `status` is not `Done` or `Aborted`?
+`tasks/sprints/` whose `status` is not `Done` or `Aborted`?
 
 - **An active sprint exists** → check out its branch (the branch always has the freshest
   sprint state) and resume from the sprint body: the task checklist, open questions, and
@@ -84,9 +91,19 @@ The agent reviews the open backlog (`Draft` tasks, unblocked) and proposes a set
 sprint — proposing *all* open tasks is fine when the scope feels right. The maintainer adjusts and
 approves.
 
-**Scope approval is the sprint-start commit on `main`**: create `tasks/sprint-NNN.md`
+**Scope approval is the sprint-start commit on `main`**: create `tasks/sprints/sprint-NNN.md`
 (status `Designing`, the task list, the branch name), commit it to `main`, then create the
 sprint branch `sprint/NNN` from it. All subsequent work happens on the branch.
+
+The scope is **presented for approval** in the chat protocol (below), with:
+
+- the sprint id, theme, and branch;
+- an **in-scope task ledger** — every task as slug, priority, one-line description, and a
+  design-weight flag (trivial vs. design-heavy);
+- **ordering / dependencies** among the in-scope tasks;
+- **considered but out of scope** — tasks weighed and deferred, each with a one-line why;
+- the **scope rationale** — what ties the set together and what is deliberately held back;
+- the **sprint-start action** requested (commit `tasks/sprints/sprint-NNN.md`, cut `sprint/NNN`).
 
 ## 3. Design phase (interactive)
 
@@ -125,12 +142,16 @@ subagents where appropriate. Rules of the phase:
 - **Independent review** — a fresh subagent with no implementation context reviews the full
   sprint diff; findings are fixed (or explicitly presented as known issues).
 - **Publication hygiene** — everything committed must be publishable as-is, since the repo
-  (history included) is public-bound. The review checks the sprint diff for: conversational or
-  second-person prose ("you asked…", chat-transcript style — write in third-person project
-  voice; role terms like "the maintainer"/"the agent" and project "we" are fine); references to
-  people beyond the intended author/copyright identity; claims about other projects that are
-  not factual, dated, and sourced (state facts, never disparage); and local paths, credentials,
-  private links, or other environment leakage.
+  (history included) is public-bound. Two checks:
+  - **Hygiene** — no identifiable individuals except the author/copyright identity in an
+    authorship or license capacity; no environment leakage (local paths, credentials, private
+    links, internal hostnames, machine-specific artifacts); and claims about other projects are
+    factual and sourced (state facts, never disparage).
+  - **Voice** — impersonal and agentless: name the thing, not the actor (nominal or passive
+    constructions), no second-person or chat-transcript prose, no project "we". The sole
+    exception is this document's governance statements, where a role *is* the meaning ("only the
+    maintainer approves ADRs"); records, product docs, ADR decisions, and summaries carry no
+    roles.
 
 ## 6. Close-out, presentation & final merge
 
@@ -140,11 +161,12 @@ merge itself.
 
 ### 6a. Close-out bookkeeping (committed to the branch, before presenting)
 
-1. Flip every delivered task `Designed → Done` (surgical frontmatter edit: `status` only).
+1. Flip every delivered task `Designed → Done` (surgical frontmatter edit: `status` only) and
+   move its file into `tasks/archive/`.
 2. Flip the sprint `Implementing → Done`, the same way.
 3. Write a `## Sprint summary` into the sprint body and a close-out `## Session log` line.
 4. Bring the hand-maintained `tasks/index.md` and `tasks/log.md` current (move Done tasks to a
-   `# Done` section; mark the sprint Done; add a log entry).
+   `# Done` section, linking their `tasks/archive/` path; mark the sprint Done; add a log entry).
 5. **Every open question / deferred idea must have a home.** If something was left undone —
    deliberately or by omission — it is either done now or captured as a `Draft` task. Never
    say "carried to the backlog" without a concrete task name; create the task if none exists.
@@ -242,7 +264,8 @@ ordinary columns. A missing `blocked_by` means unblocked; don't write empty list
 ## Blockers
 
 `blocked_by` lists the **concept names** of prerequisite tasks (a concept name is the filename
-without `.md`). A task is eligible for a sprint when its `status` is `Draft` (or `Designed`,
+without `.md` — `NNN-slug`, resolved wherever the file lives in the bundle). A task is eligible
+for a sprint when its `status` is `Draft` (or `Designed`,
 for implementation) and every task in `blocked_by` is `Done`. A dangling or mistyped blocker
 counts as blocking (conservative — better to stall than to double-build). Tasks within one
 sprint may depend on each other; the design phase orders them.
