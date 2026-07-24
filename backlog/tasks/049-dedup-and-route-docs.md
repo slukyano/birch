@@ -2,7 +2,7 @@
 type: Task
 title: Deduplicate and route the documentation set
 description: Give each topic a single home across README, AGENTS, CONTRIBUTING, workflow.md, and docs/; add a docs/ index; date the logs.
-status: Draft
+status: Designed
 priority: high
 ---
 
@@ -64,3 +64,36 @@ sections. Sequence them so the routing lands first.
 
 Design-heavy and touches binding docs (`docs/design.md` scope fence, the `AGENTS.md` hard rules,
 `backlog/workflow.md`): belongs in a sprint's design phase, not an ad-hoc edit.
+
+## Design
+
+**Routing (single home per topic):**
+
+- **README.md** — the user entry point: what birch is, how to use it, install, build from source;
+  points to `CONTRIBUTING.md` for development.
+- **CONTRIBUTING.md** — one doc holding the dev basics (build/run/test commands, a shallow
+  **repository map**, the **tech-docs approach** — what lives in `docs/` and when to update it,
+  Conventional Commits, the issue/PR flow, and a short **dev-workflow note** pointing at
+  `backlog/workflow.md`). Drop the scope-fence paragraph. The human+agent-shared core **stays
+  here** (not split into a separate doc).
+- **AGENTS.md** — the agent entry point: points to `CONTRIBUTING.md` and `README.md` with one-line
+  descriptions (progressive disclosure), keeps the agent-only hard rules **without duplicating**
+  the linked docs, and points to `backlog/workflow.md` **conditionally** (only when told to follow
+  the maintainer's workflow).
+- **backlog/workflow.md** — the maintainer's sprint workflow (conditional deep-dive).
+
+**`docs/` becomes one OKF bundle** (expand the ADR bundle up a level; the bundle is `docs/`, not
+`docs/adr/`):
+
+- `docs/index.md` — the bundle index, listing `design.md`, `integrations.md`, and the ADRs
+  (absorbing today's `docs/adr/index.md`; `adr/` no longer keeps its own index).
+- `docs/log.md` — a dated changelog for the docs bundle.
+- `adr/` — stays as the ADR concept subdirectory (`NNNN-slug.md`), like `backlog/`'s subdirs.
+- Only the index/log move; ADR files stay put, so their relative links are unaffected.
+
+**Date the change logs** — `backlog/log.md` and the new `docs/log.md` carry dates (a log is a
+chronology; this revisits the publication de-dating for *logs only* — task/sprint/ADR frontmatter
+stays date-free). Update `backlog/workflow.md`'s log guidance to match. Format: dated entries.
+
+Coordinates with `044` (README install section) and `045` (demo), which fill the restructured
+README; land `049` first.

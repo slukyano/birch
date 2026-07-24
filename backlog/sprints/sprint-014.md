@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Docs & publication polish
-status: Designing
+status: Implementing
 branch: sprint/014
 tasks:
 - 044-document-installation
