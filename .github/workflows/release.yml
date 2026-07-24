@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Builds the binaries for the target, packages a .tar.gz with the adapters +
+      # LICENSE + README, writes a .sha256, and uploads all to the release for TAG.
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: birch,birch-ctl
+          target: ${{ matrix.target }}
+          archive: birch-$target
+          include: LICENSE,README.md,contrib/birch-cmux,contrib/birch-tmux,contrib/birch-herdr
+          checksum: sha256
+          ref: refs/tags/${{ env.TAG }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  formula:
+    name: update tap formula
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu; do
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "birch-$t.tar.gz.sha256" --dir dist
+          done
+      - name: Render formula
+        run: |
+          python3 packaging/homebrew/render_formula.py \
+            --tag "$TAG" --repo "$GITHUB_REPOSITORY" --shas-dir dist > birch.rb
+          cat birch.rb
+      - name: Push to tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set — skipping formula push (add the secret to enable auto-bump)."
+            exit 0
+          fi
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/slukyano/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp birch.rb tap/Formula/birch.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/birch.rb
+          git commit -m "birch ${TAG}" || { echo "no change"; exit 0; }
+          git push
