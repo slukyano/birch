@@ -74,14 +74,18 @@ and gitignore logic.
 ## Development workflow (sessions + sprints)
 
 The project backlog lives in `tasks/`, an OKF bundle (one markdown concept per file with
-YAML frontmatter — one `Task` per backlog item plus one `Sprint` concept per sprint); ADRs
-live in `docs/adr/` (also an OKF bundle). Frontmatter is state: edits to it are surgical —
-change only the keys being updated, never reformat or round-trip a file to change one field.
+YAML frontmatter — one `Task` per backlog item, named `NNN-slug.md`, plus one `Sprint` concept
+per sprint). Active tasks live in `tasks/`, closed ones in `tasks/archive/`, sprint records in
+`tasks/sprints/`; ADRs live in `docs/adr/` (also an OKF bundle). Frontmatter is state: edits to
+it are surgical — change only the keys being updated, never reformat or round-trip a file to
+change one field.
 
-Development runs in sprints (no PRs). At session start, check `tasks/` for a `Sprint`
-concept whose `status` is not `Done`/`Aborted` and resume it from its branch; otherwise
-propose a scope from the `Draft` backlog. Scope approval = committing `tasks/sprint-NNN.md`
-to `main` and cutting branch `sprint/NNN`. Then: an interactive design phase (per-task
+This is the maintainer's internal development flow and uses no pull requests; external
+contributions are standard GitHub issues and PRs (see `CONTRIBUTING.md`). At session start,
+check `tasks/sprints/` for a `Sprint` concept whose `status` is not `Done`/`Aborted` and resume
+it from its branch; otherwise propose a scope from the `Draft` backlog. Scope approval =
+committing `tasks/sprints/sprint-NNN.md` to `main` and cutting branch `sprint/NNN`. Then: an
+interactive design phase (per-task
 `## Design` sections + `Proposed` ADRs; maintainer approval → design merge to `main`), an
 autonomous implementation phase (commit throughout; **stop and ask** on any decision that
 belongs to the maintainer — never guess), gates (the validation suite + an independent
