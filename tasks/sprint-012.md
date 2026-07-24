@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Publishable repo & process docs
-status: Designing
+status: Implementing
 branch: sprint/012
 tasks:
 - add-license-file

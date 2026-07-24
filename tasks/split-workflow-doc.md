@@ -2,7 +2,7 @@
 type: Task
 title: Split the workflow doc into operational core and meta
 description: Trim tasks/workflow.md to what an agent executes; move rationale and cross-repo meta back to the sprint-workflow skill.
-status: Draft
+status: Designed
 priority: high
 ---
 
@@ -61,3 +61,41 @@ formal format. Define one, parallel to §6c, requiring:
 
 Presented per the chat protocol (§"Asking for approval"): separator, short summary,
 self-contained context, file references, explicit questions.
+
+## Design
+
+Rework `tasks/workflow.md` in place — trim to the operational core, adopt the reformulated
+hygiene gate and the scope-presentation format, and document the new bundle layout from
+`restructure-tasks-bundle`. Implemented together with that task so the documented conventions
+match the actual tree.
+
+**Trim (run-time stays, author-time goes).** Keep what an agent needs to execute a sprint
+here: the Task/Sprint/ADR lifecycle and states; the sprint steps (scope → design → implement
+→ gates → close-out → merge); the gates; the chat approval protocol; the frontmatter schemas;
+the surgical-frontmatter rule; the bundle layout. Remove the author-time rationale (why the
+workflow exists, cross-repo philosophy, tooling-neutrality essays) — that lives in the
+`sprint-workflow` skill's `references/workflow.md` (the maintainer's environment, outside this
+repo). Anything removed that is worth preserving is reflected there; the in-repo deliverable is
+the trimmed doc.
+
+**Reformulate the publication-hygiene gate (§5)** per the note above: split into **hygiene**
+(no identifiable individuals except the copyright identity; no environment leakage; other-
+project claims factual and sourced) and **voice** (impersonal and agentless everywhere; the
+sole exception is `workflow.md`'s own governance statements). Drop the maintainer/agent/we
+whitelist and drop project "we".
+
+**Add the scope-presentation format** per the note above — a section parallel to §6c
+(close-out), listing the fields a sprint-cut ask must include.
+
+**Document the new layout** (schemas + a short layout section): task files `NNN-slug.md` with
+the number in the concept name; active in `tasks/`, closed in `tasks/archive/`, sprints in
+`tasks/sprints/`; the session-start check looks under `tasks/sprints/`. Schemas stay date-free
+(the `created`/`timestamp` fields were already removed).
+
+**Also update `AGENTS.md`** §"Development workflow": keep it the short hook, refresh the layout
+references (sprint path, numbered slugs) so it stays accurate.
+
+**Verification.** `workflow.md` reads coherently as an operational doc; every referenced
+section/format exists; the `AGENTS.md` hook matches; no date fields reintroduced; the doc's own
+prose obeys the reformulated voice rule.
+
