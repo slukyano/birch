@@ -50,6 +50,7 @@ so outside the `docs/design.md` scope fence.
 * [Fill in Cargo package metadata](tasks/046-add-cargo-metadata.md) - repository / homepage / keywords / categories for discoverability.
 * [Decide the crates.io publishing story](tasks/047-decide-crates-io-publish.md) - Publish as birch-tree (ADR 0002 fallback) vs Homebrew-only.
 * [Add a changelog and issue templates](tasks/048-add-changelog.md) - CHANGELOG.md and optional GitHub templates.
+* [Deduplicate and route the documentation set](tasks/049-dedup-and-route-docs.md) - Single home per topic across README / AGENTS / CONTRIBUTING / workflow.md / docs/; add docs/index.md; date the logs.
 
 # Done
 
