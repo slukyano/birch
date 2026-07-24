@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "birch"
-version = "0.1.0"
+version = "0.1.0-rc.3"
 dependencies = [
  "birch-core",
  "birch-tui",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "birch-core"
-version = "0.1.0"
+version = "0.1.0-rc.3"
 dependencies = [
  "ignore",
  "notify",
@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "birch-tui"
-version = "0.1.0"
+version = "0.1.0-rc.3"
 dependencies = [
  "birch-core",
  "crossterm",
