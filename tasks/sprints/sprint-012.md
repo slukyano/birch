@@ -29,11 +29,11 @@ implementing them together avoids two passes and a re-migration.
 
 # Checklist
 
-- [ ] add-license-file
-- [ ] remove-scratch-fixtures
-- [ ] split-workflow-doc
-- [ ] define-contribution-flow
-- [ ] restructure-tasks-bundle
+- [x] 036-add-license-file
+- [x] 037-remove-scratch-fixtures
+- [x] 039-split-workflow-doc
+- [x] 040-define-contribution-flow
+- [x] 041-restructure-tasks-bundle
 
 # Open questions
 
