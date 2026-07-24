@@ -166,7 +166,8 @@ merge itself.
 2. Flip the sprint `Implementing → Done`, the same way.
 3. Write a `## Sprint summary` into the sprint body and a close-out `## Session log` line.
 4. Bring the hand-maintained `backlog/index.md` and `backlog/log.md` current (move Done tasks to a
-   `# Done` section, linking their `backlog/archive/` path; mark the sprint Done; add a log entry).
+   `# Done` section, linking their `backlog/archive/` path; mark the sprint Done; add a **dated**
+   log entry — `backlog/log.md` groups entries under a `## YYYY-MM-DD` heading).
 5. **Every open question / deferred idea must have a home.** If something was left undone —
    deliberately or by omission — it is either done now or captured as a `Draft` task. Never
    say "carried to the backlog" without a concrete task name; create the task if none exists.

@@ -39,6 +39,10 @@ Process: see [the task workflow](../backlog/workflow.md#adrs).
 * [0018 — Release automation and the Homebrew tap via cargo-dist](adr/0018-release-via-cargo-dist.md) (supersedes 0017)
 * [0019 — The control client is a `birch ctl` subcommand, not a separate binary](adr/0019-control-client-is-a-birch-subcommand.md)
 
+## Proposed
+
+* [0020 — Defer crates.io publishing; Homebrew and cargo-install-from-git are the channels](adr/0020-defer-crates-io.md)
+
 ## Superseded
 
 * [0017 — Distribute prebuilt binaries via a Homebrew tap, built on tag](adr/0017-prebuilt-binaries-and-homebrew-tap.md) (superseded by 0018)

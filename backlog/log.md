@@ -1,5 +1,7 @@
 # Task Bundle Log
 
+## Earlier (predates the log-dating convention)
+
 * **Initialization**: Created the `tasks/` OKF bundle, the [task workflow](workflow.md),
   and the first draft tasks seeded from the sequencing plan in
   [the design doc](../docs/design.md).
@@ -84,6 +86,8 @@
   `--socket`/`--open-cmd`/`--open-detached`/`birch-ctl set-root`. Rides the Dock beta.
   Executed autonomously and consolidated onto `main` (retiring the `mvp` branch) per
   maintainer direction.
+## 2026-07-24
+
 * **Publication prep**: Collapsed development history into a single `prepare for
   publication` root commit and stripped authoring dates from the `tasks/` and `docs/adr/`
   bundles (sprints kept, dates removed; the workflow no longer stamps dates). Pushed to a

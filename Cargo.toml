@@ -12,6 +12,8 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/slukyano/birch"
 homepage = "https://github.com/slukyano/birch"
+keywords = ["tui", "terminal", "file-manager", "tree", "ratatui"]
+categories = ["command-line-utilities"]
 
 [workspace.dependencies]
 ratatui = "0.29"
