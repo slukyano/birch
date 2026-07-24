@@ -16,8 +16,22 @@ env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  create-release:
+    name: create release
+    runs-on: ubuntu-latest
+    steps:
+      # A tag push does not create a Release object; the upload action needs one to exist.
+      - name: Create the GitHub Release if absent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "$TAG" --notes "birch $TAG"
+
   build:
     name: build ${{ matrix.target }}
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -43,7 +57,6 @@ jobs:
           archive: birch-$target
           include: LICENSE,README.md,contrib/birch-cmux,contrib/birch-tmux,contrib/birch-herdr
           checksum: sha256
-          ref: refs/tags/${{ env.TAG }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   formula:
