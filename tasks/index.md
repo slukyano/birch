@@ -19,7 +19,7 @@ okf_version: "0.1"
 * [Sprint 009 — cmux adapter live-use refinements](sprint-009.md) - Done.
 * [Sprint 010 — Click model and detached open commands](sprint-010.md) - Done.
 * [Sprint 011 — cmux Dock integration](sprint-011.md) - Done.
-* [Sprint 012 — Publishable repo & process docs](sprint-012.md) - Designing.
+* [Sprint 012 — Publishable repo & process docs](sprint-012.md) - Implementing.
 
 # Tasks
 

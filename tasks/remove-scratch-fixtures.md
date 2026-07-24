@@ -2,7 +2,7 @@
 type: Task
 title: Remove tracked scratch fixtures and tighten .gitignore
 description: Drop bar.md / bar2.md / foo/ from the tree and ignore scratch, editor, and tooling dirs.
-status: Draft
+status: Designed
 priority: high
 ---
 
