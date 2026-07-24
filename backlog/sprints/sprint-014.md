@@ -35,12 +35,12 @@ in this sprint; `044` documents the current `share/birch/` location.
 
 # Checklist
 
-- [ ] 044-document-installation
-- [ ] 045-add-repo-demo
-- [ ] 046-add-cargo-metadata
-- [ ] 047-decide-crates-io-publish
-- [ ] 048-add-changelog
-- [ ] 049-dedup-and-route-docs
+- [x] 044-document-installation
+- [x] 045-add-repo-demo
+- [x] 046-add-cargo-metadata
+- [x] 047-decide-crates-io-publish
+- [x] 048-add-changelog
+- [x] 049-dedup-and-route-docs
 
 # Open questions
 
