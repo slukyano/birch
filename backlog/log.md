@@ -104,3 +104,13 @@
   Cargo metadata, crates.io decision, changelog) stay `Draft` for a later infrastructure sprint.
 * **Bundle relocated**: `tasks/` renamed to `backlog/`, with active task concepts moved under `backlog/tasks/`; the bundle root now holds only `index.md`, `log.md`, and `workflow.md` (plus the `tasks/`, `archive/`, and `sprints/` subdirectories). Fixed the relative `../docs` links in the archived and sprint files that the sprint-012 restructure had left one level too shallow. A structural change, made directly on `main`.
 * **Docs-architecture task seeded**: `049-dedup-and-route-docs` (`Draft`, high) — deduplicate and route each topic to a single home across `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `backlog/workflow.md`, and `docs/`, with progressive-disclosure pointers; add a `docs/` index (and log); and date the change logs. Design-heavy, touches binding docs — for a sprint.
+* **Sprint 013 done — birch v0.1.0 shipped**: Installable & CI-guarded. GitHub Actions CI
+  (`fmt`/`clippy`/`test` on Linux + macOS); release automation and the Homebrew tap adopted via
+  **cargo-dist** ([ADR 0018](../docs/adr/0018-release-via-cargo-dist.md), supersedes 0017) after
+  the "cargo-dist is unmaintained" premise proved false. The pivot forced folding `birch-ctl` into
+  a `birch ctl` subcommand ([ADR 0019](../docs/adr/0019-control-client-is-a-birch-subcommand.md);
+  one binary → one formula). **v0.1.0** is published — public GitHub Release (three platforms) and
+  `Formula/birch.rb` in `slukyano/homebrew-tap`; `brew install slukyano/tap/birch` resolves and
+  verifies. Deferred to a later docs sprint: `044-document-installation`, `049-dedup-and-route-docs`,
+  and the `045`–`048` polish tasks. Known edge: the contrib adapters install to `share/birch/`,
+  not `PATH`.

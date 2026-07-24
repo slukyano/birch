@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: The control client is a `birch ctl` subcommand, not a separate binary
-status: Proposed
+status: Accepted
 sprint: sprint-013
 ---
 

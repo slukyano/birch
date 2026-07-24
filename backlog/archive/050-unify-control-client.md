@@ -2,7 +2,7 @@
 type: Task
 title: Fold the control client into a `birch ctl` subcommand
 description: Remove the separate birch-ctl binary/crate; control a running instance via `birch ctl <verb>` (tmux model). One binary, one formula.
-status: Draft
+status: Done
 priority: high
 ---
 

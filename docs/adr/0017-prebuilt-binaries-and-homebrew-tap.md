@@ -1,8 +1,9 @@
 ---
 type: ADR
 title: Distribute prebuilt binaries via a Homebrew tap, built on tag
-status: Accepted
+status: Superseded
 sprint: sprint-013
+superseded_by: 0018-release-via-cargo-dist
 ---
 
 # Context

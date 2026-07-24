@@ -20,7 +20,7 @@ okf_version: "0.1"
 * [Sprint 010 — Click model and detached open commands](sprints/sprint-010.md) - Done.
 * [Sprint 011 — cmux Dock integration](sprints/sprint-011.md) - Done.
 * [Sprint 012 — Publishable repo & process docs](sprints/sprint-012.md) - Done.
-* [Sprint 013 — Installable & CI-guarded](sprints/sprint-013.md) - Implementing.
+* [Sprint 013 — Installable & CI-guarded](sprints/sprint-013.md) - Done.
 
 # Tasks
 
@@ -43,16 +43,12 @@ okf_version: "0.1"
 Pre-publication work — repo hygiene, distribution, and process docs. Not product features,
 so outside the `docs/design.md` scope fence.
 
-* [Add the CI workflow](tasks/038-add-ci-workflow.md) - GitHub Actions: fmt --check, clippy --all-targets, test on push/PR.
-* [Set up the Homebrew tap and formula](tasks/042-set-up-homebrew-tap.md) - slukyano/homebrew-tap installing the binary and the contrib adapters (ADR 0002).
-* [Automate tagged releases](tasks/043-automate-releases.md) - Tag-driven Actions building macOS/Linux binaries into a GitHub Release.
 * [Document installation in the README](tasks/044-document-installation.md) - Install section: brew install and cargo install --git, with the adapter caveat.
 * [Add a demo recording to the README](tasks/045-add-repo-demo.md) - asciinema/GIF of the tree, search, and git badges.
 * [Fill in Cargo package metadata](tasks/046-add-cargo-metadata.md) - repository / homepage / keywords / categories for discoverability.
 * [Decide the crates.io publishing story](tasks/047-decide-crates-io-publish.md) - Publish as birch-tree (ADR 0002 fallback) vs Homebrew-only.
 * [Add a changelog and issue templates](tasks/048-add-changelog.md) - CHANGELOG.md and optional GitHub templates.
 * [Deduplicate and route the documentation set](tasks/049-dedup-and-route-docs.md) - Single home per topic across README / AGENTS / CONTRIBUTING / workflow.md / docs/; add docs/index.md; date the logs.
-* [Fold the control client into a `birch ctl` subcommand](tasks/050-unify-control-client.md) - Remove the separate birch-ctl binary/crate; one binary, one Homebrew formula.
 
 # Done
 
@@ -85,5 +81,9 @@ so outside the `docs/design.md` scope fence.
 * [Split the workflow doc into operational core and meta](archive/039-split-workflow-doc.md) - Reformulated hygiene gate (hygiene + voice), scope-presentation format, new bundle layout documented.
 * [Define the external contribution flow](archive/040-define-contribution-flow.md) - Root CONTRIBUTING.md; standard PRs welcome, distinct from the workflow doc.
 * [Restructure the tasks bundle](archive/041-restructure-tasks-bundle.md) - Numbered task slugs, closed tasks to tasks/archive/, sprint files to tasks/sprints/.
+* [Add the CI workflow](archive/038-add-ci-workflow.md) - GitHub Actions: fmt --check, clippy --all-targets, test on Linux + macOS.
+* [Set up the Homebrew tap and formula](archive/042-set-up-homebrew-tap.md) - slukyano/homebrew-tap; formula generated + pushed by cargo-dist (ADR 0018).
+* [Automate tagged releases](archive/043-automate-releases.md) - cargo-dist release.yml: v* tag → 3-target build → GitHub Release → tap formula.
+* [Fold the control client into a `birch ctl` subcommand](archive/050-unify-control-client.md) - birch-ctl folded into `birch ctl` (ADR 0019); one binary, one formula.
 
 # Dropped

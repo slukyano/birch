@@ -2,7 +2,7 @@
 type: Task
 title: Automate tagged releases
 description: Tag-driven GitHub Actions building macOS/Linux binaries and attaching them to a GitHub Release.
-status: Designed
+status: Done
 priority: medium
 ---
 

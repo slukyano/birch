@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: Release automation and the Homebrew tap via cargo-dist
-status: Proposed
+status: Accepted
 sprint: sprint-013
 supersedes: 0017-prebuilt-binaries-and-homebrew-tap
 ---

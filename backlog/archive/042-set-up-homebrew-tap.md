@@ -2,7 +2,7 @@
 type: Task
 title: Set up the Homebrew tap and formula
 description: Personal slukyano/homebrew-tap with a birch formula installing the binary and the contrib adapters.
-status: Designed
+status: Done
 priority: high
 ---
 
@@ -43,4 +43,9 @@ and pushed by cargo-dist's `publish-homebrew-formula` job** (config in `dist-wor
 `installers = ["shell", "homebrew"]` + `tap = "slukyano/homebrew-tap"`), not the hand-rolled
 formula above. One binary (`birch ctl` folded in, [ADR 0019](../../docs/adr/0019-control-client-is-a-birch-subcommand.md))
 → a single `birch.rb`. The push uses a `HOMEBREW_TAP_TOKEN` secret (a fine-grained PAT).
+
+**Gotcha (v0.1.0 live-verified):** cargo-dist's `publish-homebrew-formula` job checks out the
+tap's `main` branch, so a **freshly-created empty tap fails** (`couldn't find remote ref
+refs/heads/main`). Seed the tap with an initial commit (e.g. a README) before the first release.
+Also: prereleases do not publish the formula unless `publish-prereleases = true`.
 
