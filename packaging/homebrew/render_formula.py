@@ -52,8 +52,8 @@ end
 
 
 def read_sha(shas_dir, target):
-    # A .sha256 file is "<hexdigest>  birch-<target>.tar.gz".
-    path = pathlib.Path(shas_dir) / f"birch-{target}.tar.gz.sha256"
+    # The release checksum file is "birch-<target>.sha256", holding "<hexdigest>  <archive>".
+    path = pathlib.Path(shas_dir) / f"birch-{target}.sha256"
     return path.read_text().split()[0]
 
 
