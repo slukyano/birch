@@ -2,7 +2,7 @@
 type: Task
 title: Decide the crates.io publishing story
 description: Evaluate publishing the binary crate as birch-tree (ADR 0002 fallback) vs staying Homebrew-only.
-status: Draft
+status: Designed
 priority: low
 blocked_by:
 - 046-add-cargo-metadata

@@ -2,7 +2,7 @@
 type: Task
 title: Deduplicate and route the documentation set
 description: Give each topic a single home across README, AGENTS, CONTRIBUTING, workflow.md, and docs/; add a docs/ index; date the logs.
-status: Draft
+status: Designed
 priority: high
 ---
 

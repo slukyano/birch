@@ -2,7 +2,7 @@
 type: Task
 title: Add a demo recording to the README
 description: An asciinema or GIF near the top of the README showing the tree, search, and git badges.
-status: Draft
+status: Designed
 priority: medium
 ---
 

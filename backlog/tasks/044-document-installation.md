@@ -2,7 +2,7 @@
 type: Task
 title: Document installation in the README
 description: An Install section covering brew install and cargo install --git, noting the adapter caveat.
-status: Draft
+status: Designed
 priority: medium
 blocked_by:
 - 042-set-up-homebrew-tap
