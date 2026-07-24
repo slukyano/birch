@@ -4,11 +4,11 @@ title: Publishable repo & process docs
 status: Implementing
 branch: sprint/012
 tasks:
-- add-license-file
-- remove-scratch-fixtures
-- split-workflow-doc
-- define-contribution-flow
-- restructure-tasks-bundle
+- 036-add-license-file
+- 037-remove-scratch-fixtures
+- 039-split-workflow-doc
+- 040-define-contribution-flow
+- 041-restructure-tasks-bundle
 ---
 
 # Scope rationale

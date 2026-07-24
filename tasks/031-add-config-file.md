@@ -5,7 +5,7 @@ description: Personal defaults in ~/.config/birch/birch.toml; CLI flags override
 status: Draft
 priority: low
 blocked_by:
-- build-core-tree-view
+- 002-build-core-tree-view
 ---
 
 The Config section of [the design doc](../docs/design.md): `~/.config/birch/birch.toml` for

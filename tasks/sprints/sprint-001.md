@@ -4,8 +4,8 @@ title: Foundation — name check and the core tree view
 status: Done
 branch: sprint/001
 tasks:
-- verify-name-availability
-- build-core-tree-view
+- 001-verify-name-availability
+- 002-build-core-tree-view
 ---
 
 # Scope rationale

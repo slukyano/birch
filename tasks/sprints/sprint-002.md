@@ -4,9 +4,9 @@ title: Live decorated tree — git status, live updates, compact folders
 status: Done
 branch: sprint/002
 tasks:
-- add-git-status
-- add-live-updates
-- add-compact-folders
+- 003-add-git-status
+- 004-add-live-updates
+- 005-add-compact-folders
 ---
 
 # Scope rationale

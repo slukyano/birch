@@ -5,7 +5,7 @@ description: Watch expanded dirs only; tree and badges update in place; selectio
 status: Done
 priority: medium
 blocked_by:
-- build-core-tree-view
+- 002-build-core-tree-view
 ---
 
 Phase 0.2 (partial) of [the design doc](../docs/design.md): watcher-driven live updates for

@@ -5,8 +5,8 @@ description: A third source listing changed files, reusing the source-as-delta-s
 status: Draft
 priority: low
 blocked_by:
-- add-git-status
-- add-content-search
+- 003-add-git-status
+- 030-add-content-search
 ---
 
 Sequenced "Later" in [the design doc](../docs/design.md): a Git Changes source — the tree

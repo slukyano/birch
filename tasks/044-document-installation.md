@@ -5,7 +5,7 @@ description: An Install section covering brew install and cargo install --git, n
 status: Draft
 priority: medium
 blocked_by:
-- set-up-homebrew-tap
+- 042-set-up-homebrew-tap
 ---
 
 The README has a "Building" section but no "Install" section. Add one covering

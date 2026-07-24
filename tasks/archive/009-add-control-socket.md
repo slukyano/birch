@@ -5,7 +5,7 @@ description: Unix socket per instance, NDJSON protocol, closed verb set, --socke
 status: Done
 priority: medium
 blocked_by:
-- build-core-tree-view
+- 002-build-core-tree-view
 ---
 
 Phase 0.4 (partial) of [the design doc](../docs/design.md): socket per instance under

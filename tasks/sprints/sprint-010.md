@@ -4,8 +4,8 @@ title: Click model and detached open commands
 status: Done
 branch: sprint/010
 tasks:
-- click-selects-first
-- detach-open-cmd
+- 022-click-selects-first
+- 023-detach-open-cmd
 ---
 
 # Scope rationale

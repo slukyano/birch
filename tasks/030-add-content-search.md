@@ -5,7 +5,7 @@ description: Ctrl-F swaps the pane's source to files-with-matches, built on the 
 status: Draft
 priority: low
 blocked_by:
-- build-core-tree-view
+- 002-build-core-tree-view
 ---
 
 Phase 0.6 of [the design doc](../docs/design.md): content search as a second source — same

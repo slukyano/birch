@@ -4,7 +4,7 @@ title: Search feel — match what is displayed
 status: Done
 branch: sprint/006
 tasks:
-- refine-search-matching
+- 014-refine-search-matching
 ---
 
 # Scope rationale

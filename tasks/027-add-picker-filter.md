@@ -5,7 +5,7 @@ description: Finder-like filename filter for picker mode - glob or regex pattern
 status: Draft
 priority: low
 blocked_by:
-- unify-picker
+- 016-unify-picker
 ---
 
 Maintainer request: picker mode gains a filename filter (macOS Finder-style) — a glob

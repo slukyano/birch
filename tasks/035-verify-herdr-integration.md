@@ -7,7 +7,7 @@ priority: high
 tags:
 - research
 blocked_by:
-- add-host-adapter-and-recipes
+- 010-add-host-adapter-and-recipes
 ---
 
 The reference adapter `contrib/birch-herdr` is written against herdr's CLI surface but

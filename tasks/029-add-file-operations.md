@@ -5,7 +5,7 @@ description: Rename/delete/new inline ops, right-click context menu, hover highl
 status: Draft
 priority: medium
 blocked_by:
-- build-core-tree-view
+- 002-build-core-tree-view
 ---
 
 Phase 0.5 of [the design doc](../docs/design.md): exactly four ops (rename, delete-to-trash,

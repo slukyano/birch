@@ -4,7 +4,7 @@ title: cmux Dock integration
 status: Done
 branch: main
 tasks:
-- adopt-cmux-dock-integration
+- 024-adopt-cmux-dock-integration
 ---
 
 # Scope rationale

@@ -5,7 +5,7 @@ description: birch --pick / --pick-dir — search filters, Enter prints selectio
 status: Done
 priority: medium
 blocked_by:
-- add-fuzzy-filename-search
+- 006-add-fuzzy-filename-search
 ---
 
 Phase 0.4 (partial) of [the design doc](../docs/design.md): transient picker on the same UI —

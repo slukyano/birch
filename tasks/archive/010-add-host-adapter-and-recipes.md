@@ -5,7 +5,7 @@ description: birch-herdr reference adapter plus nvim/tmux forward- and reverse-i
 status: Done
 priority: medium
 blocked_by:
-- add-control-socket
+- 009-add-control-socket
 ---
 
 Phase 0.4 (partial) of [the design doc](../docs/design.md): one reference adapter

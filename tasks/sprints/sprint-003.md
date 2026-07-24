@@ -4,9 +4,9 @@ title: Find things — fuzzy search, picker mode, state persistence
 status: Done
 branch: sprint/003
 tasks:
-- add-fuzzy-filename-search
-- add-picker-mode
-- add-state-persistence
+- 006-add-fuzzy-filename-search
+- 007-add-picker-mode
+- 008-add-state-persistence
 ---
 
 # Scope rationale

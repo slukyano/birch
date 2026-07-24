@@ -4,8 +4,8 @@ title: Integration — control socket, birch-ctl, adapter and recipes
 status: Done
 branch: sprint/004
 tasks:
-- add-control-socket
-- add-host-adapter-and-recipes
+- 009-add-control-socket
+- 010-add-host-adapter-and-recipes
 ---
 
 # Scope rationale

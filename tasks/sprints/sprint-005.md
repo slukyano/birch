@@ -4,9 +4,9 @@ title: MVP feedback — quit keys, root row, VISUAL
 status: Done
 branch: sprint/005
 tasks:
-- fix-quit-keys
-- show-root-row
-- prefer-visual-editor
+- 011-fix-quit-keys
+- 012-show-root-row
+- 013-prefer-visual-editor
 ---
 
 # Scope rationale

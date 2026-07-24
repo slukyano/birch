@@ -5,7 +5,7 @@ description: Evaluate publishing the binary crate as birch-tree (ADR 0002 fallba
 status: Draft
 priority: low
 blocked_by:
-- add-cargo-metadata
+- 046-add-cargo-metadata
 ---
 
 All crates are `publish = false` and the crates.io name `birch` is taken

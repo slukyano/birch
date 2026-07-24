@@ -4,9 +4,9 @@ title: Second feedback batch — visuals, picker, CLI truth
 status: Done
 branch: sprint/007
 tasks:
-- polish-tree-visuals
-- unify-picker
-- cli-truthfulness
+- 015-polish-tree-visuals
+- 016-unify-picker
+- 017-cli-truthfulness
 ---
 
 # Scope rationale

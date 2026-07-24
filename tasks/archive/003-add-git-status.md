@@ -5,7 +5,7 @@ description: VS Code-style badges and colors with propagation to ancestor dirs; 
 status: Done
 priority: medium
 blocked_by:
-- build-core-tree-view
+- 002-build-core-tree-view
 ---
 
 Phase 0.2 (partial) of [the design doc](../docs/design.md): git status badges + colors

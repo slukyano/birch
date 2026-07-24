@@ -4,7 +4,7 @@ title: cmux adapter live-use refinements
 status: Done
 branch: sprint/009
 tasks:
-- refine-cmux-adapter
+- 021-refine-cmux-adapter
 ---
 
 # Scope rationale

@@ -5,7 +5,7 @@ description: A curated/virtual tree source, reusing the source-as-delta-stream i
 status: Draft
 priority: low
 blocked_by:
-- add-content-search
+- 030-add-content-search
 ---
 
 Sequenced "Later" in [the design doc](../docs/design.md): a Project View source. Scope is

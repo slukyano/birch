@@ -4,9 +4,9 @@ title: Third feedback batch — cmux adapter, chain splitting, {line} cleanup
 status: Done
 branch: sprint/008
 tasks:
-- add-cmux-integration
-- split-chains-on-demand
-- drop-line-template
+- 018-add-cmux-integration
+- 019-split-chains-on-demand
+- 020-drop-line-template
 ---
 
 # Scope rationale

@@ -5,7 +5,7 @@ description: Jump-style search on any printable char; dim non-matches, cycle mat
 status: Done
 priority: medium
 blocked_by:
-- build-core-tree-view
+- 002-build-core-tree-view
 ---
 
 Phase 0.3 of [the design doc](../docs/design.md): typing starts a whole-tree fuzzy jump —
