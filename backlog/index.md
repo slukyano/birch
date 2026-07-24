@@ -21,6 +21,7 @@ okf_version: "0.1"
 * [Sprint 011 — cmux Dock integration](sprints/sprint-011.md) - Done.
 * [Sprint 012 — Publishable repo & process docs](sprints/sprint-012.md) - Done.
 * [Sprint 013 — Installable & CI-guarded](sprints/sprint-013.md) - Done.
+* [Sprint 014 — Docs & publication polish](sprints/sprint-014.md) - Designing.
 
 # Tasks
 
@@ -49,6 +50,7 @@ so outside the `docs/design.md` scope fence.
 * [Decide the crates.io publishing story](tasks/047-decide-crates-io-publish.md) - Publish as birch-tree (ADR 0002 fallback) vs Homebrew-only.
 * [Add a changelog and issue templates](tasks/048-add-changelog.md) - CHANGELOG.md and optional GitHub templates.
 * [Deduplicate and route the documentation set](tasks/049-dedup-and-route-docs.md) - Single home per topic across README / AGENTS / CONTRIBUTING / workflow.md / docs/; add docs/index.md; date the logs.
+* [Install the contrib adapters on PATH](tasks/051-install-adapters-on-path.md) - brew install puts them in share/birch/, not PATH; make them callable by bare name (or document the path).
 
 # Done
 
