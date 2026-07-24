@@ -28,16 +28,20 @@ README install docs (`044-document-installation`) and the documentation restruct
 
 # Checklist
 
-- [ ] 038-add-ci-workflow
+- [x] 038-add-ci-workflow
 - [ ] 042-set-up-homebrew-tap
 - [ ] 043-automate-releases
 
 # Open questions
 
-Design inputs to resolve in the design phase: the release/packaging approach (build the formula
-from source vs. from a release tarball with a pinned checksum), likely recorded as an ADR; the
-CI target matrix and MSRV stance; and the maintainer touchpoint to create the `homebrew-tap`
-repository.
+Design inputs (resolved): release/packaging approach recorded as
+[ADR 0017](../../docs/adr/0017-prebuilt-binaries-and-homebrew-tap.md) — prebuilt binaries;
+CI on Linux + macOS, stable, no MSRV job; tap named `homebrew-tap`.
+
+Stop-and-ask (implementation): `042`/`043` are blocked on two maintainer touchpoints — creating
+the `slukyano/homebrew-tap` repository, and adding a `HOMEBREW_TAP_TOKEN` secret so the release
+workflow can push the formula bump. `038` is implemented and locally green; the release pipeline
+cannot be verified end-to-end until the touchpoints are resolved.
 
 # Session log
 
