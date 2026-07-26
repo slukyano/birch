@@ -1,5 +1,7 @@
 # Task Bundle Log
 
+## Earlier (predates the log-dating convention)
+
 * **Initialization**: Created the `tasks/` OKF bundle, the [task workflow](workflow.md),
   and the first draft tasks seeded from the sequencing plan in
   [the design doc](../docs/design.md).
@@ -84,6 +86,8 @@
   `--socket`/`--open-cmd`/`--open-detached`/`birch-ctl set-root`. Rides the Dock beta.
   Executed autonomously and consolidated onto `main` (retiring the `mvp` branch) per
   maintainer direction.
+## 2026-07-24
+
 * **Publication prep**: Collapsed development history into a single `prepare for
   publication` root commit and stripped authoring dates from the `tasks/` and `docs/adr/`
   bundles (sprints kept, dates removed; the workflow no longer stamps dates). Pushed to a
@@ -114,3 +118,19 @@
   verifies. Deferred to a later docs sprint: `044-document-installation`, `049-dedup-and-route-docs`,
   and the `045`–`048` polish tasks. Known edge: the contrib adapters install to `share/birch/`,
   not `PATH`.
+
+## 2026-07-26
+
+* **Sprint 014 done — docs & publication polish**: The documentation set was routed to one home per
+  topic and `docs/` + `backlog/` became OKF bundles with an index and dated logs
+  (`049-dedup-and-route-docs`); the README gained Install and Quick Start sections
+  (`044-document-installation`) and a vhs demo GIF (`045-add-repo-demo`); Cargo `keywords`/`categories`
+  were filled (`046-add-cargo-metadata`); crates.io was deferred in favor of Homebrew and
+  `cargo install --git` ([ADR 0020](../docs/adr/0020-defer-crates-io.md), `047-decide-crates-io-publish`);
+  and a `CHANGELOG.md` was added (`048-add-changelog`). The README was overhauled around a `# birch`
+  H1 with an outlined birch logo, CI/release/license badges, a Features list, a Quick-Start-first
+  order, the tagline "modern interactive file tree for the terminal", and a dedicated advanced
+  `birch ctl` section. Three follow-ups were seeded from a fresh-eyes DX review — `052` (reveal
+  symlink canonicalization), `053` (state-persistence toggle), `054` (tree visual polish) — and
+  `025` was rescoped to style presets only. The many small doc commits were squashed before an
+  independent diff review and the merge to `main`.

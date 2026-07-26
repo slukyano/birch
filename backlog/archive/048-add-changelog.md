@@ -2,7 +2,7 @@
 type: Task
 title: Add a changelog and issue templates
 description: A CHANGELOG.md and optional GitHub issue/PR templates.
-status: Designed
+status: Done
 priority: low
 ---
 

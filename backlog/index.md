@@ -21,11 +21,12 @@ okf_version: "0.1"
 * [Sprint 011 — cmux Dock integration](sprints/sprint-011.md) - Done.
 * [Sprint 012 — Publishable repo & process docs](sprints/sprint-012.md) - Done.
 * [Sprint 013 — Installable & CI-guarded](sprints/sprint-013.md) - Done.
-* [Sprint 014 — Docs & publication polish](sprints/sprint-014.md) - Implementing.
+* [Sprint 014 — Docs & publication polish](sprints/sprint-014.md) - Done.
 
 # Tasks
 
-* [Add visual styles](tasks/025-add-visual-styles.md) - default / vscode / plain presets.
+* [Add visual styles](tasks/025-add-visual-styles.md) - default / vscode / plain presets (choosable styles only).
+* [Refine the tree's visual design — earn "beautiful"](tasks/054-refine-tree-visual-design.md) - Tree/indent guides, curated palette, selection, spacing — general render-layer polish.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
 * [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob/regex corpus restriction for picker mode.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
@@ -44,13 +45,9 @@ okf_version: "0.1"
 Pre-publication work — repo hygiene, distribution, and process docs. Not product features,
 so outside the `docs/design.md` scope fence.
 
-* [Document installation in the README](tasks/044-document-installation.md) - Install section: brew install and cargo install --git, with the adapter caveat.
-* [Add a demo recording to the README](tasks/045-add-repo-demo.md) - asciinema/GIF of the tree, search, and git badges.
-* [Fill in Cargo package metadata](tasks/046-add-cargo-metadata.md) - repository / homepage / keywords / categories for discoverability.
-* [Decide the crates.io publishing story](tasks/047-decide-crates-io-publish.md) - Publish as birch-tree (ADR 0002 fallback) vs Homebrew-only.
-* [Add a changelog and issue templates](tasks/048-add-changelog.md) - CHANGELOG.md and optional GitHub templates.
-* [Deduplicate and route the documentation set](tasks/049-dedup-and-route-docs.md) - Single home per topic across README / AGENTS / CONTRIBUTING / workflow.md / docs/; add docs/index.md; date the logs.
 * [Install the contrib adapters on PATH](tasks/051-install-adapters-on-path.md) - brew install puts them in share/birch/, not PATH; make them callable by bare name (or document the path).
+* [Canonicalize symlinks before the reveal root-containment check](tasks/052-fix-reveal-symlink-canonicalization.md) - `birch ctl reveal /tmp/...` wrongly "outside the root" on macOS; bug from the DX review.
+* [Add a flag to disable state persistence](tasks/053-add-state-persistence-toggle.md) - Turn off remembering/restoring expansion/selection/scroll per root.
 
 # Done
 
@@ -87,5 +84,11 @@ so outside the `docs/design.md` scope fence.
 * [Set up the Homebrew tap and formula](archive/042-set-up-homebrew-tap.md) - slukyano/homebrew-tap; formula generated + pushed by cargo-dist (ADR 0018).
 * [Automate tagged releases](archive/043-automate-releases.md) - cargo-dist release.yml: v* tag → 3-target build → GitHub Release → tap formula.
 * [Fold the control client into a `birch ctl` subcommand](archive/050-unify-control-client.md) - birch-ctl folded into `birch ctl` (ADR 0019); one binary, one formula.
+* [Document installation in the README](archive/044-document-installation.md) - Install + Quick Start sections: brew install, cargo install --git, from source, adapter caveat.
+* [Add a demo recording to the README](archive/045-add-repo-demo.md) - vhs GIF opening on the tree with icons, git badges, and fuzzy search.
+* [Fill in Cargo package metadata](archive/046-add-cargo-metadata.md) - repository / homepage / keywords / categories for discoverability.
+* [Decide the crates.io publishing story](archive/047-decide-crates-io-publish.md) - Defer crates.io; Homebrew + cargo-install-from-git are the channels (ADR 0020).
+* [Add a changelog](archive/048-add-changelog.md) - CHANGELOG.md (Keep a Changelog), [0.1.0] entry.
+* [Deduplicate and route the documentation set](archive/049-dedup-and-route-docs.md) - Single home per topic across README / AGENTS / CONTRIBUTING / workflow.md / docs/; docs/ + backlog/ as OKF bundles; README overhaul, logo, badges.
 
 # Dropped

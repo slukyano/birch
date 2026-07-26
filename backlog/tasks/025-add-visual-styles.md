@@ -13,3 +13,8 @@ with `--no-icons` (which becomes a style alias or is absorbed); a `birch-ctl set
 key and, later, the config file select it. Note: sprint-010 removed the open-folder
 glyph flip (the chevron alone carries expansion state); an open-folder variant could
 return here as part of a style rather than the default.
+
+Scope: this task is only about **choosable presets** (the style setting and what each preset
+toggles). The general visual design of the tree — indent/tree guides, palette, selection styling,
+spacing — lives in [`054-refine-tree-visual-design`](054-refine-tree-visual-design.md); presets
+build on that baseline (e.g. the classic-connector guide look could be one preset).
