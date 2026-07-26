@@ -2,7 +2,7 @@
 type: Task
 title: Fill in Cargo package metadata
 description: Add repository / homepage / keywords / categories to [workspace.package] for discoverability.
-status: Designed
+status: Done
 priority: low
 ---
 

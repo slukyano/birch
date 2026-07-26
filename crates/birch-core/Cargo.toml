@@ -1,6 +1,6 @@
 [package]
 name = "birch-core"
-description = "Real tree, sources-as-delta-streams, watcher, git status, search, file ops. Must build without ratatui."
+description = "Real tree, sources-as-delta-streams, watcher, git status, search. Must build without ratatui."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
