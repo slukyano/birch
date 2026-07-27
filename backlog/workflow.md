@@ -115,6 +115,11 @@ asks questions, records decisions. Per task, the outcome is:
 - zero or more **ADRs** in `docs/adr/` (status `Proposed`) for decisions of architectural
   weight. See [ADRs](#adrs).
 
+Every `## Design` must enumerate the task's **complete public-surface delta** — each new or changed
+CLI flag, config key, socket/protocol field, environment variable, on-disk path, and public API —
+so nothing user-facing is introduced implicitly. A task with no public-surface change states that
+explicitly. Carry the same enumeration into the design-approval and close-out presentations.
+
 Commit throughout the phase. When all tasks in scope are designed, the maintainer reviews the
 batch. **Design approval** triggers, in order:
 

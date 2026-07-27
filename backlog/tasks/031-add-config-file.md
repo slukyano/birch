@@ -33,6 +33,29 @@ Adds `toml` + `serde` (derive) to `birch-core`.
 flag (the one-directional flags override in their direction — see ADR 0022 for the documented "can't
 re-enable from CLI" limitation). Theme resolves `cli.theme.or(config.theme).unwrap_or(Birch)`.
 
+**Public surface.**
+- **On disk:** `$XDG_CONFIG_HOME/birch/birch.toml`, else `~/.config/birch/birch.toml`.
+- **CLI:** `--print-config-path` (prints the resolved path and exits).
+- **Dependencies:** `toml` + `serde` (derive) added to `birch-core`.
+- **TOML keys** (all optional; a missing key means "use the built-in default"):
+
+  | key | type | maps to | default |
+  |-----|------|---------|---------|
+  | `theme` | string (`ThemeId`) | `Settings.theme` | `birch` |
+  | `icons` | bool | `Settings.icons` | `true` |
+  | `git` | bool | `Settings.git` | `true` |
+  | `hidden` | bool | `Settings.show_hidden` | `true` |
+  | `ignored` | bool | `Settings.show_ignored` (dimmed when true) | `true` |
+  | `noise` | bool | `Settings.show_noise` | `false` |
+  | `compact` | bool | `Settings.compact` | `true` |
+  | `files-first` | bool | `Settings.files_first` | `false` |
+  | `mouse` | bool | `Settings.mouse` | `true` |
+  | `open-cmd` | string | open command template | unset → `$VISUAL`/`$EDITOR`/opener |
+
+  Surface asymmetry to keep in mind: `theme` is the only *new* `ctl set` key (`025`); `mouse` and
+  `open-cmd` are config- and CLI-settable but **not** `ctl set`-settable (they aren't in
+  `SettingKey` today, and this sprint doesn't add them there).
+
 **Tests:** precedence (config sets a value, a flag overrides it); tolerant parse (unknown key, bad
 value, malformed file → defaults + warning); XDG path resolution; missing file → defaults.
 

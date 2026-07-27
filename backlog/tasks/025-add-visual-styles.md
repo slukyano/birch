@@ -48,5 +48,19 @@ fallback); `plain` merely defaults icons off. `--no-git` still hides badges unde
 **Trademarks.** `vscode`/`jetbrains`/`xcode` describe the look they emulate; ship no editor logos
 and add a short **Trademarks** disclaimer to the README (nominative fair use; birch unaffiliated).
 
+**Public surface.**
+- CLI: **`--theme <birch|vscode|jetbrains|xcode|retro|plain>`** (clap `ValueEnum`).
+- ctl: **`birch ctl set theme <id>`** — `SettingArg` gains a `Theme` variant; the `set` value is
+  parsed as a `ThemeId`, an unknown id errors cleanly. (No new socket *verb* — reuses `Set`.)
+- README: a short **Trademarks** section (bottom) for the emulation-named themes.
+- No env vars, no new on-disk paths (the persisted default lives in the config file, `031`).
+
+**Implementation deliverables (maintainer checkpoints).**
+- **Show all themes, compared, before the task is called done** — a side-by-side visual (screenshots
+  of the same tree under each theme) presented to the maintainer for sign-off; the aesthetic is
+  the deliverable, so this is a stop-and-show, not a self-approval.
+- **Document the themes in the README** — a Themes section listing each id and its look, ideally a
+  **compact grid of screenshots + names**. (Screenshot assets under `docs/assets/`.)
+
 **Tests:** every `ThemeId` resolves to a `Theme`; `--theme` and `ctl set theme` select it; an
 unknown id errors cleanly.

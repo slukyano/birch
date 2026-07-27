@@ -52,6 +52,10 @@ symlinks *inside* the tree, so a reveal that escapes the root *via an in-tree sy
 - **(B)** Resolve only the prefix at/above the root (canonicalize the root's ancestor chain, keep
   in-tree components lexical) to preserve today's in-tree-symlink acceptance — more code, narrower.
 
-Recommend **(A)**. **Tests:** `/tmp` vs `/private/tmp` prefix resolves and reveals; a genuinely
-outside path still errors; a not-yet-existing leaf under a real (symlinked) dir resolves via its
-ancestor.
+Recommend **(A)**.
+
+**Public surface.** None — a behavior fix to the existing `reveal` verb (a previously-rejected path
+now resolves). No new flags, config keys, protocol fields, or public APIs.
+
+**Tests:** `/tmp` vs `/private/tmp` prefix resolves and reveals; a genuinely outside path still
+errors; a not-yet-existing leaf under a real (symlinked) dir resolves via its ancestor.
