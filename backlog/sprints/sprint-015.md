@@ -8,6 +8,7 @@ tasks:
 - 025-add-visual-styles
 - 031-add-config-file
 - 052-fix-reveal-symlink-canonicalization
+- 057-remove-files-first
 ---
 
 # Scope rationale
@@ -36,9 +37,12 @@ search; the real-tree/render split holds.
 - **`031-add-config-file`** — *mid, design-heavy.* `~/.config/birch/birch.toml` (XDG) sets the
   default `theme` and the existing `Settings` toggles. Precedence **config < CLI flags < `ctl
   set`**. Tolerant TOML parsing in `birch-core`. Backed by a **separate** config ADR.
-- **`052-fix-reveal-symlink-canonicalization`** — *minor (bug), high.* Canonicalize both sides
-  before the reveal root-containment check so `birch ctl reveal /tmp/...` isn't wrongly "outside
-  the root" on macOS. Independent of the visual work.
+- **`052-fix-reveal-symlink-canonicalization`** — *minor (bug), high.* Match the reveal path
+  as-given, resolving symlinks only as a fallback, so `birch ctl reveal /tmp/...` isn't wrongly
+  "outside the root" on macOS. Independent of the visual work.
+- **`057-remove-files-first`** — *minor, low.* Drop the `files-first` sort toggle (setting, flag,
+  and protocol key); directories always sort first. Folded in because it edits the same
+  `Settings` / `SettingKey` / CLI surface as the theme and config work.
 
 # Ordering / dependencies
 
@@ -68,6 +72,7 @@ original three-task scope with `031` per maintainer direction).
 - [ ] 025-add-visual-styles
 - [ ] 031-add-config-file
 - [ ] 052-fix-reveal-symlink-canonicalization
+- [ ] 057-remove-files-first
 
 # Open questions
 
@@ -81,3 +86,8 @@ pending design approval.)_
   catalog: `vscode`/`jetbrains`/`xcode`/`retro`/`plain`) and pulled in `031` (config file) to
   persist the chosen theme. Two Proposed ADRs — 0021 (theme system) and 0022 (config file). Per-task
   designs written for `054`/`025`/`031`/`052`.
+- Design review round: seeded `055` (tech debt — encapsulate visual styles in tui; ADR 0021 now owns
+  the abstraction leak) and `056` (future — user themes); folded in `057` (drop `files-first`);
+  switched config overrides to **bidirectional flags** (ADR 0022); refined `052` to match the path
+  as-given and canonicalize only as a fallback; config bad-input warnings go to stderr, never the
+  TUI; dropped `--print-config-path`, added `--config <path>`.

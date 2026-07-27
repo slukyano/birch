@@ -26,11 +26,12 @@ A **TOML** config at **`$XDG_CONFIG_HOME/birch/birch.toml`** (else `~/.config/bi
   (`open-cmd`). All keys optional; a missing key means "no opinion, use the built-in default."
 - **Precedence: `Settings::default()` → config → CLI flags → runtime `ctl set`.** Config is the new
   default source; a CLI flag present on the command line still wins; `ctl set` wins at runtime.
-- **One-directional flags stay as they are.** birch's flags only move one way (`--no-icons`,
-  `--hide-hidden`, …). Because a flag is applied only when present, it cleanly overrides config in
-  its direction. The documented limitation: a default that config turned *off* cannot be turned
-  *on* again from the CLI (there is no `--icons`); edit the config or use `ctl set`. This preserves
-  the lean, one-directional CLI rather than doubling every flag.
+- **Bidirectional boolean flags** (the ripgrep / fd / bat pattern). Each toggle gains its missing
+  direction — the current negatives (`--no-icons`, `--hide-hidden`, …) get positives (`--icons`,
+  `--show-hidden`, …) — wired with clap `overrides_with` so **last flag wins** and the CLI can
+  override config in **either** direction, with no "can't re-enable from the CLI" gap. The
+  default-direction counterparts may be `hide`-flagged in `--help` to keep it uncluttered while
+  still being accepted. (Back-compat is not a constraint pre-1.0.)
 - **Tolerant parsing** (matches the socket's additive philosophy): unknown keys and individual
   bad values are logged to stderr and ignored, never fatal; a malformed file degrades to built-in
   defaults with a warning, it never blocks launch. Newer configs stay readable by older birch.
@@ -55,5 +56,6 @@ A **TOML** config at **`$XDG_CONFIG_HOME/birch/birch.toml`** (else `~/.config/bi
   stays limited to the few operational knobs it already covers.
 - **Store defaults in the state cache** — rejected: the cache is per-root, disposable, and keyed on
   path; global preferences are a separate, human-edited artifact.
-- **Bidirectional CLI flags** (`--icons`/`--no-icons` pairs) to fully override config — rejected as
-  CLI bloat; the one-directional limitation is acceptable and documented.
+- **One-directional flags only** (keep just the negatives) — rejected: a value config turned off
+  couldn't be re-enabled from the CLI, an awkward gap for little benefit now that bidirectional is
+  the common, expected pattern.

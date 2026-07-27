@@ -33,14 +33,16 @@ pane host sees it; the UI stays clean).
 Adds `toml` + `serde` (derive) to `birch-core`.
 
 **Precedence** (`Settings::default()` → config → CLI flags → `ctl set`): `main.rs` stops building
-`Settings` inline and instead starts from `config.to_settings()`, then applies each **present** CLI
-flag (the one-directional flags override in their direction — see ADR 0022 for the documented "can't
-re-enable from CLI" limitation). Theme resolves `cli.theme.or(config.theme).unwrap_or(Birch)`.
+`Settings` inline and instead starts from `config.to_settings()`, then applies the CLI flags. Flags
+are **bidirectional** (each toggle has both `--x` and `--no-x` via clap `overrides_with`, last one
+wins), so the CLI overrides config in either direction (ADR 0022). Theme resolves
+`cli.theme.or(config.theme).unwrap_or(Birch)`.
 
 **Public surface.**
 - **On disk:** `$XDG_CONFIG_HOME/birch/birch.toml`, else `~/.config/birch/birch.toml`.
 - **CLI:** `--config <path>` (use this file instead of the discovered one; for tests and alternate
-  setups).
+  setups); **bidirectional toggles** — every setting flag gains its inverse (`--icons`/`--no-icons`,
+  `--show-hidden`/`--hide-hidden`, `--git`/`--no-git`, …) so the CLI can override config either way.
 - **Dependencies:** `toml` + `serde` (derive) added to `birch-core`.
 - **TOML keys** (all optional; a missing key means "use the built-in default"):
 
@@ -53,7 +55,6 @@ re-enable from CLI" limitation). Theme resolves `cli.theme.or(config.theme).unwr
   | `ignored` | bool | `Settings.show_ignored` (dimmed when true) | `true` |
   | `noise` | bool | `Settings.show_noise` | `false` |
   | `compact` | bool | `Settings.compact` | `true` |
-  | `files-first` | bool | `Settings.files_first` | `false` |
   | `mouse` | bool | `Settings.mouse` | `true` |
   | `open-cmd` | string | open command template | unset → `$VISUAL`/`$EDITOR`/opener |
 

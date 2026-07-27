@@ -38,24 +38,24 @@ its comment keeps an *in-tree* symlink from resolving outside the tree) and then
 matches the canonical root. (`set-root` at `app.rs:583` already canonicalizes, so it is unaffected;
 this is a reveal-only fix.)
 
-**Fix.** For the **containment test only**, canonicalize the incoming path (falling back to
-canonicalizing its longest existing ancestor and re-appending the remainder when the leaf doesn't
-exist yet); compare that to the canonical root. On success, reveal the **lexically-normalized**
-path as today (reveal semantics unchanged). Extract a small helper (`canonical_within(root, path)`)
-so the same normalization is used both places.
+**Fix (match as-given first; canonicalize only as a rescue).** Do not canonicalize eagerly — take
+the path the caller gave and only resolve symlinks when it doesn't already match:
 
-**One design decision (flagged).** Canonicalizing the incoming path for the test also resolves
-symlinks *inside* the tree, so a reveal that escapes the root *via an in-tree symlink* (`root/link →
-/etc`, `reveal root/link/x`) would change from **accepted → rejected**. Two options:
-- **(A, recommended)** Accept that — never treat a physically-outside path as in-tree; simplest,
-  arguably more correct, one helper.
-- **(B)** Resolve only the prefix at/above the root (canonicalize the root's ancestor chain, keep
-  in-tree components lexical) to preserve today's in-tree-symlink acceptance — more code, narrower.
+1. Lexically normalize the input to `abs` (as today — resolves `..`, no symlink resolution).
+2. If `abs.starts_with(root)` → **reveal `abs`**. Covers relative inputs, already-canonical
+   absolutes, and **in-tree symlink nodes referenced by their listed path** — no canonicalization,
+   so their identity is preserved (this is why nothing regresses).
+3. Otherwise (the `/tmp → /private/tmp` case): canonicalize `abs` — or its longest existing
+   ancestor, re-appending the not-yet-existing remainder — and if the result is under `root`,
+   reveal it; else `path is outside the root`.
 
-Recommend **(A)**.
+So symlink resolution is a **fallback that only fires for a path the tree didn't already match**;
+the common and in-tree cases never hit it. `set-root` already canonicalizes its argument
+(`app.rs:583`), so it is unaffected — this is a reveal-only fix.
 
 **Public surface.** None — a behavior fix to the existing `reveal` verb (a previously-rejected path
 now resolves). No new flags, config keys, protocol fields, or public APIs.
 
-**Tests:** `/tmp` vs `/private/tmp` prefix resolves and reveals; a genuinely outside path still
-errors; a not-yet-existing leaf under a real (symlinked) dir resolves via its ancestor.
+**Tests:** an already-under-root absolute reveals via step 2 (no canonicalization); a symlinked
+root prefix (`/tmp` vs `/private/tmp`) reveals via the step-3 fallback; a genuinely outside path
+still errors; a not-yet-existing leaf under a symlinked root resolves via its ancestor.
