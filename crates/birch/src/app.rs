@@ -459,24 +459,13 @@ impl App {
         let mut effect = CtlEffect::None;
         let response = match request.verb {
             Verb::Reveal => match request.path {
-                Some(path) => {
-                    let abs = if path.is_absolute() {
-                        path
-                    } else {
-                        self.root.join(path)
-                    };
-                    // Lexical normalization, no canonicalize: the tree speaks
-                    // the paths as listed (a symlinked entry inside the tree
-                    // must not resolve outside it), while `..` segments must
-                    // not escape the root check.
-                    let abs = lexical_normalize(&abs);
-                    if abs.starts_with(&self.root) {
-                        self.reveal(abs);
+                Some(path) => match resolve_within_root(&self.root, &path) {
+                    Some(target) => {
+                        self.reveal(target);
                         Response::ok(None)
-                    } else {
-                        Response::err("path is outside the root")
                     }
-                }
+                    None => Response::err("path is outside the root"),
+                },
                 None => Response::err("reveal needs a path"),
             },
             Verb::GetPath => match self.view.selection.clone() {
@@ -1161,6 +1150,41 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// Canonicalizes the longest existing prefix of `path` and re-appends any
+/// not-yet-existing tail, so a path whose leaf does not exist yet still has its
+/// symlinked ancestors resolved. Falls back to the input if nothing resolves.
+fn canonicalize_lenient(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => canonicalize_lenient(parent).join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Resolves a `reveal` argument to a path inside `root` (canonicalized at
+/// launch), or `None` if it lies outside. The path is taken **as given** first
+/// — lexically normalized (so `..` cannot escape) and matched against the root,
+/// which keeps relative inputs and in-tree symlink nodes working with no
+/// resolution — and symlinks are resolved only as a *fallback* for a path that
+/// did not already match (e.g. a symlinked root prefix such as macOS `/tmp` →
+/// `/private/tmp`). The lexical path is revealed when it matches; otherwise the
+/// resolved path (which is under the canonical root) is.
+fn resolve_within_root(root: &Path, input: &Path) -> Option<PathBuf> {
+    let abs = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        root.join(input)
+    };
+    let abs = lexical_normalize(&abs);
+    if abs.starts_with(root) {
+        return Some(abs);
+    }
+    let resolved = canonicalize_lenient(&abs);
+    resolved.starts_with(root).then_some(resolved)
+}
+
 fn area(terminal: &term::Term) -> Rect {
     terminal
         .size()
@@ -1622,6 +1646,40 @@ mod ctl_tests {
         req.path = Some("relative.txt".into());
         let (resp, _) = h.app.ctl_response(req);
         assert!(resp.ok, "relative paths resolve against the root");
+    }
+
+    #[test]
+    fn resolve_within_root_handles_symlinked_prefix() {
+        // A real dir plus a symlink pointing at it (mirrors macOS /tmp →
+        // /private/tmp). Reveal via the symlinked prefix must resolve.
+        let base = std::env::temp_dir().join(format!("birch-reveal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("real/sub")).unwrap();
+        std::fs::write(base.join("real/sub/main.rs"), b"x").unwrap();
+        let base = base.canonicalize().unwrap();
+        let real = base.join("real");
+        let link = base.join("alias");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        // Already under the root: returned as given, no symlink resolution.
+        assert_eq!(
+            resolve_within_root(&real, Path::new("sub/main.rs")),
+            Some(real.join("sub/main.rs"))
+        );
+        // Symlinked prefix: resolved via the fallback to the canonical path.
+        assert_eq!(
+            resolve_within_root(&real, &link.join("sub/main.rs")),
+            Some(real.join("sub/main.rs"))
+        );
+        // A not-yet-existing leaf under the symlinked prefix still resolves.
+        assert_eq!(
+            resolve_within_root(&real, &link.join("sub/new.rs")),
+            Some(real.join("sub/new.rs"))
+        );
+        // A genuinely outside path is rejected.
+        assert_eq!(resolve_within_root(&real, Path::new("/etc/passwd")), None);
+
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
