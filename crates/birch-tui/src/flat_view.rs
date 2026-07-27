@@ -34,6 +34,18 @@ pub struct Row {
     pub match_indices: Vec<u32>,
     /// Dim text after the label (the root row carries its full path).
     pub annotation: Option<String>,
+    /// Structural data for classic connector guides (`GuideStyle::Connectors`),
+    /// one entry per ancestor at depths `1..depth`: `true` if that ancestor has
+    /// a following visible sibling (so its indent column draws a `│`
+    /// continuation), `false` if it was the last child (blank column). Indexed
+    /// by column, so `guides[k]` is the ancestor at depth `k + 1`. The
+    /// outermost column (`k == 0`, the root's spine) is never drawn. `Indent`
+    /// and `None` themes ignore this.
+    pub guides: Vec<bool>,
+    /// Whether this row is the last among its visible siblings — its own
+    /// connector is `└` when true, `├` when false. Ignored by non-connector
+    /// themes.
+    pub last_sibling: bool,
 }
 
 /// What a navigation action asks the app to do.
@@ -179,16 +191,26 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
         search: ctx.search_flag(ctx.is_hit(&root.path)),
         match_indices: ctx.hit_indices(&root.path),
         annotation: Some(abbreviate_home(&root.path, std::env::home_dir().as_deref())),
+        guides: Vec::new(),
+        last_sibling: true,
     });
     if root.expanded {
-        push_children(&ctx, tree.root(), 1, &mut rows);
+        push_children(&ctx, tree.root(), 1, &[], &mut rows);
     }
     rows
 }
 
-fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, rows: &mut Vec<Row>) {
+/// Emits the visible children of `dir_id` at `depth`. `ancestors` is the
+/// connector-guide vector these rows inherit (the following-sibling status of
+/// each ancestor at depths `1..depth`); each child appends its own status when
+/// it recurses, and learns whether it is the last visible sibling from its
+/// position in the child list.
+fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], rows: &mut Vec<Row>) {
     let dir_path = ctx.tree.get(dir_id).path.clone();
-    for child in visible_children(ctx, dir_id) {
+    let children = visible_children(ctx, dir_id);
+    let count = children.len();
+    for (i, child) in children.into_iter().enumerate() {
+        let last_sibling = i + 1 == count;
         match child {
             Child::Missing(name) => {
                 let path = dir_path.join(&name);
@@ -208,14 +230,23 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, rows: &mut Vec<Row>) {
                     search,
                     match_indices,
                     annotation: None,
+                    guides: ancestors.to_vec(),
+                    last_sibling,
                 });
             }
-            Child::Real(id) => push_node(ctx, id, depth, rows),
+            Child::Real(id) => push_node(ctx, id, depth, ancestors, last_sibling, rows),
         }
     }
 }
 
-fn push_node(ctx: &Ctx, id: NodeId, depth: usize, rows: &mut Vec<Row>) {
+fn push_node(
+    ctx: &Ctx,
+    id: NodeId,
+    depth: usize,
+    ancestors: &[bool],
+    last_sibling: bool,
+    rows: &mut Vec<Row>,
+) {
     let node = ctx.tree.get(id);
     // Chain compaction (ADR 0007): extend while each member's only visible
     // child is a single dir. An unloaded tail ends the chain and may extend
@@ -301,9 +332,16 @@ fn push_node(ctx: &Ctx, id: NodeId, depth: usize, rows: &mut Vec<Row>) {
         search: ctx.search_flag(hit),
         match_indices,
         annotation: None,
+        guides: ancestors.to_vec(),
+        last_sibling,
     });
     if tail_node.kind.is_dir() && tail_node.expanded {
-        push_children(ctx, tail, depth + 1, rows);
+        // Children inherit our guides plus our own following-sibling status:
+        // a `│` continues down our indent column iff we are not the last
+        // sibling.
+        let mut child_ancestors = ancestors.to_vec();
+        child_ancestors.push(!last_sibling);
+        push_children(ctx, tail, depth + 1, &child_ancestors, rows);
     }
 }
 
@@ -345,6 +383,8 @@ pub fn match_rows(matches: &[Match], git: Option<&GitState>) -> Vec<Row> {
                 search: None,
                 match_indices,
                 annotation: None,
+                guides: Vec::new(),
+                last_sibling: true,
             }
         })
         .collect()
@@ -1073,6 +1113,51 @@ mod tests {
         assert_eq!(rows[0].match_indices, [4, 5]);
         // Path-mode indices already address the displayed rel path.
         assert_eq!(rows[1].match_indices, [0, 4]);
+    }
+
+    #[test]
+    fn connector_guides_track_following_siblings_and_last_child() {
+        // root { a/ { b/ { c }, y }, z } with compaction off so each node is
+        // its own row at its true depth.
+        let mut tree = Tree::new(PathBuf::from("/r"));
+        tree.set_expanded(Path::new("/r"), true);
+        snapshot(
+            &mut tree,
+            "/r",
+            vec![entry("a", NodeKind::Dir), entry("z", NodeKind::File)],
+        );
+        snapshot(
+            &mut tree,
+            "/r/a",
+            vec![entry("b", NodeKind::Dir), entry("y", NodeKind::File)],
+        );
+        snapshot(&mut tree, "/r/a/b", vec![entry("c", NodeKind::File)]);
+        tree.set_expanded(Path::new("/r/a"), true);
+        tree.set_expanded(Path::new("/r/a/b"), true);
+        let s = Settings {
+            compact: false,
+            ..Settings::default()
+        };
+        let rows = visible_rows(&tree, &s, Decor::default());
+        assert_eq!(row_names(&rows), ["r", "a", "b", "c", "y", "z"]);
+        let by = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
+
+        // a: depth 1, has a following sibling (z), so not last; no ancestors.
+        assert_eq!(by("a").guides, Vec::<bool>::new());
+        assert!(!by("a").last_sibling);
+        // b: depth 2, ancestor a continues (guides[0] = true); b is not last (y
+        // follows).
+        assert_eq!(by("b").guides, vec![true]);
+        assert!(!by("b").last_sibling);
+        // c: depth 3, both ancestors (a, b) continue; c is the last (only) child.
+        assert_eq!(by("c").guides, vec![true, true]);
+        assert!(by("c").last_sibling);
+        // y: depth 2, ancestor a continues; y is the last child of a.
+        assert_eq!(by("y").guides, vec![true]);
+        assert!(by("y").last_sibling);
+        // z: depth 1, last child of root.
+        assert_eq!(by("z").guides, Vec::<bool>::new());
+        assert!(by("z").last_sibling);
     }
 
     #[test]

@@ -16,9 +16,8 @@ pub enum GuideStyle {
     None,
     /// A dim `│` in each ancestor indent column (VS Code-style).
     Indent,
-    /// Classic `├──`/`└──`/`│` connectors. Not yet realized — needs
-    /// sibling/last-child data from `flat_view`; rendered as `Indent` guides
-    /// until then. TODO(025): real connectors.
+    /// Classic `├─`/`└─`/`│` connectors, driven by the per-row
+    /// following-sibling/last-child data on `Row` (`guides`, `last_sibling`).
     Connectors,
 }
 
@@ -114,20 +113,19 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Resolves a `ThemeId` to its `Theme`. Only `Birch` and `Plain` are fully
-    /// realized here; the emulation themes are placeholders mapped onto
-    /// `Birch` for now. TODO(025): distinct `vscode`/`jetbrains`/`xcode`/`retro`
-    /// themes.
+    /// Resolves a `ThemeId` to its `Theme`. Every catalog theme is a distinct
+    /// value tuned for a black terminal background (ADR 0021). Icon glyphs are
+    /// shared (the Nerd Font map); themes differentiate via palette, guides,
+    /// folder-icon, and selection. TODO(025): a per-theme icon *palette* /
+    /// blocky retro glyph set would sharpen the emulation further.
     pub fn for_id(id: ThemeId) -> Theme {
         match id {
             ThemeId::Birch => Theme::birch(),
+            ThemeId::Vscode => Theme::vscode(),
+            ThemeId::Jetbrains => Theme::jetbrains(),
+            ThemeId::Xcode => Theme::xcode(),
+            ThemeId::Retro => Theme::retro(),
             ThemeId::Plain => Theme::plain(),
-            // TODO(025): distinct theme — placeholder mapped onto Birch.
-            ThemeId::Vscode | ThemeId::Jetbrains | ThemeId::Xcode | ThemeId::Retro => {
-                let mut theme = Theme::birch();
-                theme.id = id;
-                theme
-            }
         }
     }
 
@@ -167,8 +165,147 @@ impl Theme {
         }
     }
 
+    /// VS Code-like: dim indent guides, no folder glyph (the chevron stands in
+    /// for it), a soft blue selection with a VS Code-blue accent bar, and the
+    /// familiar VS Code blues/greys.
+    fn vscode() -> Theme {
+        Theme {
+            id: ThemeId::Vscode,
+            palette: Palette {
+                name_fg: Some(Color::Rgb(0xd4, 0xd4, 0xd4)),
+                dir_fg: Some(Color::Rgb(0xcf, 0xcf, 0xcf)),
+                // VS Code list active-selection blue, softened.
+                selection_bg: Color::Rgb(0x09, 0x3a, 0x5e),
+                selection_accent: Color::Rgb(0x00, 0x7a, 0xcc),
+                guide: Color::Rgb(0x40, 0x40, 0x40),
+                chevron: Color::Rgb(0x80, 0x80, 0x80),
+                separator: Color::Rgb(0x6a, 0x73, 0x7d),
+                ignored: Color::Rgb(0x6a, 0x6a, 0x6a),
+                match_bg: Color::Rgb(0x0e, 0x63, 0x9c),
+                match_fg: Color::Rgb(0xff, 0xff, 0xff),
+                git: GitColors {
+                    conflicted: Color::Rgb(0xe4, 0x67, 0x6b),
+                    deleted: Color::Rgb(0xc7, 0x4e, 0x39),
+                    renamed: Color::Rgb(0x73, 0xc9, 0x91),
+                    modified: Color::Rgb(0xe2, 0xc0, 0x8d),
+                    added: Color::Rgb(0x81, 0xb8, 0x8b),
+                    untracked: Color::Rgb(0x73, 0xc9, 0x91),
+                },
+            },
+            guides: GuideStyle::Indent,
+            selection: SelectionStyle::SoftBarAccent,
+            badges: BadgeStyle::Letter,
+            icons: IconSet::NerdFont,
+            bold_dirs: true,
+            folder_icon: false,
+        }
+    }
+
+    /// JetBrains/Darcula-like: no guides, folder glyphs shown, a soft warm-grey
+    /// selection with a warm amber accent bar over a near-neutral warm palette.
+    fn jetbrains() -> Theme {
+        Theme {
+            id: ThemeId::Jetbrains,
+            palette: Palette {
+                name_fg: Some(Color::Rgb(0xb8, 0xb4, 0xac)),
+                dir_fg: Some(Color::Rgb(0xd0, 0xcb, 0xc0)),
+                selection_bg: Color::Rgb(0x3a, 0x3a, 0x38),
+                selection_accent: Color::Rgb(0xd9, 0x97, 0x5a),
+                guide: Color::Rgb(0x4b, 0x4b, 0x48),
+                chevron: Color::Rgb(0x9a, 0x93, 0x86),
+                separator: Color::Rgb(0x80, 0x7a, 0x70),
+                ignored: Color::Rgb(0x6f, 0x6b, 0x63),
+                match_bg: Color::Rgb(0x32, 0x59, 0x3d),
+                match_fg: Color::Rgb(0xe8, 0xe4, 0xdc),
+                git: GitColors {
+                    conflicted: Color::Rgb(0xe0, 0x55, 0x55),
+                    deleted: Color::Rgb(0xc7, 0x54, 0x50),
+                    renamed: Color::Rgb(0xb3, 0xae, 0x60),
+                    modified: Color::Rgb(0x68, 0x97, 0xbb),
+                    added: Color::Rgb(0x6a, 0x87, 0x59),
+                    untracked: Color::Rgb(0x6a, 0x87, 0x59),
+                },
+            },
+            guides: GuideStyle::None,
+            selection: SelectionStyle::SoftBarAccent,
+            badges: BadgeStyle::Letter,
+            icons: IconSet::NerdFont,
+            bold_dirs: true,
+            folder_icon: true,
+        }
+    }
+
+    /// Xcode-like: no guides, folder glyphs shown, a full-row macOS-blue
+    /// selection over a lighter, cooler palette.
+    fn xcode() -> Theme {
+        Theme {
+            id: ThemeId::Xcode,
+            palette: Palette {
+                name_fg: Some(Color::Rgb(0xe5, 0xea, 0xf0)),
+                dir_fg: Some(Color::Rgb(0xff, 0xff, 0xff)),
+                // macOS system-blue full-row selection.
+                selection_bg: Color::Rgb(0x1e, 0x57, 0xc4),
+                selection_accent: Color::Rgb(0x3f, 0x7a, 0xf6),
+                guide: Color::Rgb(0x3a, 0x41, 0x4b),
+                chevron: Color::Rgb(0x98, 0xa0, 0xab),
+                separator: Color::Rgb(0x8a, 0x92, 0x9c),
+                ignored: Color::Rgb(0x6c, 0x75, 0x80),
+                match_bg: Color::Rgb(0x3f, 0x6f, 0xb5),
+                match_fg: Color::Rgb(0xff, 0xff, 0xff),
+                git: GitColors {
+                    conflicted: Color::Rgb(0xd0, 0x57, 0x4e),
+                    deleted: Color::Rgb(0xd0, 0x57, 0x4e),
+                    renamed: Color::Rgb(0x67, 0xb2, 0x6f),
+                    modified: Color::Rgb(0x4a, 0x90, 0xd9),
+                    added: Color::Rgb(0x67, 0xb2, 0x6f),
+                    untracked: Color::Rgb(0x67, 0xb2, 0x6f),
+                },
+            },
+            guides: GuideStyle::None,
+            selection: SelectionStyle::FullRow,
+            badges: BadgeStyle::Letter,
+            icons: IconSet::NerdFont,
+            bold_dirs: true,
+            folder_icon: true,
+        }
+    }
+
+    /// A retro CRT look: classic `├─`/`└─` connectors, folder glyphs, and a
+    /// high-contrast saturated amber/green palette with a full-row selection.
+    fn retro() -> Theme {
+        Theme {
+            id: ThemeId::Retro,
+            palette: Palette {
+                name_fg: Some(Color::Rgb(0xff, 0xb4, 0x54)),
+                dir_fg: Some(Color::Rgb(0x4e, 0xe4, 0x4e)),
+                selection_bg: Color::Rgb(0x5f, 0x00, 0x5f),
+                selection_accent: Color::Rgb(0xff, 0xff, 0x55),
+                guide: Color::Rgb(0x3f, 0xbf, 0x3f),
+                chevron: Color::Rgb(0xff, 0xb4, 0x54),
+                separator: Color::Rgb(0xaf, 0x87, 0x5f),
+                ignored: Color::Rgb(0x6f, 0x6f, 0x2f),
+                match_bg: Color::Rgb(0xff, 0xff, 0x00),
+                match_fg: Color::Rgb(0x00, 0x00, 0x00),
+                git: GitColors {
+                    conflicted: Color::Rgb(0xff, 0x55, 0x55),
+                    deleted: Color::Rgb(0xff, 0x55, 0x55),
+                    renamed: Color::Rgb(0x55, 0xff, 0x55),
+                    modified: Color::Rgb(0xff, 0xff, 0x55),
+                    added: Color::Rgb(0x55, 0xff, 0x55),
+                    untracked: Color::Rgb(0x55, 0xff, 0xff),
+                },
+            },
+            guides: GuideStyle::Connectors,
+            selection: SelectionStyle::FullRow,
+            badges: BadgeStyle::Letter,
+            icons: IconSet::NerdFont,
+            bold_dirs: true,
+            folder_icon: true,
+        }
+    }
+
     /// A stripped-back theme: basic ANSI colors, no icons, a plain full-row
-    /// selection, no guides.
+    /// selection, classic connector guides.
     fn plain() -> Theme {
         Theme {
             id: ThemeId::Plain,
@@ -192,9 +329,7 @@ impl Theme {
                     untracked: Color::Green,
                 },
             },
-            // GuideStyle::Connectors is defined but not yet realized; the plain
-            // theme stays genuinely plain with no guides. TODO(025).
-            guides: GuideStyle::None,
+            guides: GuideStyle::Connectors,
             selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
             icons: IconSet::None,
@@ -230,8 +365,41 @@ mod tests {
         assert_eq!(birch.icons, IconSet::NerdFont);
 
         let plain = Theme::for_id(ThemeId::Plain);
-        assert_eq!(plain.guides, GuideStyle::None);
+        assert_eq!(plain.guides, GuideStyle::Connectors);
         assert_eq!(plain.selection, SelectionStyle::FullRow);
         assert_eq!(plain.icons, IconSet::None);
+    }
+
+    #[test]
+    fn catalog_themes_pick_distinct_points() {
+        // vscode: chevron stands in for the folder glyph; dim indent guides.
+        let vscode = Theme::for_id(ThemeId::Vscode);
+        assert!(!vscode.folder_icon);
+        assert_eq!(vscode.guides, GuideStyle::Indent);
+        assert_eq!(vscode.selection, SelectionStyle::SoftBarAccent);
+
+        // jetbrains: no guides, folder glyphs, soft selection.
+        let jb = Theme::for_id(ThemeId::Jetbrains);
+        assert_eq!(jb.guides, GuideStyle::None);
+        assert!(jb.folder_icon);
+        assert_eq!(jb.selection, SelectionStyle::SoftBarAccent);
+
+        // xcode: no guides, full-row selection.
+        let xcode = Theme::for_id(ThemeId::Xcode);
+        assert_eq!(xcode.guides, GuideStyle::None);
+        assert!(xcode.folder_icon);
+        assert_eq!(xcode.selection, SelectionStyle::FullRow);
+
+        // retro: classic connectors, full-row selection.
+        let retro = Theme::for_id(ThemeId::Retro);
+        assert_eq!(retro.guides, GuideStyle::Connectors);
+        assert_eq!(retro.selection, SelectionStyle::FullRow);
+        assert_eq!(retro.icons, IconSet::NerdFont);
+
+        // The catalog is not a single theme wearing different ids: at least the
+        // guide/selection/folder-icon axes vary across the four.
+        assert_ne!(vscode.folder_icon, jb.folder_icon);
+        assert_ne!(jb.selection, xcode.selection);
+        assert_ne!(xcode.guides, retro.guides);
     }
 }

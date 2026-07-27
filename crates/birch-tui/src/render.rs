@@ -76,7 +76,7 @@ pub fn draw(
 /// columns, never shifting the chevron).
 fn row_line(theme: &Theme, settings: &Settings, row: &Row, selected: bool) -> Line<'static> {
     let name_style = name_style(theme, row);
-    let mut spans = indent_spans(theme, row.depth, selected);
+    let mut spans = indent_spans(theme, row, selected);
     if row.kind.is_dir() && !row.missing {
         let chevron = if row.expanded {
             "\u{25be} "
@@ -146,30 +146,61 @@ fn badge_line(theme: &Theme, row: &Row) -> Line<'static> {
 /// outermost column into the left accent bar (`▏`), keeping the total width
 /// identical so `hit_test` geometry is unchanged.
 ///
+/// The outermost column (`level 0`) is never a guide: it is the root's spine,
+/// which always runs full-height and is uninformative. It is the selection
+/// accent bar (selected row, `SoftBarAccent`) or two blank spaces. Guides
+/// (`Indent` lines and `Connectors`) begin at `level >= 1`.
+///
 /// A depth-0 (root) row has no indent columns, so its accent bar cannot be
 /// drawn without clobbering the chevron; the soft background still marks it.
-/// TODO(025): a one-space left pad would carry the root's accent bar too.
-fn indent_spans(theme: &Theme, depth: usize, selected: bool) -> Vec<Span<'static>> {
+fn indent_spans(theme: &Theme, row: &Row, selected: bool) -> Vec<Span<'static>> {
+    let depth = row.depth;
     let guide_style = Style::default().fg(theme.palette.guide);
     let accent = selected && theme.selection == SelectionStyle::SoftBarAccent;
-    let segment = match theme.guides {
-        GuideStyle::None => "  ",
-        // TODO(025): Connectors need sibling/last-child data; drawn as Indent.
-        GuideStyle::Indent | GuideStyle::Connectors => "\u{2502} ",
-    };
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(depth);
     for level in 0..depth {
-        if level == 0 && accent {
-            spans.push(Span::styled(
-                "\u{258f}",
-                Style::default().fg(theme.palette.selection_accent),
-            ));
-            spans.push(Span::styled(" ", guide_style));
-        } else {
-            spans.push(Span::styled(segment, guide_style));
+        // Level 0 is the root's spine: never a guide, just the accent bar or a
+        // blank pad. This keeps the column at INDENT_WIDTH so hit_test is
+        // unaffected.
+        if level == 0 {
+            if accent {
+                spans.push(Span::styled(
+                    "\u{258f}",
+                    Style::default().fg(theme.palette.selection_accent),
+                ));
+                spans.push(Span::styled(" ", guide_style));
+            } else {
+                spans.push(Span::raw("  "));
+            }
+            continue;
         }
+        let segment = match theme.guides {
+            GuideStyle::None => "  ",
+            GuideStyle::Indent => "\u{2502} ",
+            GuideStyle::Connectors => connector_segment(row, level),
+        };
+        spans.push(Span::styled(segment, guide_style));
     }
     spans
+}
+
+/// The classic-connector glyph for column `level` (`>= 1`) of a row. The final
+/// column (`level == depth - 1`) is the row's own connector — `└─` if it is the
+/// last sibling, else `├─`. Interior columns draw a `│ ` continuation when the
+/// ancestor at that depth still has a following sibling below, else blank. Each
+/// segment is exactly `INDENT_WIDTH` (2) columns wide.
+fn connector_segment(row: &Row, level: usize) -> &'static str {
+    if level + 1 == row.depth {
+        if row.last_sibling {
+            "\u{2514}\u{2500}" // └─
+        } else {
+            "\u{251c}\u{2500}" // ├─
+        }
+    } else if row.guides.get(level).copied().unwrap_or(false) {
+        "\u{2502} " // │
+    } else {
+        "  "
+    }
 }
 
 /// Renders a row label with dim chain separators and lit match characters
@@ -299,6 +330,8 @@ mod tests {
             search: None,
             match_indices: Vec::new(),
             annotation: None,
+            guides: Vec::new(),
+            last_sibling: true,
         }
     }
 
@@ -403,18 +436,16 @@ mod tests {
     }
 
     #[test]
-    fn birch_paints_indent_guides_in_ancestor_columns() {
+    fn birch_paints_indent_guides_but_never_the_leftmost_column() {
         let theme = theme();
-        // A depth-2 row (unselected) gets a dim vertical guide per level, each
-        // two columns wide, so the chevron still starts at depth * 2.
-        let spans = indent_spans(&theme, 2, false);
+        // A depth-2 row (unselected): level 0 is the root spine (blank), level 1
+        // a dim vertical guide — each two columns wide, so the chevron still
+        // starts at depth * 2.
+        let spans = indent_spans(&theme, &row("d", NodeKind::File, 2), false);
         let texts: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(texts, ["\u{2502} ", "\u{2502} "]);
-        assert!(
-            spans
-                .iter()
-                .all(|s| s.style.fg == Some(theme.palette.guide))
-        );
+        assert_eq!(texts, ["  ", "\u{2502} "]);
+        // The level-1 guide carries the guide color.
+        assert_eq!(spans[1].style.fg, Some(theme.palette.guide));
         let width: usize = texts.iter().map(|t| t.chars().count()).sum();
         assert_eq!(width, 2 * INDENT_WIDTH as usize);
     }
@@ -424,7 +455,7 @@ mod tests {
         let theme = theme();
         // Selected: the outermost indent column becomes the accent bar (▏),
         // width preserved so hit-test geometry is unchanged.
-        let spans = indent_spans(&theme, 1, true);
+        let spans = indent_spans(&theme, &row("deep", NodeKind::File, 1), true);
         assert_eq!(spans[0].content.as_ref(), "\u{258f}");
         assert_eq!(spans[0].style.fg, Some(theme.palette.selection_accent));
         let width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
@@ -437,10 +468,84 @@ mod tests {
     }
 
     #[test]
-    fn plain_theme_has_no_guides_and_no_accent_bar() {
-        let plain = Theme::for_id(ThemeId::Plain);
-        let spans = indent_spans(&plain, 2, true);
-        let texts: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(texts, ["  ", "  "]);
+    fn vscode_dirs_drop_the_folder_glyph_files_keep_icons() {
+        let theme = Theme::for_id(ThemeId::Vscode);
+        // A directory: the chevron stands in for the folder glyph, and there is
+        // no icon gap (no folder glyph span at all).
+        let dir = row("src", NodeKind::Dir, 1);
+        let line = row_line(&theme, &Settings::default(), &dir, false);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains('\u{25b8}'), "chevron present"); // ▸
+        assert!(!text.contains('\u{e5ff}'), "no folder glyph"); // DIR
+        assert!(text.ends_with("src"));
+
+        // A file still gets its type icon.
+        let file = row("main.rs", NodeKind::File, 1);
+        let fline = row_line(&theme, &Settings::default(), &file, false);
+        let ftext: String = fline.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(ftext.contains('\u{e7a8}'), "rust icon present");
+    }
+
+    #[test]
+    fn leftmost_column_is_never_a_guide() {
+        // For every guide style, a depth-2 unselected row leaves level 0 blank
+        // (the root spine is never drawn).
+        for id in [
+            ThemeId::Birch,
+            ThemeId::Vscode,
+            ThemeId::Retro,
+            ThemeId::Plain,
+        ] {
+            let theme = Theme::for_id(id);
+            let mut r = row("d", NodeKind::File, 2);
+            r.guides = vec![true, true];
+            let spans = indent_spans(&theme, &r, false);
+            assert_eq!(spans[0].content.as_ref(), "  ", "theme {id:?}");
+        }
+    }
+
+    #[test]
+    fn connectors_draw_branch_last_and_continuation_glyphs() {
+        let retro = Theme::for_id(ThemeId::Retro);
+        // A depth-2 middle child (not last): level 0 blank, level 1 is its own
+        // connector ├─.
+        let mut middle = row("mid", NodeKind::File, 2);
+        middle.guides = vec![true];
+        middle.last_sibling = false;
+        let texts: Vec<String> = indent_spans(&retro, &middle, false)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(texts, ["  ", "\u{251c}\u{2500}"]);
+
+        // A depth-2 last child: its own connector is └─.
+        let mut last = row("last", NodeKind::File, 2);
+        last.guides = vec![true];
+        last.last_sibling = true;
+        let texts: Vec<String> = indent_spans(&retro, &last, false)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(texts, ["  ", "\u{2514}\u{2500}"]);
+
+        // A depth-3 row under a non-last ancestor: level 0 blank, level 1 draws
+        // the ancestor's │ continuation, level 2 is the row's own connector.
+        let mut deep = row("deep", NodeKind::File, 3);
+        deep.guides = vec![true, true]; // ancestor at depth 2 has a following sibling
+        deep.last_sibling = true;
+        let texts: Vec<String> = indent_spans(&retro, &deep, false)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(texts, ["  ", "\u{2502} ", "\u{2514}\u{2500}"]);
+
+        // Same depth-3 row but the ancestor was the last sibling: continuation
+        // column goes blank.
+        deep.guides = vec![true, false];
+        let texts: Vec<String> = indent_spans(&retro, &deep, false)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(texts, ["  ", "  ", "\u{2514}\u{2500}"]);
     }
 }
