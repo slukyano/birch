@@ -5,6 +5,8 @@
 use birch_core::NodeKind;
 use ratatui::style::Color;
 
+use crate::theme::{IconSet, Theme};
+
 // One folder glyph regardless of expansion: the chevron already carries the
 // open/closed state, and a flipping icon is churn in an ambient pane
 // (JetBrains/Finder school; an open-folder variant can return as a style).
@@ -13,7 +15,22 @@ const FILE: &str = "\u{f016}"; //
 const DIR_COLOR: Color = Color::Rgb(0x7a, 0xa2, 0xf7);
 const FILE_COLOR: Color = Color::Rgb(0x9a, 0xa5, 0xb1);
 
-pub fn icon_for(name: &str, kind: NodeKind) -> (&'static str, Color) {
+/// Resolves a row's icon glyph+color from the active theme's `IconSet`.
+/// `None` means "draw no icon": either the theme has no icons, or it hides the
+/// folder glyph (chevron-only, VS Code-style).
+pub fn icon_for(theme: &Theme, name: &str, kind: NodeKind) -> Option<(&'static str, Color)> {
+    match theme.icons {
+        IconSet::None => None,
+        IconSet::NerdFont => {
+            if kind.is_dir() && !theme.folder_icon {
+                return None;
+            }
+            Some(nerd_font_icon(name, kind))
+        }
+    }
+}
+
+fn nerd_font_icon(name: &str, kind: NodeKind) -> (&'static str, Color) {
     if kind.is_dir() {
         return (DIR, DIR_COLOR);
     }
@@ -71,15 +88,36 @@ fn by_name(name: &str) -> Option<(&'static str, Color)> {
 
 #[cfg(test)]
 mod tests {
+    use birch_core::ThemeId;
+
     use super::*;
 
     #[test]
     fn dirs_files_and_extensions() {
-        assert_eq!(icon_for("src", NodeKind::Dir).0, DIR);
-        assert_eq!(icon_for("main.rs", NodeKind::File).0, "\u{e7a8}");
-        assert_eq!(icon_for("weird.xyz", NodeKind::File).0, FILE);
-        assert_eq!(icon_for("Makefile", NodeKind::File).0, "\u{f489}");
+        assert_eq!(nerd_font_icon("src", NodeKind::Dir).0, DIR);
+        assert_eq!(nerd_font_icon("main.rs", NodeKind::File).0, "\u{e7a8}");
+        assert_eq!(nerd_font_icon("weird.xyz", NodeKind::File).0, FILE);
+        assert_eq!(nerd_font_icon("Makefile", NodeKind::File).0, "\u{f489}");
         // extension matching is case-insensitive
-        assert_eq!(icon_for("A.RS", NodeKind::File).0, "\u{e7a8}");
+        assert_eq!(nerd_font_icon("A.RS", NodeKind::File).0, "\u{e7a8}");
+    }
+
+    #[test]
+    fn icon_set_gates_resolution() {
+        let birch = Theme::for_id(ThemeId::Birch);
+        assert_eq!(
+            icon_for(&birch, "main.rs", NodeKind::File),
+            Some(("\u{e7a8}", Color::Rgb(0xde, 0x78, 0x3c)))
+        );
+        // Birch shows the folder glyph.
+        assert_eq!(
+            icon_for(&birch, "src", NodeKind::Dir),
+            Some((DIR, DIR_COLOR))
+        );
+
+        // Plain has no icon set at all.
+        let plain = Theme::for_id(ThemeId::Plain);
+        assert_eq!(icon_for(&plain, "main.rs", NodeKind::File), None);
+        assert_eq!(icon_for(&plain, "src", NodeKind::Dir), None);
     }
 }

@@ -4,35 +4,17 @@
 use birch_core::{FileStatus, Settings};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::flat_view::{FlatView, Row};
 use crate::icons;
+use crate::theme::{BadgeStyle, GuideStyle, SelectionStyle, Theme};
 
 pub const INDENT_WIDTH: u16 = 2;
 /// Width of the right-hand git badge column.
 pub const BADGE_WIDTH: u16 = 2;
-
-const SELECTION_BG: Color = Color::Rgb(0x2f, 0x3b, 0x54);
-const CHEVRON_COLOR: Color = Color::Rgb(0x6d, 0x80, 0x86);
-const SEPARATOR_COLOR: Color = Color::Rgb(0x6d, 0x80, 0x86);
-const IGNORED_COLOR: Color = Color::Rgb(0x7a, 0x82, 0x8e);
-/// Matched search characters render as IDEA-style boxes (ADR 0013).
-const MATCH_BG: Color = Color::Rgb(0xb8, 0x86, 0x2d);
-const MATCH_FG: Color = Color::Rgb(0x1a, 0x1b, 0x26);
-
-pub fn status_color(status: FileStatus) -> Color {
-    match status {
-        FileStatus::Conflicted => Color::Rgb(0xe4, 0x67, 0x6b),
-        FileStatus::Deleted => Color::Rgb(0xc7, 0x4e, 0x39),
-        FileStatus::Renamed => Color::Rgb(0x73, 0xc9, 0x91),
-        FileStatus::Modified => Color::Rgb(0xe2, 0xc0, 0x8d),
-        FileStatus::Added => Color::Rgb(0x81, 0xb8, 0x8b),
-        FileStatus::Untracked => Color::Rgb(0x73, 0xc9, 0x91),
-    }
-}
 
 /// The tree gets everything above the one-line status bar.
 pub fn tree_viewport_height(area: Rect) -> usize {
@@ -44,6 +26,7 @@ pub fn draw(
     rows: &[Row],
     view: &FlatView,
     settings: &Settings,
+    theme: &Theme,
     bottom_line: &str,
 ) {
     let area = frame.area();
@@ -73,54 +56,9 @@ pub fn draw(
     let mut lines = Vec::with_capacity(viewport);
     let mut badges = Vec::with_capacity(viewport);
     for row in rows.iter().skip(view.scroll).take(viewport) {
-        let name_style = name_style(row);
-        let mut spans = vec![Span::raw(
-            " ".repeat((row.depth as u16 * INDENT_WIDTH) as usize),
-        )];
-        if row.kind.is_dir() && !row.missing {
-            let chevron = if row.expanded {
-                "\u{25be} "
-            } else {
-                "\u{25b8} "
-            };
-            spans.push(Span::styled(chevron, Style::default().fg(CHEVRON_COLOR)));
-        } else {
-            spans.push(Span::raw("  "));
-        }
-        if settings.icons {
-            let (glyph, color) = icons::icon_for(&row.name, row.kind);
-            let icon_color = if row.ignored { IGNORED_COLOR } else { color };
-            spans.push(Span::styled(
-                format!("{glyph} "),
-                Style::default().fg(icon_color),
-            ));
-        }
-        spans.extend(label_spans(row, name_style));
-        if let Some(annotation) = &row.annotation {
-            spans.push(Span::styled(
-                format!("  {annotation}"),
-                Style::default()
-                    .fg(SEPARATOR_COLOR)
-                    .add_modifier(Modifier::DIM),
-            ));
-        }
-        let mut line = Line::from(spans);
-        if selected == Some(row.path.as_path()) {
-            line = line.style(Style::default().bg(SELECTION_BG));
-        }
-        lines.push(line);
-
-        badges.push(match row.status {
-            Some(status) if row.kind.is_dir() && !row.missing => Line::from(Span::styled(
-                "\u{25cf}",
-                Style::default().fg(status_color(status)),
-            )),
-            Some(status) => Line::from(Span::styled(
-                status.badge().to_string(),
-                Style::default().fg(status_color(status)),
-            )),
-            None => Line::default(),
-        });
+        let is_selected = selected == Some(row.path.as_path());
+        lines.push(row_line(theme, settings, row, is_selected));
+        badges.push(badge_line(theme, row));
     }
     frame.render_widget(Paragraph::new(lines), tree_area);
     frame.render_widget(Paragraph::new(badges), badge_area);
@@ -132,12 +70,117 @@ pub fn draw(
     );
 }
 
+/// Builds the styled tree line for one row. Pure function of the row, the
+/// active theme, and whether the row is selected — the same geometry
+/// `hit_test` mirrors (guides and the accent bar occupy the existing indent
+/// columns, never shifting the chevron).
+fn row_line(theme: &Theme, settings: &Settings, row: &Row, selected: bool) -> Line<'static> {
+    let name_style = name_style(theme, row);
+    let mut spans = indent_spans(theme, row.depth, selected);
+    if row.kind.is_dir() && !row.missing {
+        let chevron = if row.expanded {
+            "\u{25be} "
+        } else {
+            "\u{25b8} "
+        };
+        spans.push(Span::styled(
+            chevron,
+            Style::default().fg(theme.palette.chevron),
+        ));
+    } else {
+        spans.push(Span::raw("  "));
+    }
+    if settings.icons
+        && let Some((glyph, color)) = icons::icon_for(theme, &row.name, row.kind)
+    {
+        let icon_color = if row.ignored {
+            theme.palette.ignored
+        } else {
+            color
+        };
+        spans.push(Span::styled(
+            format!("{glyph} "),
+            Style::default().fg(icon_color),
+        ));
+    }
+    spans.extend(label_spans(theme, row, name_style));
+    if let Some(annotation) = &row.annotation {
+        spans.push(Span::styled(
+            format!("  {annotation}"),
+            Style::default()
+                .fg(theme.palette.separator)
+                .add_modifier(Modifier::DIM),
+        ));
+    }
+    let mut line = Line::from(spans);
+    if selected {
+        line = line.style(Style::default().bg(theme.palette.selection_bg));
+    }
+    line
+}
+
+/// The right-hand git badge for one row (directory rollups always use the `●`
+/// dot; files follow the theme's `BadgeStyle`).
+fn badge_line(theme: &Theme, row: &Row) -> Line<'static> {
+    match row.status {
+        Some(status) if row.kind.is_dir() && !row.missing => Line::from(Span::styled(
+            "\u{25cf}",
+            Style::default().fg(theme.palette.git.color(status)),
+        )),
+        Some(status) => {
+            let text = match theme.badges {
+                BadgeStyle::Letter => status.badge().to_string(),
+                BadgeStyle::Symbol => "\u{25cf}".to_string(),
+            };
+            Line::from(Span::styled(
+                text,
+                Style::default().fg(theme.palette.git.color(status)),
+            ))
+        }
+        None => Line::default(),
+    }
+}
+
+/// The ancestor-indent columns (`INDENT_WIDTH` each). Renders the theme's
+/// guide glyph, and — for a selected row under `SoftBarAccent` — turns the
+/// outermost column into the left accent bar (`▏`), keeping the total width
+/// identical so `hit_test` geometry is unchanged.
+///
+/// A depth-0 (root) row has no indent columns, so its accent bar cannot be
+/// drawn without clobbering the chevron; the soft background still marks it.
+/// TODO(025): a one-space left pad would carry the root's accent bar too.
+fn indent_spans(theme: &Theme, depth: usize, selected: bool) -> Vec<Span<'static>> {
+    let guide_style = Style::default().fg(theme.palette.guide);
+    let accent = selected && theme.selection == SelectionStyle::SoftBarAccent;
+    let segment = match theme.guides {
+        GuideStyle::None => "  ",
+        // TODO(025): Connectors need sibling/last-child data; drawn as Indent.
+        GuideStyle::Indent | GuideStyle::Connectors => "\u{2502} ",
+    };
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(depth);
+    for level in 0..depth {
+        if level == 0 && accent {
+            spans.push(Span::styled(
+                "\u{258f}",
+                Style::default().fg(theme.palette.selection_accent),
+            ));
+            spans.push(Span::styled(" ", guide_style));
+        } else {
+            spans.push(Span::styled(segment, guide_style));
+        }
+    }
+    spans
+}
+
 /// Renders a row label with dim chain separators and lit match characters
 /// (ADR 0013). A hit without char detail (path-mode in the tree) keeps the
 /// whole-label bold from `name_style`.
-fn label_spans(row: &Row, base: Style) -> Vec<Span<'static>> {
-    let separator = Style::default().fg(SEPARATOR_COLOR);
-    let lit = base.bg(MATCH_BG).fg(MATCH_FG).add_modifier(Modifier::BOLD);
+fn label_spans(theme: &Theme, row: &Row, base: Style) -> Vec<Span<'static>> {
+    let separator = Style::default().fg(theme.palette.separator);
+    let lit = base
+        .bg(theme.palette.match_bg)
+        .fg(theme.palette.match_fg)
+        .add_modifier(Modifier::BOLD);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut run = String::new();
     let mut run_style: Option<Style> = None;
@@ -163,8 +206,8 @@ fn label_spans(row: &Row, base: Style) -> Vec<Span<'static>> {
     spans
 }
 
-fn name_style(row: &Row) -> Style {
-    let base = base_name_style(row);
+fn name_style(theme: &Theme, row: &Row) -> Style {
+    let base = base_name_style(theme, row);
     match row.search {
         Some(true) => base.add_modifier(Modifier::BOLD),
         Some(false) => base.add_modifier(Modifier::DIM),
@@ -172,21 +215,35 @@ fn name_style(row: &Row) -> Style {
     }
 }
 
-fn base_name_style(row: &Row) -> Style {
+fn base_name_style(theme: &Theme, row: &Row) -> Style {
     if row.missing {
         return Style::default()
-            .fg(status_color(FileStatus::Deleted))
+            .fg(theme.palette.git.color(FileStatus::Deleted))
             .add_modifier(Modifier::CROSSED_OUT);
     }
     if row.ignored {
         return Style::default()
-            .fg(IGNORED_COLOR)
+            .fg(theme.palette.ignored)
             .add_modifier(Modifier::DIM);
     }
-    match row.status {
-        Some(status) => Style::default().fg(status_color(status)),
-        None => Style::default(),
+    let mut style = match row.status {
+        Some(status) => Style::default().fg(theme.palette.git.color(status)),
+        None => {
+            let fg = if row.kind.is_dir() {
+                theme.palette.dir_fg
+            } else {
+                theme.palette.name_fg
+            };
+            match fg {
+                Some(color) => Style::default().fg(color),
+                None => Style::default(),
+            }
+        }
+    };
+    if row.kind.is_dir() && theme.bold_dirs {
+        style = style.add_modifier(Modifier::BOLD);
     }
+    style
 }
 
 /// Resolves a click at terminal coordinates to a row index and whether it hit
@@ -219,9 +276,13 @@ pub fn hit_test(
 mod tests {
     use std::path::PathBuf;
 
-    use birch_core::NodeKind;
+    use birch_core::{NodeKind, ThemeId};
 
     use super::*;
+
+    fn theme() -> Theme {
+        Theme::for_id(ThemeId::Birch)
+    }
 
     fn row(name: &str, kind: NodeKind, depth: usize) -> Row {
         Row {
@@ -288,29 +349,98 @@ mod tests {
 
     #[test]
     fn label_spans_group_runs_and_dim_separators() {
+        let theme = theme();
         let mut r = row("a/b/cc", NodeKind::Dir, 0);
         r.chain = vec![PathBuf::from("/r/a"), PathBuf::from("/r/a/b")];
         r.match_indices = vec![4, 5]; // "cc"
-        let spans = label_spans(&r, Style::default());
+        let spans = label_spans(&theme, &r, Style::default());
         let texts: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(texts, ["a", "/", "b", "/", "cc"]);
         // Separators are dim-styled, the matched run is lit.
         assert_ne!(spans[1].style, spans[0].style);
         assert_eq!(spans[1].style, spans[3].style);
-        assert_eq!(spans[4].style.bg, Some(MATCH_BG));
-        assert_eq!(spans[4].style.fg, Some(MATCH_FG));
+        assert_eq!(spans[4].style.bg, Some(theme.palette.match_bg));
+        assert_eq!(spans[4].style.fg, Some(theme.palette.match_fg));
         assert!(spans[4].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
     fn name_style_precedence() {
+        let theme = theme();
         let mut r = row("a.rs", NodeKind::File, 0);
-        assert_eq!(name_style(&r), Style::default());
+        // A plain file keeps the terminal default (Birch's name_fg is None).
+        assert_eq!(name_style(&theme, &r), Style::default());
         r.status = Some(FileStatus::Modified);
-        assert_eq!(name_style(&r).fg, Some(status_color(FileStatus::Modified)));
+        assert_eq!(
+            name_style(&theme, &r).fg,
+            Some(theme.palette.git.color(FileStatus::Modified))
+        );
         r.ignored = true;
-        assert_eq!(name_style(&r).fg, Some(IGNORED_COLOR));
+        assert_eq!(name_style(&theme, &r).fg, Some(theme.palette.ignored));
         r.missing = true;
-        assert!(name_style(&r).add_modifier.contains(Modifier::CROSSED_OUT));
+        assert!(
+            name_style(&theme, &r)
+                .add_modifier
+                .contains(Modifier::CROSSED_OUT)
+        );
+    }
+
+    #[test]
+    fn directories_are_bold_under_birch() {
+        let theme = theme();
+        let dir = row("src", NodeKind::Dir, 0);
+        assert!(
+            name_style(&theme, &dir)
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        let file = row("a.rs", NodeKind::File, 0);
+        assert!(
+            !name_style(&theme, &file)
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn birch_paints_indent_guides_in_ancestor_columns() {
+        let theme = theme();
+        // A depth-2 row (unselected) gets a dim vertical guide per level, each
+        // two columns wide, so the chevron still starts at depth * 2.
+        let spans = indent_spans(&theme, 2, false);
+        let texts: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(texts, ["\u{2502} ", "\u{2502} "]);
+        assert!(
+            spans
+                .iter()
+                .all(|s| s.style.fg == Some(theme.palette.guide))
+        );
+        let width: usize = texts.iter().map(|t| t.chars().count()).sum();
+        assert_eq!(width, 2 * INDENT_WIDTH as usize);
+    }
+
+    #[test]
+    fn birch_selection_paints_a_left_accent_bar() {
+        let theme = theme();
+        // Selected: the outermost indent column becomes the accent bar (▏),
+        // width preserved so hit-test geometry is unchanged.
+        let spans = indent_spans(&theme, 1, true);
+        assert_eq!(spans[0].content.as_ref(), "\u{258f}");
+        assert_eq!(spans[0].style.fg, Some(theme.palette.selection_accent));
+        let width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        assert_eq!(width, INDENT_WIDTH as usize);
+
+        // A whole selected row also carries the soft selection background.
+        let r = row("deep", NodeKind::File, 1);
+        let line = row_line(&theme, &Settings::default(), &r, true);
+        assert_eq!(line.style.bg, Some(theme.palette.selection_bg));
+    }
+
+    #[test]
+    fn plain_theme_has_no_guides_and_no_accent_bar() {
+        let plain = Theme::for_id(ThemeId::Plain);
+        let spans = indent_spans(&plain, 2, true);
+        let texts: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(texts, ["  ", "  "]);
     }
 }

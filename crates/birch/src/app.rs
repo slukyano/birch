@@ -17,11 +17,13 @@ use birch_core::protocol::{PathForm, Request, Response, SettingKey, SettingValue
 use birch_core::search::{IndexCmd, IndexEvent, Match, SearchIndex, search};
 use birch_core::watcher::{WatchCmd, WatchEvent};
 use birch_core::{
-    NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, Tree, TreeDelta, persist,
+    NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree, TreeDelta,
+    persist,
 };
 use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row};
 use birch_tui::input::{self, InputAction};
 use birch_tui::render;
+use birch_tui::theme::Theme;
 use ratatui::layout::Rect;
 
 use crate::ctl::{CtlRequest, SocketHandle};
@@ -523,6 +525,17 @@ impl App {
         let (Some(key), Some(value)) = (key, value) else {
             return Response::err("set needs a setting and a value");
         };
+        // Theme is a theme-id string, not the on/off SettingValue every other
+        // key parses. The redraw at the end of the loop applies it live.
+        if let SettingKey::Theme = key {
+            return match value.parse::<ThemeId>() {
+                Ok(id) => {
+                    self.settings.theme = id;
+                    Response::ok(None)
+                }
+                Err(e) => Response::err(e),
+            };
+        }
         let Some(value) = SettingValue::parse(value) else {
             return Response::err("value must be on/off/true/false/1/0/toggle");
         };
@@ -552,6 +565,7 @@ impl App {
                     self.repo_root = None;
                 }
             }
+            SettingKey::Theme => unreachable!("theme is handled before value parsing"),
         }
         Response::ok(None)
     }
@@ -924,8 +938,9 @@ impl App {
             self.save_persisted(false);
         }
         let bottom = self.bottom_line();
+        let theme = Theme::for_id(self.settings.theme);
         let (view, settings) = (&self.view, &self.settings);
-        terminal.draw(|frame| render::draw(frame, &rows, view, settings, &bottom))?;
+        terminal.draw(|frame| render::draw(frame, &rows, view, settings, &theme, &bottom))?;
         Ok(())
     }
 
@@ -1732,6 +1747,25 @@ mod ctl_tests {
         req.setting = Some(SettingKey::Hidden);
         req.value = Some("maybe".into());
         assert!(!h.app.ctl_response(req).0.ok, "bad value rejected");
+    }
+
+    #[test]
+    fn set_theme_selects_by_id_and_rejects_unknown() {
+        let mut h = harness(Mode::Tree);
+        assert_eq!(h.app.settings.theme, ThemeId::Birch);
+
+        let mut req = request(Verb::Set);
+        req.setting = Some(SettingKey::Theme);
+        req.value = Some("plain".into());
+        assert!(h.app.ctl_response(req).0.ok);
+        assert_eq!(h.app.settings.theme, ThemeId::Plain);
+
+        // An unknown theme id errors and leaves the current theme unchanged.
+        let mut req = request(Verb::Set);
+        req.setting = Some(SettingKey::Theme);
+        req.value = Some("neon".into());
+        assert!(!h.app.ctl_response(req).0.ok, "unknown theme rejected");
+        assert_eq!(h.app.settings.theme, ThemeId::Plain);
     }
 
     #[test]

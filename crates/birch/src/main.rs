@@ -24,7 +24,7 @@ use clap::Parser;
 
 use crate::app::Mode;
 
-/// Lean and beautiful interactive file tree for the terminal.
+/// Modern interactive file tree for the terminal.
 ///
 /// Run `birch ctl --help` to control a running instance over its socket.
 ///
@@ -64,6 +64,10 @@ struct Cli {
     #[arg(long)]
     no_compact: bool,
 
+    /// Visual theme (colors, glyphs, guides).
+    #[arg(long, value_enum, default_value = "birch")]
+    theme: ThemeArg,
+
     /// Bind the control socket exactly here (host rendezvous) instead of
     /// the default per-instance addressing.
     #[arg(long, value_name = "path")]
@@ -88,6 +92,31 @@ struct Cli {
     /// host-adapter open commands; terminal editors must not use this.
     #[arg(long, requires = "open_cmd")]
     open_detached: bool,
+}
+
+/// Launch-flag mirror of `birch_core::ThemeId` (core stays clap-free).
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum ThemeArg {
+    Birch,
+    Vscode,
+    Jetbrains,
+    Xcode,
+    Retro,
+    Plain,
+}
+
+impl From<ThemeArg> for birch_core::ThemeId {
+    fn from(value: ThemeArg) -> Self {
+        use birch_core::ThemeId;
+        match value {
+            ThemeArg::Birch => ThemeId::Birch,
+            ThemeArg::Vscode => ThemeId::Vscode,
+            ThemeArg::Jetbrains => ThemeId::Jetbrains,
+            ThemeArg::Xcode => ThemeId::Xcode,
+            ThemeArg::Retro => ThemeId::Retro,
+            ThemeArg::Plain => ThemeId::Plain,
+        }
+    }
 }
 
 pub enum AppEvent {
@@ -149,6 +178,7 @@ fn main() -> ExitCode {
         git: !cli.no_git,
         show_ignored: !cli.hide_ignored,
         compact: !cli.no_compact,
+        theme: cli.theme.into(),
     };
 
     let open_cmd = match cli.open_cmd.as_deref() {

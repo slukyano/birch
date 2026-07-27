@@ -17,6 +17,6 @@ pub mod watcher;
 
 pub use git::{FileStatus, GitState};
 pub use open_cmd::{OpenCmd, OpenMode};
-pub use settings::Settings;
+pub use settings::{Settings, ThemeId};
 pub use source::{SourceCmd, SourceEvent};
 pub use tree::{Entry, Node, NodeId, NodeKind, Tree, TreeDelta};
