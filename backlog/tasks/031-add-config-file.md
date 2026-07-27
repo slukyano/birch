@@ -19,13 +19,17 @@ should land before any packaged release.
 Pulled into Sprint 015 to persist the chosen **theme** (ADR 0021); backed by its own ADR 0022.
 
 **Location & format.** `$XDG_CONFIG_HOME/birch/birch.toml` (else `~/.config/birch/birch.toml`),
-TOML. `birch --print-config-path` prints the resolved path.
+TOML. `--config <path>` overrides the location with an explicit file — primarily for tests
+(point at a fixture) and alternate setups. (No `--print-config-path`: the default path is fixed and
+documented; a discovery flag isn't worth the surface.)
 
 **Module.** A `config` module in **`birch-core`** (pure data — no ratatui): a `Config` struct with
 `#[serde(default)]` `Option` fields mirroring the `Settings` toggles (kebab keys: `icons`, `git`,
 `hidden`, `ignored`, `noise`, `compact`, `files-first`, `mouse`), plus `theme` (`ThemeId`) and
 `open-cmd`. `Config::load()` reads the file; **tolerant** — unknown keys and bad individual values
-are warned to stderr and skipped, a malformed file degrades to defaults with a warning, never fatal.
+are skipped and a malformed file degrades to defaults, never fatal. Any warning goes to **stderr at
+startup, before the TUI takes the screen** — never surfaced inside the TUI (the launching shell /
+pane host sees it; the UI stays clean).
 Adds `toml` + `serde` (derive) to `birch-core`.
 
 **Precedence** (`Settings::default()` → config → CLI flags → `ctl set`): `main.rs` stops building
@@ -35,7 +39,8 @@ re-enable from CLI" limitation). Theme resolves `cli.theme.or(config.theme).unwr
 
 **Public surface.**
 - **On disk:** `$XDG_CONFIG_HOME/birch/birch.toml`, else `~/.config/birch/birch.toml`.
-- **CLI:** `--print-config-path` (prints the resolved path and exits).
+- **CLI:** `--config <path>` (use this file instead of the discovered one; for tests and alternate
+  setups).
 - **Dependencies:** `toml` + `serde` (derive) added to `birch-core`.
 - **TOML keys** (all optional; a missing key means "use the built-in default"):
 

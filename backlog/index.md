@@ -28,6 +28,8 @@ okf_version: "0.1"
 
 * [Add visual styles](tasks/025-add-visual-styles.md) - default / vscode / plain presets (choosable styles only).
 * [Refine the tree's visual design — earn "beautiful"](tasks/054-refine-tree-visual-design.md) - Tree/indent guides, curated palette, selection, spacing — general render-layer polish.
+* [Encapsulate visual styles entirely in birch-tui](tasks/055-encapsulate-themes-in-tui.md) - Tech debt: remove ThemeId from core; DI seam so the render layer owns theme identities.
+* [Support user-authored themes](tasks/056-add-user-themes.md) - Future: load custom themes from disk (~/.config/birch/themes/*.toml) beyond the built-in catalog.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
 * [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob/regex corpus restriction for picker mode.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.

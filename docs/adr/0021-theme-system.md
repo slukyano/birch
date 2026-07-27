@@ -53,8 +53,12 @@ Selection flow: `ThemeId` resolves from **config `theme` → `--theme` flag → 
 
 # Consequences
 
-- A clean split: core owns *which* theme (data, testable, ratatui-free); tui owns *what it looks
-  like*. The compiler enforces it.
+- Core stays ratatui-free (compiler-enforced) and owns *which* theme; tui owns *what it looks like*.
+  This is a **pragmatic compromise, not a clean split**: putting `ThemeId` in core leaks a
+  render-layer concern — core gains awareness of the theme catalog's *identities*. Accepted so the
+  theme is selectable through the existing `Settings` / protocol / config plumbing without new
+  machinery. A future cleanup (task `055`) moves all visual-style knowledge into tui behind a
+  dependency-injection seam, leaving core carrying only an opaque theme token.
 - `render.rs`/`icons.rs` signatures gain `&Theme`; the app threads the active theme (derived from
   `Settings.theme`) into `draw`. Live `ctl set theme` re-renders with no restart.
 - The `icons` **on/off** setting stays the master switch (Nerd-Font fallback / accessibility);
@@ -69,5 +73,6 @@ Selection flow: `ThemeId` resolves from **config `theme` → `--theme` flag → 
   default; curated bundles are the point of "beautiful."
 - **External theme files** (load `.toml`/`.json` themes from disk) — deferred; built-in themes
   cover the stated need without a theme-format commitment.
-- **Theme id in tui only** (skip the core enum) — rejected: it must be a `Settings`/protocol value
-  to be config- and `ctl`-selectable, and those are core concepts.
+- **Theme id in tui only** (core carries an opaque token behind a DI seam) — the *preferred end
+  state*, but it needs an extensible-settings mechanism that does not exist yet. Deferred to task
+  `055`; this ADR takes the enum-in-core shortcut to ship the catalog now.

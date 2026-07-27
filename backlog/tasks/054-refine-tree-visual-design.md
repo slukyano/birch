@@ -61,15 +61,12 @@ hardcoded consts become the `Birch` palette, re-tuned below.
   If the left pad shifts the row origin, update `hit_test` in lockstep (render and hit-test share
   the geometry).
 
-**Public surface.**
-- `birch_core::ThemeId` — new public enum (`Birch`, `Vscode`, `Jetbrains`, `Xcode`, `Retro`,
-  `Plain`).
-- `birch_core::Settings.theme: ThemeId` — new field (default `Birch`).
-- `birch_core::protocol::SettingKey::Theme` — new variant (additive; unknown to older clients,
-  which is tolerated).
-- `birch_tui::{Theme, GuideStyle, BadgeStyle, SelectionStyle, Palette, IconSet}` — new render types.
-- **Visible behavior change:** the default tree appearance changes for everyone (the new `birch`
-  theme). No new CLI flag here — theme *selection* (`--theme`, `ctl set theme`) lands in `025`.
+**Public surface** (user- and client-facing only; the internal types — `ThemeId`, `Theme` &
+friends — are in the design above and ADR 0021):
+- **Protocol:** a new socket-settable `theme` key (client-facing, additive; unknown to older
+  clients, tolerated).
+- **Behavior:** the default tree appearance changes for everyone (the new `birch` look).
+- Theme *selection* (`--theme`, `birch ctl set theme`, config `theme`) lands in `025` / `031`.
 
 **Tests:** theme resolution by id; span-level assertions that the `Birch` theme paints guides and
 the accent-bar selection; `hit_test` still resolves rows/chevrons with the new left pad.
