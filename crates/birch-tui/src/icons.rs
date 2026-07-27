@@ -5,7 +5,7 @@
 use birch_core::NodeKind;
 use ratatui::style::Color;
 
-use crate::theme::{IconSet, Theme};
+use crate::theme::{FolderStyle, IconSet, Theme};
 
 // One folder glyph regardless of expansion: the chevron already carries the
 // open/closed state, and a flipping icon is churn in an ambient pane
@@ -15,14 +15,20 @@ const FILE: &str = "\u{f016}"; //
 const DIR_COLOR: Color = Color::Rgb(0x7a, 0xa2, 0xf7);
 const FILE_COLOR: Color = Color::Rgb(0x9a, 0xa5, 0xb1);
 
-/// Resolves a row's icon glyph+color from the active theme's `IconSet`.
-/// `None` means "draw no icon": either the theme has no icons, or it hides the
-/// folder glyph (chevron-only, VS Code-style).
+/// Resolves a row's icon glyph+color from the active theme's `IconSet` and
+/// `FolderStyle`. `None` means "draw no icon": the theme has no icon set, the
+/// `Plain` style suppresses all icons, or a directory under a non-`Icon` style
+/// (its chevron stands in for the folder glyph).
 pub fn icon_for(theme: &Theme, name: &str, kind: NodeKind) -> Option<(&'static str, Color)> {
+    if theme.folder_style == FolderStyle::Plain {
+        return None;
+    }
     match theme.icons {
         IconSet::None => None,
         IconSet::NerdFont => {
-            if kind.is_dir() && !theme.folder_icon {
+            // Only the `Icon` layout draws a folder glyph; `Compact` dirs show
+            // only their chevron.
+            if kind.is_dir() && theme.folder_style != FolderStyle::Icon {
                 return None;
             }
             Some(nerd_font_icon(name, kind))
@@ -119,5 +125,14 @@ mod tests {
         let plain = Theme::for_id(ThemeId::Plain);
         assert_eq!(icon_for(&plain, "main.rs", NodeKind::File), None);
         assert_eq!(icon_for(&plain, "src", NodeKind::Dir), None);
+
+        // vscode is FolderStyle::Compact: files keep their icon, dirs get none
+        // (the chevron stands in for the folder glyph).
+        let vscode = Theme::for_id(ThemeId::Vscode);
+        assert_eq!(
+            icon_for(&vscode, "main.rs", NodeKind::File),
+            Some(("\u{e7a8}", Color::Rgb(0xde, 0x78, 0x3c)))
+        );
+        assert_eq!(icon_for(&vscode, "src", NodeKind::Dir), None);
     }
 }

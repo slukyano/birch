@@ -40,6 +40,22 @@ pub enum BadgeStyle {
     Symbol,
 }
 
+/// How the glyph columns between the indent and the label are laid out. All
+/// three keep the chevron as the first glyph column (at `depth * INDENT_WIDTH`),
+/// so `hit_test` geometry is never affected.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FolderStyle {
+    /// The editor default: two glyph columns. Dirs show `chevron folder-icon`,
+    /// files show `·· file-icon` (the blank keeps icons aligned under dirs).
+    Icon,
+    /// One glyph column: the chevron sits where the icon would be. Dirs show
+    /// only the chevron (no folder glyph), files show only their icon. Names
+    /// align one column tighter than `Icon`.
+    Compact,
+    /// One glyph column, no icons at all: dirs show the chevron, files a blank.
+    Plain,
+}
+
 /// Which glyph map supplies per-file icons.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IconSet {
@@ -107,9 +123,13 @@ pub struct Theme {
     pub icons: IconSet,
     /// Directory names are rendered bold.
     pub bold_dirs: bool,
-    /// Show a folder glyph for directories; when false the chevron stands in
-    /// its place (VS Code-style), even with icons on.
-    pub folder_icon: bool,
+    /// How the chevron/icon glyph columns between the indent and the label are
+    /// laid out (`Icon`/`Compact`/`Plain`).
+    pub folder_style: FolderStyle,
+    /// The collapsed-directory chevron glyph (e.g. `▸`, or a filled `▶`).
+    pub chevron_collapsed: &'static str,
+    /// The expanded-directory chevron glyph (e.g. `▾`, or a filled `▼`).
+    pub chevron_expanded: &'static str,
 }
 
 impl Theme {
@@ -161,21 +181,23 @@ impl Theme {
             badges: BadgeStyle::Letter,
             icons: IconSet::NerdFont,
             bold_dirs: true,
-            folder_icon: true,
+            folder_style: FolderStyle::Icon,
+            chevron_collapsed: "\u{25b8}", // ▸
+            chevron_expanded: "\u{25be}",  // ▾
         }
     }
 
-    /// VS Code-like: dim indent guides, no folder glyph (the chevron stands in
-    /// for it), a soft blue selection with a VS Code-blue accent bar, and the
-    /// familiar VS Code blues/greys.
+    /// VS Code-like: dim indent guides, a compact single glyph column (the
+    /// chevron stands in for the folder glyph), a full-row VS Code active-
+    /// selection blue, and the familiar VS Code blues/greys.
     fn vscode() -> Theme {
         Theme {
             id: ThemeId::Vscode,
             palette: Palette {
                 name_fg: Some(Color::Rgb(0xd4, 0xd4, 0xd4)),
                 dir_fg: Some(Color::Rgb(0xcf, 0xcf, 0xcf)),
-                // VS Code list active-selection blue, softened.
-                selection_bg: Color::Rgb(0x09, 0x3a, 0x5e),
+                // VS Code list active-selection blue (full-row).
+                selection_bg: Color::Rgb(0x09, 0x47, 0x71),
                 selection_accent: Color::Rgb(0x00, 0x7a, 0xcc),
                 guide: Color::Rgb(0x40, 0x40, 0x40),
                 chevron: Color::Rgb(0x80, 0x80, 0x80),
@@ -193,23 +215,26 @@ impl Theme {
                 },
             },
             guides: GuideStyle::Indent,
-            selection: SelectionStyle::SoftBarAccent,
+            selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
             icons: IconSet::NerdFont,
             bold_dirs: true,
-            folder_icon: false,
+            folder_style: FolderStyle::Compact,
+            chevron_collapsed: "\u{25b8}", // ▸
+            chevron_expanded: "\u{25be}",  // ▾
         }
     }
 
-    /// JetBrains/Darcula-like: no guides, folder glyphs shown, a soft warm-grey
-    /// selection with a warm amber accent bar over a near-neutral warm palette.
+    /// JetBrains/Darcula-like: dim indent guides, folder glyphs shown, a full-
+    /// row IDEA-blue selection over a near-neutral warm palette.
     fn jetbrains() -> Theme {
         Theme {
             id: ThemeId::Jetbrains,
             palette: Palette {
                 name_fg: Some(Color::Rgb(0xb8, 0xb4, 0xac)),
                 dir_fg: Some(Color::Rgb(0xd0, 0xcb, 0xc0)),
-                selection_bg: Color::Rgb(0x3a, 0x3a, 0x38),
+                // IDEA full-row selection blue.
+                selection_bg: Color::Rgb(0x21, 0x42, 0x83),
                 selection_accent: Color::Rgb(0xd9, 0x97, 0x5a),
                 guide: Color::Rgb(0x4b, 0x4b, 0x48),
                 chevron: Color::Rgb(0x9a, 0x93, 0x86),
@@ -226,17 +251,19 @@ impl Theme {
                     untracked: Color::Rgb(0x6a, 0x87, 0x59),
                 },
             },
-            guides: GuideStyle::None,
-            selection: SelectionStyle::SoftBarAccent,
+            guides: GuideStyle::Indent,
+            selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
             icons: IconSet::NerdFont,
             bold_dirs: true,
-            folder_icon: true,
+            folder_style: FolderStyle::Icon,
+            chevron_collapsed: "\u{25b8}", // ▸
+            chevron_expanded: "\u{25be}",  // ▾
         }
     }
 
-    /// Xcode-like: no guides, folder glyphs shown, a full-row macOS-blue
-    /// selection over a lighter, cooler palette.
+    /// Xcode-like: no guides, folder glyphs shown, filled disclosure triangles,
+    /// a full-row macOS-blue selection over a lighter, cooler palette.
     fn xcode() -> Theme {
         Theme {
             id: ThemeId::Xcode,
@@ -266,12 +293,15 @@ impl Theme {
             badges: BadgeStyle::Letter,
             icons: IconSet::NerdFont,
             bold_dirs: true,
-            folder_icon: true,
+            folder_style: FolderStyle::Icon,
+            chevron_collapsed: "\u{25b6}", // ▶ (filled)
+            chevron_expanded: "\u{25bc}",  // ▼ (filled)
         }
     }
 
-    /// A retro CRT look: classic `├─`/`└─` connectors, folder glyphs, and a
-    /// high-contrast saturated amber/green palette with a full-row selection.
+    /// A retro CRT look: classic `├─`/`└─` connectors, folder glyphs, filled
+    /// disclosure triangles, and a high-contrast saturated amber/green palette
+    /// with a full-row selection.
     fn retro() -> Theme {
         Theme {
             id: ThemeId::Retro,
@@ -300,7 +330,9 @@ impl Theme {
             badges: BadgeStyle::Letter,
             icons: IconSet::NerdFont,
             bold_dirs: true,
-            folder_icon: true,
+            folder_style: FolderStyle::Icon,
+            chevron_collapsed: "\u{25b6}", // ▶ (filled)
+            chevron_expanded: "\u{25bc}",  // ▼ (filled)
         }
     }
 
@@ -334,7 +366,9 @@ impl Theme {
             badges: BadgeStyle::Letter,
             icons: IconSet::None,
             bold_dirs: true,
-            folder_icon: false,
+            folder_style: FolderStyle::Plain,
+            chevron_collapsed: "\u{25b8}", // ▸
+            chevron_expanded: "\u{25be}",  // ▾
         }
     }
 }
@@ -372,34 +406,47 @@ mod tests {
 
     #[test]
     fn catalog_themes_pick_distinct_points() {
-        // vscode: chevron stands in for the folder glyph; dim indent guides.
+        // vscode: compact single column (chevron stands in for the folder
+        // glyph); dim indent guides; full-row selection.
         let vscode = Theme::for_id(ThemeId::Vscode);
-        assert!(!vscode.folder_icon);
+        assert_eq!(vscode.folder_style, FolderStyle::Compact);
         assert_eq!(vscode.guides, GuideStyle::Indent);
-        assert_eq!(vscode.selection, SelectionStyle::SoftBarAccent);
+        assert_eq!(vscode.selection, SelectionStyle::FullRow);
 
-        // jetbrains: no guides, folder glyphs, soft selection.
+        // jetbrains: indent guides, folder glyphs, full-row selection.
         let jb = Theme::for_id(ThemeId::Jetbrains);
-        assert_eq!(jb.guides, GuideStyle::None);
-        assert!(jb.folder_icon);
-        assert_eq!(jb.selection, SelectionStyle::SoftBarAccent);
+        assert_eq!(jb.guides, GuideStyle::Indent);
+        assert_eq!(jb.folder_style, FolderStyle::Icon);
+        assert_eq!(jb.selection, SelectionStyle::FullRow);
 
-        // xcode: no guides, full-row selection.
+        // xcode: no guides, full-row selection, filled disclosure triangles.
         let xcode = Theme::for_id(ThemeId::Xcode);
         assert_eq!(xcode.guides, GuideStyle::None);
-        assert!(xcode.folder_icon);
+        assert_eq!(xcode.folder_style, FolderStyle::Icon);
         assert_eq!(xcode.selection, SelectionStyle::FullRow);
+        assert_eq!(xcode.chevron_collapsed, "\u{25b6}"); // ▶ filled
+        assert_eq!(xcode.chevron_expanded, "\u{25bc}"); // ▼ filled
 
-        // retro: classic connectors, full-row selection.
+        // retro: classic connectors, full-row selection, filled triangles.
         let retro = Theme::for_id(ThemeId::Retro);
         assert_eq!(retro.guides, GuideStyle::Connectors);
         assert_eq!(retro.selection, SelectionStyle::FullRow);
         assert_eq!(retro.icons, IconSet::NerdFont);
+        assert_eq!(retro.chevron_collapsed, "\u{25b6}");
+
+        // plain: no icons at all (Plain folder style).
+        let plain = Theme::for_id(ThemeId::Plain);
+        assert_eq!(plain.folder_style, FolderStyle::Plain);
 
         // The catalog is not a single theme wearing different ids: at least the
-        // guide/selection/folder-icon axes vary across the four.
-        assert_ne!(vscode.folder_icon, jb.folder_icon);
-        assert_ne!(jb.selection, xcode.selection);
+        // guide/folder-style/chevron axes vary across the set.
+        assert_ne!(vscode.folder_style, jb.folder_style);
+        assert_ne!(jb.folder_style, plain.folder_style);
         assert_ne!(xcode.guides, retro.guides);
+        assert_ne!(birch_default_chevron(), xcode.chevron_collapsed);
+    }
+
+    fn birch_default_chevron() -> &'static str {
+        Theme::for_id(ThemeId::Birch).chevron_collapsed
     }
 }

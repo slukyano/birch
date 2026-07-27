@@ -10,7 +10,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::flat_view::{FlatView, Row};
 use crate::icons;
-use crate::theme::{BadgeStyle, GuideStyle, SelectionStyle, Theme};
+use crate::theme::{BadgeStyle, FolderStyle, GuideStyle, SelectionStyle, Theme};
 
 pub const INDENT_WIDTH: u16 = 2;
 /// Width of the right-hand git badge column.
@@ -77,32 +77,7 @@ pub fn draw(
 fn row_line(theme: &Theme, settings: &Settings, row: &Row, selected: bool) -> Line<'static> {
     let name_style = name_style(theme, row);
     let mut spans = indent_spans(theme, row, selected);
-    if row.kind.is_dir() && !row.missing {
-        let chevron = if row.expanded {
-            "\u{25be} "
-        } else {
-            "\u{25b8} "
-        };
-        spans.push(Span::styled(
-            chevron,
-            Style::default().fg(theme.palette.chevron),
-        ));
-    } else {
-        spans.push(Span::raw("  "));
-    }
-    if settings.icons
-        && let Some((glyph, color)) = icons::icon_for(theme, &row.name, row.kind)
-    {
-        let icon_color = if row.ignored {
-            theme.palette.ignored
-        } else {
-            color
-        };
-        spans.push(Span::styled(
-            format!("{glyph} "),
-            Style::default().fg(icon_color),
-        ));
-    }
+    spans.extend(glyph_column_spans(theme, settings, row));
     spans.extend(label_spans(theme, row, name_style));
     if let Some(annotation) = &row.annotation {
         spans.push(Span::styled(
@@ -117,6 +92,75 @@ fn row_line(theme: &Theme, settings: &Settings, row: &Row, selected: bool) -> Li
         line = line.style(Style::default().bg(theme.palette.selection_bg));
     }
     line
+}
+
+/// The glyph columns between the indent and the label, per `FolderStyle`. The
+/// chevron (for a non-missing dir) is ALWAYS the first glyph column, sitting at
+/// `depth * INDENT_WIDTH`, so `hit_test`'s chevron zone is identical across all
+/// three styles. Let `C` = the theme's chevron (2 cols), `I` = an icon (2 cols),
+/// `··` = two blanks:
+///
+/// - `Icon`    — dir: `C I`, file: `·· I` (two glyph columns; blank keeps icons
+///   aligned). With icons off it collapses to the `Plain` layout.
+/// - `Compact` — dir: `C`, file: `I` (one glyph column). With icons off files
+///   render `··`.
+/// - `Plain`   — dir: `C`, file: `··` (one glyph column, never any icon).
+///
+/// A missing dir (no chevron) renders `··` in that first column in every style.
+fn glyph_column_spans(theme: &Theme, settings: &Settings, row: &Row) -> Vec<Span<'static>> {
+    let is_dir = row.kind.is_dir();
+    let has_chevron = is_dir && !row.missing;
+    let chevron = || {
+        let glyph = if row.expanded {
+            theme.chevron_expanded
+        } else {
+            theme.chevron_collapsed
+        };
+        Span::styled(
+            format!("{glyph} "),
+            Style::default().fg(theme.palette.chevron),
+        )
+    };
+    let icon = || {
+        if !settings.icons {
+            return None;
+        }
+        icons::icon_for(theme, &row.name, row.kind).map(|(glyph, color)| {
+            let icon_color = if row.ignored {
+                theme.palette.ignored
+            } else {
+                color
+            };
+            Span::styled(format!("{glyph} "), Style::default().fg(icon_color))
+        })
+    };
+    let blank = || Span::raw("  ");
+    let first = || if has_chevron { chevron() } else { blank() };
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(2);
+    match theme.folder_style {
+        // Two glyph columns: the chevron column, then the icon column. Files
+        // blank the chevron column so icons align under directories. When icons
+        // are suppressed the icon column simply vanishes (Plain-like layout).
+        FolderStyle::Icon => {
+            spans.push(first());
+            if let Some(glyph) = icon() {
+                spans.push(glyph);
+            }
+        }
+        // One glyph column: dirs show their chevron (no folder glyph), files
+        // show their icon (or a blank when icons are off).
+        FolderStyle::Compact => {
+            if is_dir {
+                spans.push(first());
+            } else {
+                spans.push(icon().unwrap_or_else(blank));
+            }
+        }
+        // One glyph column, no icons ever.
+        FolderStyle::Plain => spans.push(first()),
+    }
+    spans
 }
 
 /// The right-hand git badge for one row (directory rollups always use the `●`
@@ -467,23 +511,135 @@ mod tests {
         assert_eq!(line.style.bg, Some(theme.palette.selection_bg));
     }
 
-    #[test]
-    fn vscode_dirs_drop_the_folder_glyph_files_keep_icons() {
-        let theme = Theme::for_id(ThemeId::Vscode);
-        // A directory: the chevron stands in for the folder glyph, and there is
-        // no icon gap (no folder glyph span at all).
-        let dir = row("src", NodeKind::Dir, 1);
-        let line = row_line(&theme, &Settings::default(), &dir, false);
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains('\u{25b8}'), "chevron present"); // ▸
-        assert!(!text.contains('\u{e5ff}'), "no folder glyph"); // DIR
-        assert!(text.ends_with("src"));
+    /// The glyph texts a row renders between the indent and the label, joined.
+    fn glyph_text(theme: &Theme, row: &Row) -> String {
+        glyph_column_spans(theme, &Settings::default(), row)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect()
+    }
 
-        // A file still gets its type icon.
+    #[test]
+    fn icon_style_shows_chevron_then_folder_glyph_files_pad_then_icon() {
+        // birch is FolderStyle::Icon: dir = chevron + folder glyph; file = two
+        // blanks (chevron column) + file icon, so icons align under dirs.
+        let theme = theme();
+        let dir = row("src", NodeKind::Dir, 1);
+        assert_eq!(glyph_text(&theme, &dir), "\u{25b8} \u{e5ff} "); // ▸ + DIR glyph
+
         let file = row("main.rs", NodeKind::File, 1);
-        let fline = row_line(&theme, &Settings::default(), &file, false);
-        let ftext: String = fline.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(ftext.contains('\u{e7a8}'), "rust icon present");
+        assert_eq!(glyph_text(&theme, &file), "  \u{e7a8} "); // ·· + rust icon
+    }
+
+    #[test]
+    fn compact_style_uses_one_glyph_column() {
+        // vscode is FolderStyle::Compact: dir = chevron only (no folder glyph);
+        // file = its icon only. Names sit one column tighter than Icon.
+        let theme = Theme::for_id(ThemeId::Vscode);
+        let dir = row("src", NodeKind::Dir, 1);
+        let dtext = glyph_text(&theme, &dir);
+        assert_eq!(dtext, "\u{25b8} "); // ▸ and nothing else
+        assert!(!dtext.contains('\u{e5ff}'), "no folder glyph in compact");
+
+        let file = row("main.rs", NodeKind::File, 1);
+        assert_eq!(glyph_text(&theme, &file), "\u{e7a8} "); // rust icon only
+    }
+
+    #[test]
+    fn plain_style_draws_no_icons() {
+        // plain is FolderStyle::Plain: dir = chevron; file = two blanks; never
+        // an icon.
+        let theme = Theme::for_id(ThemeId::Plain);
+        let dir = row("src", NodeKind::Dir, 1);
+        assert_eq!(glyph_text(&theme, &dir), "\u{25b8} ");
+
+        let file = row("main.rs", NodeKind::File, 1);
+        assert_eq!(glyph_text(&theme, &file), "  ");
+    }
+
+    #[test]
+    fn icon_style_without_icons_setting_collapses_to_plain_layout() {
+        // Icons off: the icon column vanishes (dir = chevron, file = ··).
+        let theme = theme();
+        let settings = Settings {
+            icons: false,
+            ..Settings::default()
+        };
+        let dir = row("src", NodeKind::Dir, 1);
+        let dtext: String = glyph_column_spans(&theme, &settings, &dir)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(dtext, "\u{25b8} ");
+        let file = row("main.rs", NodeKind::File, 1);
+        let ftext: String = glyph_column_spans(&theme, &settings, &file)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(ftext, "  ");
+    }
+
+    #[test]
+    fn xcode_uses_filled_disclosure_triangles() {
+        let theme = Theme::for_id(ThemeId::Xcode);
+        let mut collapsed = row("src", NodeKind::Dir, 0);
+        collapsed.expanded = false;
+        assert_eq!(glyph_text(&theme, &collapsed), "\u{25b6} \u{e5ff} "); // ▶
+        let mut expanded = row("src", NodeKind::Dir, 0);
+        expanded.expanded = true;
+        assert!(glyph_text(&theme, &expanded).starts_with('\u{25bc}')); // ▼
+    }
+
+    #[test]
+    fn missing_dir_pads_the_first_glyph_column_in_every_style() {
+        for id in [ThemeId::Birch, ThemeId::Vscode, ThemeId::Plain] {
+            let theme = Theme::for_id(id);
+            let mut r = row("gone", NodeKind::Dir, 1);
+            r.missing = true;
+            // No chevron: the first glyph column is two blanks regardless.
+            assert!(
+                glyph_text(&theme, &r).starts_with("  "),
+                "theme {id:?} missing dir must pad the chevron column"
+            );
+        }
+    }
+
+    #[test]
+    fn dir_chevron_resolves_at_depth_offset_across_every_folder_style() {
+        // hit_test is theme-independent geometry, but confirm each catalog theme
+        // keeps the chevron as the first glyph column at depth * INDENT_WIDTH so
+        // the chevron zone lines up with what is painted.
+        let view = FlatView::default();
+        let area = Rect::new(0, 0, 40, 10);
+        for id in [
+            ThemeId::Birch,
+            ThemeId::Vscode,
+            ThemeId::Jetbrains,
+            ThemeId::Xcode,
+            ThemeId::Retro,
+            ThemeId::Plain,
+        ] {
+            let theme = Theme::for_id(id);
+            let dir = row("src", NodeKind::Dir, 2);
+            // The rendered glyph columns begin with the chevron glyph.
+            assert!(
+                glyph_text(&theme, &dir).starts_with(theme.chevron_collapsed),
+                "theme {id:?} must paint the chevron first"
+            );
+            // And the chevron zone sits at depth * INDENT_WIDTH.
+            let start = 2 * INDENT_WIDTH; // depth 2
+            let rows = vec![dir];
+            assert_eq!(
+                hit_test(&rows, &view, area, start, 0),
+                Some((0, true)),
+                "theme {id:?} chevron hit at depth offset"
+            );
+            assert_eq!(
+                hit_test(&rows, &view, area, start.saturating_sub(1), 0),
+                Some((0, false)),
+                "theme {id:?} just left of the chevron is not the chevron"
+            );
+        }
     }
 
     #[test]
