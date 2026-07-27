@@ -143,7 +143,7 @@ impl Theme {
                 selection_bg: Color::Rgb(0x28, 0x30, 0x40),
                 // Birch green, echoing the logo.
                 selection_accent: Color::Rgb(0x6f, 0x91, 0x52),
-                guide: Color::Rgb(0x3a, 0x42, 0x50),
+                guide: Color::Rgb(0x4c, 0x56, 0x6a),
                 chevron: Color::Rgb(0x6d, 0x80, 0x86),
                 separator: Color::Rgb(0x6d, 0x80, 0x86),
                 ignored: Color::Rgb(0x7a, 0x82, 0x8e),
