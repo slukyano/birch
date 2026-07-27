@@ -31,3 +31,35 @@ Candidate work (the design phase picks and orders these):
 
 Verify by eye across real trees: deep nesting, git changes, compact chains, ignored/dimmed dirs,
 and search highlighting.
+
+## Design
+
+Reframed as the **theme engine + the flagship `birch` theme** (ADR 0021). This task builds the
+machinery and the one beautiful default; `025` adds the rest of the catalog.
+
+**Types.** In `birch-tui`: a `Theme` struct plus `GuideStyle { None, Indent, Connectors }`,
+`BadgeStyle`, `SelectionStyle { FullRow, SoftBarAccent }`, an `IconSet`, and a `Palette` (all the
+colors currently const in `render.rs`). In `birch-core`: `ThemeId { Birch, Vscode, Jetbrains,
+Xcode, Retro, Plain }` — a `Settings.theme` field (default `Birch`) and a `SettingKey::Theme`
+variant. `Theme::for_id(ThemeId) -> Theme` lives in tui (only `Birch`/`Plain` fully realized here;
+the others land in `025`).
+
+**Wire-through.** `render.rs::draw` and `icons::icon_for` take `&Theme`; the app derives the active
+theme from `Settings.theme` and threads it in. `ctl set theme` re-renders live (no restart). The
+hardcoded consts become the `Birch` palette, re-tuned below.
+
+**The `birch` flagship theme:**
+- **Guides** `Indent` — a dim `│` in each ancestor indent column (the 2-col slots already there, so
+  `hit_test` geometry is unchanged), brightened along the selected row's ancestry.
+- **Selection** `SoftBarAccent` — a *soft* low-contrast background (lighter than today's
+  `#2f3b54`) plus a left accent bar (`▏`) in the birch accent (green `#6f9152`, echoing the logo).
+- **Palette** — curated and muted: near-neutral name fg, **bold directories**, one green accent,
+  calmer git colors (mute the current VS Code hues a touch), ignored stays dim.
+- **Badges** — unchanged shape (letter for files, `●` rollup for dirs) in the muted git colors.
+- **Icons** — the current Nerd Font map, colors nudged toward the muted palette; folder glyph shown.
+- **Breathing room** — one blank top row and a one-space left pad; git gutter stays right-aligned.
+  If the left pad shifts the row origin, update `hit_test` in lockstep (render and hit-test share
+  the geometry).
+
+**Tests:** theme resolution by id; span-level assertions that the `Birch` theme paints guides and
+the accent-bar selection; `hit_test` still resolves rows/chevrons with the new left pad.

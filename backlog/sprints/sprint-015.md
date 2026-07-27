@@ -6,66 +6,78 @@ branch: sprint/015
 tasks:
 - 054-refine-tree-visual-design
 - 025-add-visual-styles
+- 031-add-config-file
 - 052-fix-reveal-symlink-canonicalization
 ---
 
 # Scope rationale
 
 The publication arc is closed and birch looks the part on the outside (logo, tagline, README). This
-sprint makes the **tree itself** beautiful — the render layer, seen every second of use. It pairs
-the baseline visual design (`054`) with the selectable presets that build on it (`025`), and folds
-in one high-priority DX bug (`052`) surfaced by the Sprint 014 review.
+sprint makes the **tree itself** beautiful — and does it as a **theme system** rather than a
+one-off restyle. Every render decision (guides, palette, badges, icons, folder-icon, selection)
+becomes an axis; a *theme* is a coherent point in that space. A **config file** persists the chosen
+theme (and the existing toggles), because a theme you can't keep isn't finished. One high-priority
+DX bug (`052`) rides along.
 
-All visual work is **render-layer** (paint-time): no new features, verbs, modes, or hotkeys
-(printable characters stay reserved for search), and the real-tree/render split holds.
+The theme *definitions* are render-layer (ratatui colors/glyphs) and live in `birch-tui`; the theme
+*id* is pure data in `birch-core` — the load-bearing crate boundary (core builds without ratatui)
+is respected. No new features, verbs, modes, or hotkeys; printable characters stay reserved for
+search; the real-tree/render split holds.
 
 # In-scope task ledger
 
-- **`054-refine-tree-visual-design`** — *medium, design-heavy.* The baseline aesthetic: tree/indent
-  guides (highest-ROI — make it read as a *tree*, not an indented list), a curated muted palette,
-  softer selection/focus (background + left accent bar), breathing room (margins, padding, aligned
-  git gutter), and type treatment (bold dirs, tasteful dim/italic). Aesthetic calls need maintainer
-  iteration.
-- **`025-add-visual-styles`** — *medium, design-heavy.* Selectable presets — `default` (Nerd Font),
-  `vscode` (no folder icons, tighter), `plain` (no icons, the no-Nerd-Font fallback) — bundling the
-  render toggles established by `054`. Absorbs `--no-icons`; exposes a `birch ctl set` key. Carries
-  a scope-fence question (a settings surface, not pure polish) and a config-file (`031`) boundary.
-- **`052-fix-reveal-symlink-canonicalization`** — *high, trivial (bug).* `birch ctl reveal
-  /tmp/...` is wrongly rejected as "outside the root" on macOS because `/tmp` is a symlink;
-  canonicalize both sides before the root-containment check. Independent of the visual work.
+- **`054-refine-tree-visual-design`** — *major, design-heavy.* The **theme engine** plus the
+  flagship **`birch`** theme (the beautiful default): a `Theme` abstraction parameterizing
+  `render.rs`/`icons.rs` over guides, palette, badges, icon set, folder-icon, and selection; a
+  pure-data `ThemeId` in `birch-core`. Backed by the theme-system ADR.
+- **`025-add-visual-styles`** — *major, design-heavy.* The **theme catalog** built on `054`'s
+  engine: `vscode`, `jetbrains`, `xcode`, `retro`, `plain`. `--theme <id>` flag and a `ctl set
+  theme` key. Trademark disclaimer for the emulation-named themes.
+- **`031-add-config-file`** — *mid, design-heavy.* `~/.config/birch/birch.toml` (XDG) sets the
+  default `theme` and the existing `Settings` toggles. Precedence **config < CLI flags < `ctl
+  set`**. Tolerant TOML parsing in `birch-core`. Backed by a **separate** config ADR.
+- **`052-fix-reveal-symlink-canonicalization`** — *minor (bug), high.* Canonicalize both sides
+  before the reveal root-containment check so `birch ctl reveal /tmp/...` isn't wrongly "outside
+  the root" on macOS. Independent of the visual work.
 
 # Ordering / dependencies
 
-- `054` lands the baseline aesthetic **first**; `025` layers presets on top of it (presets select
-  bundles of the toggles `054` defines, so it cannot sensibly precede `054`).
-- `052` is independent and can be designed/implemented at any point.
+- `054` lands the **engine + `birch` theme first**; `025` populates the catalog on top of it (the
+  catalog cannot precede the engine).
+- `031` can be designed in parallel but implements against the `ThemeId` and `Settings` that `054`
+  defines; the precedence chain (default → config → flags → `ctl set`) is its backbone.
+- `052` is independent — any point.
 
 # Considered but out of scope
 
-- **`031-add-config-file`** — presets (`025`) are a settings surface, but this sprint exposes a
-  `ctl set` key only; a persisted config format is a separate, larger task.
-- **`029-add-file-operations` / `034-add-open-with`** — context-menu/UI work, but they are *features*,
-  not render-layer polish; different theme.
-- **`053-add-state-persistence-toggle`** — a small settings flag, but unrelated to visual design.
-- **`026`/`027`/`028`/`030`/`032`/`033`/`035`/`051`** — feature or integration work, off-theme.
+- **User-authored theme files** — themes are built-in (compiled) this sprint; loading themes from
+  disk is a future task if demand appears.
+- **Per-key colour config** — the config sets a *theme* + toggles, not individual colours; curated
+  bundles beat a hundred colour keys.
+- **`029`/`034`** (context menu, open-with), **`053`** (state-persistence toggle),
+  **`026`/`027`/`028`/`030`/`032`/`033`/`035`/`051`** — feature/integration work, off-theme.
 
 # Sprint-start action
 
-Commit `backlog/sprints/sprint-015.md` (status `Designing`) to `main`; cut branch `sprint/015`. The
-design phase then designs `054`, `025`, `052` one by one on the branch.
+Scope committed to `main`; branch `sprint/015` cut. Design phase in progress (this expands the
+original three-task scope with `031` per maintainer direction).
 
 # Checklist
 
 - [ ] 054-refine-tree-visual-design
 - [ ] 025-add-visual-styles
+- [ ] 031-add-config-file
 - [ ] 052-fix-reveal-symlink-canonicalization
 
 # Open questions
 
-_(none yet — design phase populates this)_
+_(none blocking — design decisions captured in the task `## Design` sections and ADRs 0021/0022,
+pending design approval.)_
 
 # Session log
 
-- Scoped and cut: three tasks — the baseline tree visual design (`054`) and the presets that build
-  on it (`025`), plus the high-priority reveal-symlink bug (`052`) from the Sprint 014 review.
-  Branch `sprint/015` cut from `main`.
+- Scoped and cut: `054`, `025`, `052`. Branch `sprint/015` cut from `main`.
+- Design phase: reframed `054`/`025` as a **theme system** (engine + flagship `birch` theme, then a
+  catalog: `vscode`/`jetbrains`/`xcode`/`retro`/`plain`) and pulled in `031` (config file) to
+  persist the chosen theme. Two Proposed ADRs — 0021 (theme system) and 0022 (config file). Per-task
+  designs written for `054`/`025`/`031`/`052`.

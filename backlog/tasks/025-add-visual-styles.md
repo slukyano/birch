@@ -18,3 +18,35 @@ Scope: this task is only about **choosable presets** (the style setting and what
 toggles). The general visual design of the tree — indent/tree guides, palette, selection styling,
 spacing — lives in [`054-refine-tree-visual-design`](054-refine-tree-visual-design.md); presets
 build on that baseline (e.g. the classic-connector guide look could be one preset).
+
+## Design
+
+Reframed as the **theme catalog** on top of `054`'s engine (ADR 0021). Each theme is a `Theme` value
+selecting a coherent point across guides / palette / badges / icon-set / folder-icon / selection:
+
+| `ThemeId` | guides | folder icon | icon set | selection / palette |
+|-----------|--------|-------------|----------|---------------------|
+| `birch` *(default, in 054)* | Indent | shown | curated Nerd Font, muted | soft bg + green accent bar |
+| `vscode` | Indent | none (chevron in its place) | Seti/codicon-ish Nerd Font | VS Code blues, bar accent |
+| `jetbrains` | None | shown | IDEA-ish (warm, near-mono) | warm-gray soft selection |
+| `xcode` | None | shown | colored file-type icons | macOS-blue full-row selection |
+| `retro` | Connectors | ASCII/legacy glyphs | blocky Nerd Font | high-contrast ANSI |
+| `plain` | Connectors | none | none (icons off) | basic 16-color ANSI |
+
+**Selection surface.** `--theme <id>` (clap `ValueEnum`); `SettingKey::Theme` with `birch ctl set
+theme <id>` (the `set` verb's value is already a free `String` — parse it to `ThemeId`, error on an
+unknown id). Config carries the persisted default (`031`).
+
+**Icons.** `IconSet` is the glyph+color map behind `icon_for`. `birch`/`vscode`/`jetbrains` share
+the curated Nerd Font glyphs with per-theme color treatment; `retro` uses a blocky/legacy set;
+`xcode` a colored file-type set; `plain` none. Differentiation is *in the spirit of* each editor —
+approximated from the Nerd Font families that exist, not pixel-perfect. `retro`/`plain` are trivial.
+
+**Master switches stay.** `--no-icons` / `icons=false` overrides any theme's icon set (Nerd-Font
+fallback); `plain` merely defaults icons off. `--no-git` still hides badges under any theme.
+
+**Trademarks.** `vscode`/`jetbrains`/`xcode` describe the look they emulate; ship no editor logos
+and add a short **Trademarks** disclaimer to the README (nominative fair use; birch unaffiliated).
+
+**Tests:** every `ThemeId` resolves to a `Theme`; `--theme` and `ctl set theme` select it; an
+unknown id errors cleanly.
