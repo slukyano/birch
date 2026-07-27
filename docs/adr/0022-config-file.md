@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: Personal defaults live in ~/.config/birch/birch.toml; precedence is config < flags < ctl set
-status: Proposed
+status: Accepted
 sprint: sprint-015
 ---
 

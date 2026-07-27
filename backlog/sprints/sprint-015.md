@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Visual design — earn "beautiful"
-status: Designing
+status: Implementing
 branch: sprint/015
 tasks:
 - 054-refine-tree-visual-design

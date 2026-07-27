@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: The render layer is theme-parameterized; theme id in core, theme definition in tui
-status: Proposed
+status: Accepted
 sprint: sprint-015
 ---
 
