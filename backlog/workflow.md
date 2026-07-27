@@ -115,8 +115,20 @@ asks questions, records decisions. Per task, the outcome is:
 - zero or more **ADRs** in `docs/adr/` (status `Proposed`) for decisions of architectural
   weight. See [ADRs](#adrs).
 
-Commit throughout the phase. When all tasks in scope are designed, the maintainer reviews the
-batch. **Design approval** triggers, in order:
+Every `## Design` must enumerate the task's **complete public-surface delta** — every new or changed
+CLI flag, config key, socket/protocol field, environment variable, on-disk path, and (only where a
+crate is a consumed library) public API. Public surface means the **user- and client-facing
+contract**, not internal module or type structure — those belong in the design prose, not the
+surface list. A task with no public-surface change states that explicitly. Carry the same
+enumeration into the design-approval and close-out presentations.
+
+Commit throughout the phase. When all tasks in scope are designed, present the batch for approval
+via the chat protocol below. The presentation **always includes, for each task**: a **design
+summary** (what it builds and how the task transformed from its original framing), the **key
+decisions** (with the alternatives weighed), the **ADRs** it introduces — each **stated as the
+decision it makes, in plain terms, not just its title** — and its **public-surface delta**; then the
+explicit open decisions the maintainer must make. Prefer **structured markdown — tables and lists —
+over prose** throughout the presentation. **Design approval** triggers, in order:
 
 1. ADRs from this phase flip `Proposed → Accepted` (only the maintainer approves ADRs).
 2. Tasks flip `Draft → Designed`; the sprint flips `Designing → Implementing`.
@@ -232,6 +244,12 @@ agent finishes an iteration or needs a decision, it formats the ask as:
 
 This applies to scope approval, design approval, implementation approval, ADR acceptance,
 and stop-and-ask questions raised mid-implementation.
+
+Every presentation is **self-contained**: full context and the explicit question(s) spelled out
+each time, never "as before" or a bare pointer. **Final approvals** (scope, design, implementation)
+are always presented on the **complete** artifact as a whole; partial or incremental presentations
+are legitimate only to gather intermediate feedback, never as the basis for a final sign-off —
+unless the maintainer explicitly opts into a partial.
 
 # Sprint frontmatter schema
 
