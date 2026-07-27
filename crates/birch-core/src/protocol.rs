@@ -41,7 +41,6 @@ pub enum SettingKey {
     Icons,
     Compact,
     Git,
-    FilesFirst,
 }
 
 /// One request line. Unknown fields are ignored on parse (serde default);
@@ -195,8 +194,8 @@ mod tests {
             r#""get-root""#
         );
         assert_eq!(
-            serde_json::to_string(&SettingKey::FilesFirst).unwrap(),
-            r#""files-first""#
+            serde_json::to_string(&SettingKey::Icons).unwrap(),
+            r#""icons""#
         );
     }
 

@@ -144,14 +144,9 @@ fn visible_children(ctx: &Ctx, dir_id: NodeId) -> Vec<Child> {
             items.push((false, name.to_lowercase(), Child::Missing(name.clone())));
         }
     }
-    let dirs_first = !ctx.s.files_first;
+    // Directories always sort before files.
     items.sort_by(|(a_dir, a_name, _), (b_dir, b_name, _)| {
-        let group = if dirs_first {
-            b_dir.cmp(a_dir)
-        } else {
-            a_dir.cmp(b_dir)
-        };
-        group.then_with(|| a_name.cmp(b_name))
+        b_dir.cmp(a_dir).then_with(|| a_name.cmp(b_name))
     });
     items.into_iter().map(|(_, _, child)| child).collect()
 }
@@ -608,7 +603,7 @@ mod tests {
 
     /// Builds: root { src/ { main.rs, lib.rs }, .git/ { }, .env, readme.md }
     fn fixture() -> Tree {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.set_expanded(Path::new("/r"), true);
         snapshot(
             &mut tree,
@@ -799,7 +794,7 @@ mod tests {
 
     /// root { a/b/c { file.txt }, other.txt }
     fn chain_fixture() -> Tree {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.set_expanded(Path::new("/r"), true);
         snapshot(
             &mut tree,
@@ -882,7 +877,7 @@ mod tests {
 
     #[test]
     fn unloaded_tail_renders_known_prefix() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.set_expanded(Path::new("/r"), true);
         snapshot(&mut tree, "/r", vec![entry("a", NodeKind::Dir)]);
         snapshot(&mut tree, "/r/a", vec![entry("b", NodeKind::Dir)]);
@@ -896,7 +891,7 @@ mod tests {
     fn symlinked_dirs_never_join_chains() {
         // a's only child is a symlinked dir (worst case: a link back up the
         // tree) — the chain must stop at a, and the symlink stays its own row.
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.set_expanded(Path::new("/r"), true);
         snapshot(&mut tree, "/r", vec![entry("a", NodeKind::Dir)]);
         snapshot(&mut tree, "/r/a", vec![entry("loop", NodeKind::SymlinkDir)]);

@@ -70,7 +70,6 @@ enum SettingArg {
     Icons,
     Compact,
     Git,
-    FilesFirst,
 }
 
 impl From<SettingArg> for SettingKey {
@@ -82,7 +81,6 @@ impl From<SettingArg> for SettingKey {
             SettingArg::Icons => SettingKey::Icons,
             SettingArg::Compact => SettingKey::Compact,
             SettingArg::Git => SettingKey::Git,
-            SettingArg::FilesFirst => SettingKey::FilesFirst,
         }
     }
 }

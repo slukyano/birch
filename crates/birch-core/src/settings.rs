@@ -7,7 +7,6 @@ pub const NOISE: &[&str] = &[".git", ".DS_Store", "Thumbs.db"];
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub icons: bool,
-    pub files_first: bool,
     pub show_hidden: bool,
     pub show_noise: bool,
     pub mouse: bool,
@@ -21,7 +20,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             icons: true,
-            files_first: false,
             show_hidden: true,
             show_noise: false,
             mouse: true,

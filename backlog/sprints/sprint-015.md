@@ -72,7 +72,7 @@ original three-task scope with `031` per maintainer direction).
 - [ ] 025-add-visual-styles
 - [ ] 031-add-config-file
 - [ ] 052-fix-reveal-symlink-canonicalization
-- [ ] 057-remove-files-first
+- [x] 057-remove-files-first
 
 # Open questions
 

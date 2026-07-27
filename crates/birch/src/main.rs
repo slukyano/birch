@@ -40,10 +40,6 @@ struct Cli {
     #[arg(long)]
     no_icons: bool,
 
-    /// Sort files before directories.
-    #[arg(long)]
-    files_first: bool,
-
     /// Hide hidden (dot) files.
     #[arg(long)]
     hide_hidden: bool,
@@ -147,7 +143,6 @@ fn main() -> ExitCode {
 
     let settings = Settings {
         icons: !cli.no_icons,
-        files_first: cli.files_first,
         show_hidden: !cli.hide_hidden,
         show_noise: cli.show_noise,
         mouse: !cli.no_mouse,

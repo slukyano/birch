@@ -125,7 +125,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
     } = wiring;
 
     let mut app = App {
-        tree: Tree::new(root.clone(), settings.files_first),
+        tree: Tree::new(root.clone()),
         view: FlatView::default(),
         root_label: root.display().to_string(),
         settings,
@@ -563,10 +563,6 @@ impl App {
                     self.repo_root = None;
                 }
             }
-            SettingKey::FilesFirst => {
-                self.settings.files_first = value.apply(self.settings.files_first);
-                self.tree.set_files_first(self.settings.files_first);
-            }
         }
         Response::ok(None)
     }
@@ -593,7 +589,7 @@ impl App {
         }
         self.root_label = new_root.display().to_string();
         self.root = new_root.clone();
-        self.tree = Tree::new(new_root.clone(), self.settings.files_first);
+        self.tree = Tree::new(new_root.clone());
         self.view = FlatView::default();
         self.search = None;
         self.pending_reveal = None;
@@ -1197,7 +1193,7 @@ mod tests {
         let (git_tx, git_rx) = mpsc::channel();
         let root = PathBuf::from("/r");
         let mut app = App {
-            tree: Tree::new(root.clone(), false),
+            tree: Tree::new(root.clone()),
             view: FlatView::default(),
             settings: Settings::default(),
             open_cmd: OpenCmd::from_template("editor {}").expect("static template"),

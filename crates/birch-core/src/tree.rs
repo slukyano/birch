@@ -78,11 +78,10 @@ pub struct Tree {
     free: Vec<usize>,
     index: HashMap<PathBuf, NodeId>,
     root: NodeId,
-    files_first: bool,
 }
 
 impl Tree {
-    pub fn new(root_path: PathBuf, files_first: bool) -> Self {
+    pub fn new(root_path: PathBuf) -> Self {
         let root_name = root_path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -102,7 +101,6 @@ impl Tree {
             free: Vec::new(),
             index,
             root: NodeId(0),
-            files_first,
         }
     }
 
@@ -120,24 +118,6 @@ impl Tree {
 
     pub fn node_at(&self, path: &Path) -> Option<&Node> {
         self.id_of(path).map(|id| self.get(id))
-    }
-
-    /// Changes the sort grouping at runtime and re-sorts every loaded dir.
-    pub fn set_files_first(&mut self, files_first: bool) {
-        if self.files_first == files_first {
-            return;
-        }
-        self.files_first = files_first;
-        let dirs: Vec<NodeId> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| n.as_ref().is_some_and(|n| n.is_loaded()))
-            .map(|(i, _)| NodeId(i))
-            .collect();
-        for dir in dirs {
-            self.sort_children(dir);
-        }
     }
 
     /// Every expanded dir in the tree (persistence uses this snapshot).
@@ -300,16 +280,11 @@ impl Tree {
         else {
             return;
         };
-        let files_first = self.files_first;
         children.sort_by(|&a, &b| {
             let (a, b) = (self.get(a), self.get(b));
             let (da, db) = (a.kind.is_dir(), b.kind.is_dir());
-            let group = if files_first {
-                da.cmp(&db)
-            } else {
-                db.cmp(&da)
-            };
-            group
+            // Directories always sort before files.
+            db.cmp(&da)
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
                 .then_with(|| a.name.cmp(&b.name))
         });
@@ -341,7 +316,7 @@ mod tests {
 
     #[test]
     fn added_sorts_dirs_first_then_case_insensitive() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.apply(TreeDelta::Added {
             parent: "/r".into(),
             entries: vec![
@@ -358,18 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn files_first_flips_grouping() {
-        let mut tree = Tree::new(PathBuf::from("/r"), true);
-        tree.apply(TreeDelta::Added {
-            parent: "/r".into(),
-            entries: vec![entry("dir", NodeKind::Dir), entry("file", NodeKind::File)],
-        });
-        assert_eq!(names(&tree, tree.root()), ["file", "dir"]);
-    }
-
-    #[test]
     fn added_merges_and_marks_loaded() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         assert!(!tree.get(tree.root()).is_loaded());
         tree.apply(TreeDelta::Added {
             parent: "/r".into(),
@@ -385,7 +350,7 @@ mod tests {
 
     #[test]
     fn empty_added_marks_loaded() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.apply(TreeDelta::Added {
             parent: "/r".into(),
             entries: vec![],
@@ -396,7 +361,7 @@ mod tests {
 
     #[test]
     fn removed_drops_subtree_and_index() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.apply(TreeDelta::Added {
             parent: "/r".into(),
             entries: vec![entry("dir", NodeKind::Dir), entry("keep", NodeKind::File)],
@@ -415,7 +380,7 @@ mod tests {
 
     #[test]
     fn added_for_unknown_parent_is_dropped() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.apply(TreeDelta::Added {
             parent: "/r/ghost".into(),
             entries: vec![entry("x", NodeKind::File)],
@@ -425,7 +390,7 @@ mod tests {
 
     #[test]
     fn updated_changes_kind_and_resorts() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.apply(TreeDelta::Added {
             parent: "/r".into(),
             entries: vec![entry("a", NodeKind::File), entry("b", NodeKind::Dir)],
@@ -439,7 +404,7 @@ mod tests {
 
     #[test]
     fn kind_change_across_dir_file_boundary_drops_subtree() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.apply(TreeDelta::Snapshot {
             dir: "/r".into(),
             entries: vec![entry("x", NodeKind::Dir)],
@@ -471,7 +436,7 @@ mod tests {
 
     #[test]
     fn snapshot_reconciles_and_preserves_surviving_state() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.apply(TreeDelta::Snapshot {
             dir: "/r".into(),
             entries: vec![
@@ -508,7 +473,7 @@ mod tests {
 
     #[test]
     fn empty_snapshot_clears_children() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         tree.apply(TreeDelta::Snapshot {
             dir: "/r".into(),
             entries: vec![entry("a", NodeKind::File)],
@@ -524,7 +489,7 @@ mod tests {
 
     #[test]
     fn expansion_flag_round_trips() {
-        let mut tree = Tree::new(PathBuf::from("/r"), false);
+        let mut tree = Tree::new(PathBuf::from("/r"));
         assert!(tree.set_expanded(Path::new("/r"), true));
         assert!(tree.get(tree.root()).expanded);
         assert!(!tree.set_expanded(Path::new("/r/none"), true));
