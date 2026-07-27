@@ -120,8 +120,12 @@ CLI flag, config key, socket/protocol field, environment variable, on-disk path,
 so nothing user-facing is introduced implicitly. A task with no public-surface change states that
 explicitly. Carry the same enumeration into the design-approval and close-out presentations.
 
-Commit throughout the phase. When all tasks in scope are designed, the maintainer reviews the
-batch. **Design approval** triggers, in order:
+Commit throughout the phase. When all tasks in scope are designed, present the batch for approval
+via the chat protocol below. The presentation **always includes, for each task**: a **design
+summary** (what it builds and how the task transformed from its original framing), the **key
+decisions** (with the alternatives weighed), the **ADRs** it introduces, and its **public-surface
+delta**; then the explicit open decisions the maintainer must make. **Design approval** triggers, in
+order:
 
 1. ADRs from this phase flip `Proposed → Accepted` (only the maintainer approves ADRs).
 2. Tasks flip `Draft → Designed`; the sprint flips `Designing → Implementing`.
