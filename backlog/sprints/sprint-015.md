@@ -70,7 +70,7 @@ original three-task scope with `031` per maintainer direction).
 
 - [ ] 054-refine-tree-visual-design
 - [ ] 025-add-visual-styles
-- [ ] 031-add-config-file
+- [x] 031-add-config-file
 - [x] 052-fix-reveal-symlink-canonicalization
 - [x] 057-remove-files-first
 

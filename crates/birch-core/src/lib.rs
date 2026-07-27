@@ -4,6 +4,7 @@
 //! This crate must build without ratatui — the crate boundary
 //! compiler-enforces the real-tree/render split (see `docs/design.md`).
 
+pub mod config;
 pub mod files_source;
 pub mod git;
 pub mod open_cmd;
@@ -15,6 +16,7 @@ pub mod source;
 pub mod tree;
 pub mod watcher;
 
+pub use config::Config;
 pub use git::{FileStatus, GitState};
 pub use open_cmd::{OpenCmd, OpenMode};
 pub use settings::{Settings, ThemeId};

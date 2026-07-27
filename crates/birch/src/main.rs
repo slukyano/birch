@@ -19,7 +19,7 @@ use birch_core::files_source::FilesSource;
 use birch_core::git::{self, GitWorker};
 use birch_core::search::IndexWorker;
 use birch_core::watcher::FsWatcher;
-use birch_core::{OpenCmd, OpenMode, Settings, SourceCmd};
+use birch_core::{Config, OpenCmd, OpenMode, Settings, SourceCmd};
 use clap::Parser;
 
 use crate::app::Mode;
@@ -36,37 +36,68 @@ struct Cli {
     /// Root directory of the tree (default: current directory).
     dir: Option<PathBuf>,
 
+    /// Use this config file instead of the discovered one (for tests and
+    /// alternate setups). Default: $XDG_CONFIG_HOME/birch/birch.toml, else
+    /// ~/.config/birch/birch.toml.
+    #[arg(long, value_name = "path")]
+    config: Option<PathBuf>,
+
+    // Bidirectional toggles (ADR 0022): each setting has both directions so
+    // the CLI can override the config file either way. `overrides_with` makes
+    // the last flag on the command line win; the counterpart matching the
+    // built-in default direction is hidden from --help to keep it uncluttered.
+    /// Enable Nerd Font icons.
+    #[arg(long, overrides_with = "no_icons", hide = true)]
+    icons: bool,
     /// Disable Nerd Font icons.
-    #[arg(long)]
+    #[arg(long, overrides_with = "icons")]
     no_icons: bool,
 
+    /// Show hidden (dot) files.
+    #[arg(long, overrides_with = "hide_hidden", hide = true)]
+    show_hidden: bool,
     /// Hide hidden (dot) files.
-    #[arg(long)]
+    #[arg(long, overrides_with = "show_hidden")]
     hide_hidden: bool,
 
     /// Show noise entries (.git, .DS_Store, …).
-    #[arg(long)]
+    #[arg(long, overrides_with = "hide_noise")]
     show_noise: bool,
+    /// Hide noise entries (.git, .DS_Store, …).
+    #[arg(long, overrides_with = "show_noise", hide = true)]
+    hide_noise: bool,
 
+    /// Enable mouse support.
+    #[arg(long, overrides_with = "no_mouse", hide = true)]
+    mouse: bool,
     /// Disable mouse support.
-    #[arg(long)]
+    #[arg(long, overrides_with = "mouse")]
     no_mouse: bool,
 
+    /// Enable git status integration.
+    #[arg(long, overrides_with = "no_git", hide = true)]
+    git: bool,
     /// Disable git status integration.
-    #[arg(long)]
+    #[arg(long, overrides_with = "git")]
     no_git: bool,
 
+    /// Show gitignored files dimmed.
+    #[arg(long, overrides_with = "hide_ignored", hide = true)]
+    show_ignored: bool,
     /// Hide gitignored files (default: shown dimmed).
-    #[arg(long)]
+    #[arg(long, overrides_with = "show_ignored")]
     hide_ignored: bool,
 
+    /// Enable compact single-child folder chains.
+    #[arg(long, overrides_with = "no_compact", hide = true)]
+    compact: bool,
     /// Disable compact single-child folder chains.
-    #[arg(long)]
+    #[arg(long, overrides_with = "compact")]
     no_compact: bool,
 
-    /// Visual theme (colors, glyphs, guides).
-    #[arg(long, value_enum, default_value = "birch")]
-    theme: ThemeArg,
+    /// Visual theme (colors, glyphs, guides). Overrides the config `theme`.
+    #[arg(long, value_enum)]
+    theme: Option<ThemeArg>,
 
     /// Bind the control socket exactly here (host rendezvous) instead of
     /// the default per-instance addressing.
@@ -170,18 +201,54 @@ fn main() -> ExitCode {
         }
     };
 
-    let settings = Settings {
-        icons: !cli.no_icons,
-        show_hidden: !cli.hide_hidden,
-        show_noise: cli.show_noise,
-        mouse: !cli.no_mouse,
-        git: !cli.no_git,
-        show_ignored: !cli.hide_ignored,
-        compact: !cli.no_compact,
-        theme: cli.theme.into(),
-    };
+    // Precedence: Settings::default() → config → CLI flags (ADR 0022). The
+    // config warning goes to stderr here, before the terminal is taken.
+    let (config, config_warning) = Config::load(cli.config.as_deref());
+    if let Some(warning) = config_warning {
+        eprintln!("{warning}");
+    }
 
-    let open_cmd = match cli.open_cmd.as_deref() {
+    let mut settings = Settings::default();
+    config.apply_to(&mut settings);
+    // Resolve each bidirectional toggle to Option<bool> (last-flag-wins is
+    // handled by clap's `overrides_with`) and apply only when the user set it.
+    let flag = |on: bool, off: bool| -> Option<bool> {
+        if on {
+            Some(true)
+        } else if off {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    if let Some(v) = flag(cli.icons, cli.no_icons) {
+        settings.icons = v;
+    }
+    if let Some(v) = flag(cli.show_hidden, cli.hide_hidden) {
+        settings.show_hidden = v;
+    }
+    if let Some(v) = flag(cli.show_noise, cli.hide_noise) {
+        settings.show_noise = v;
+    }
+    if let Some(v) = flag(cli.mouse, cli.no_mouse) {
+        settings.mouse = v;
+    }
+    if let Some(v) = flag(cli.git, cli.no_git) {
+        settings.git = v;
+    }
+    if let Some(v) = flag(cli.show_ignored, cli.hide_ignored) {
+        settings.show_ignored = v;
+    }
+    if let Some(v) = flag(cli.compact, cli.no_compact) {
+        settings.compact = v;
+    }
+    if let Some(theme) = cli.theme {
+        settings.theme = theme.into();
+    }
+
+    // Open command: --open-cmd wins, else config `open-cmd`, else the built-in.
+    let open_cmd_template = cli.open_cmd.as_deref().or(config.open_cmd.as_deref());
+    let open_cmd = match open_cmd_template {
         Some(template) => match OpenCmd::from_template(template) {
             Ok(mut cmd) => {
                 if cli.open_detached {
