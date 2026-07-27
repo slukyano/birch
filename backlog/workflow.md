@@ -124,7 +124,8 @@ Commit throughout the phase. When all tasks in scope are designed, present the b
 via the chat protocol below. The presentation **always includes, for each task**: a **design
 summary** (what it builds and how the task transformed from its original framing), the **key
 decisions** (with the alternatives weighed), the **ADRs** it introduces, and its **public-surface
-delta**; then the explicit open decisions the maintainer must make. **Design approval** triggers, in
+delta**; then the explicit open decisions the maintainer must make. Prefer **structured markdown —
+tables and lists — over prose** throughout the presentation. **Design approval** triggers, in
 order:
 
 1. ADRs from this phase flip `Proposed → Accepted` (only the maintainer approves ADRs).
