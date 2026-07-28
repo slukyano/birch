@@ -4,7 +4,7 @@
 use birch_core::{FileStatus, Settings};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -35,8 +35,10 @@ pub fn draw(
     }
     let viewport = tree_viewport_height(area);
     let badge_width = BADGE_WIDTH.min(area.width);
+    // One gutter column before the badges so truncated text never touches
+    // a status indicator.
     let tree_area = Rect {
-        width: area.width - badge_width,
+        width: area.width - badge_width - 1.min(area.width - badge_width),
         height: viewport as u16,
         ..area
     };
@@ -60,12 +62,17 @@ pub fn draw(
         lines.push(row_line(theme, settings, row, is_selected));
         badges.push(badge_line(theme, row));
     }
-    frame.render_widget(Paragraph::new(lines), tree_area);
-    frame.render_widget(Paragraph::new(badges), badge_area);
+    // A theme with an app_bg (the Commander's DOS blue) paints its whole
+    // canvas; every paragraph carries the fill so empty cells match.
+    let canvas = match theme.palette.app_bg {
+        Some(bg) => Style::default().bg(bg),
+        None => Style::default(),
+    };
+    frame.render_widget(Paragraph::new(lines).style(canvas), tree_area);
+    frame.render_widget(Paragraph::new(badges).style(canvas), badge_area);
 
     frame.render_widget(
-        Paragraph::new(format!(" {bottom_line}"))
-            .style(Style::default().add_modifier(Modifier::DIM)),
+        Paragraph::new(format!(" {bottom_line}")).style(canvas.add_modifier(Modifier::DIM)),
         status_area,
     );
 }
@@ -86,6 +93,11 @@ fn row_line(theme: &Theme, settings: &Settings, row: &Row, selected: bool) -> Li
                 .fg(theme.palette.separator)
                 .add_modifier(Modifier::DIM),
         ));
+    }
+    if selected && let Some(fg) = theme.palette.selection_fg {
+        for span in &mut spans {
+            span.style = span.style.fg(fg);
+        }
     }
     let mut line = Line::from(spans);
     if selected {
@@ -129,7 +141,8 @@ fn glyph_column_spans(theme: &Theme, settings: &Settings, row: &Row) -> Vec<Span
             let icon_color = if row.ignored {
                 theme.palette.ignored
             } else {
-                color
+                // Hues are theme-owned: a tint overrides devicon colours.
+                theme.icon_tint.unwrap_or(color)
             };
             Span::styled(format!("{glyph} "), Style::default().fg(icon_color))
         })
@@ -201,6 +214,29 @@ fn indent_spans(theme: &Theme, row: &Row, selected: bool) -> Vec<Span<'static>> 
     let depth = row.depth;
     let guide_style = Style::default().fg(theme.palette.guide);
     let accent = selected && theme.selection == SelectionStyle::SoftBarAccent;
+    // Depth fade (guide_fade = floor): lerp guide -> floor over levels 1..=4,
+    // clamped at the floor so deep trees never lose their guides.
+    let level_style = |level: usize| -> Style {
+        let Some(floor) = theme.guide_fade else {
+            return guide_style;
+        };
+        let (Color::Rgb(r0, g0, b0), Color::Rgb(r1, g1, b1)) = (theme.palette.guide, floor) else {
+            return guide_style;
+        };
+        let t = [0u16, 45, 75, 100][(level.saturating_sub(1)).min(3)];
+        let lerp = |a: u8, b: u8| -> u8 {
+            (u16::from(a) + (u16::from(b).saturating_sub(u16::from(a)) * t / 100).min(255)) as u8
+        };
+        // Components move toward the floor in either direction.
+        let mix = |a: u8, b: u8| -> u8 {
+            if b >= a {
+                lerp(a, b)
+            } else {
+                (u16::from(a) - (u16::from(a) - u16::from(b)) * t / 100) as u8
+            }
+        };
+        Style::default().fg(Color::Rgb(mix(r0, r1), mix(g0, g1), mix(b0, b1)))
+    };
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(depth);
     for level in 0..depth {
         // Level 0 is the root's spine: never a guide, just the accent bar or a
@@ -210,7 +246,9 @@ fn indent_spans(theme: &Theme, row: &Row, selected: bool) -> Vec<Span<'static>> 
             if accent {
                 spans.push(Span::styled(
                     "\u{258f}",
-                    Style::default().fg(theme.palette.selection_accent),
+                    Style::default()
+                        .fg(theme.palette.selection_accent)
+                        .add_modifier(Modifier::BOLD),
                 ));
                 spans.push(Span::styled(" ", guide_style));
             } else {
@@ -223,7 +261,7 @@ fn indent_spans(theme: &Theme, row: &Row, selected: bool) -> Vec<Span<'static>> 
             GuideStyle::Indent => "\u{2502} ",
             GuideStyle::Connectors => connector_segment(row, level),
         };
-        spans.push(Span::styled(segment, guide_style));
+        spans.push(Span::styled(segment, level_style(level)));
     }
     spans
 }
@@ -445,8 +483,8 @@ mod tests {
     fn name_style_precedence() {
         let theme = theme();
         let mut r = row("a.rs", NodeKind::File, 0);
-        // A plain file keeps the terminal default (Birch's name_fg is None).
-        assert_eq!(name_style(&theme, &r), Style::default());
+        // A plain file takes the theme's name_fg (the flagship sets one).
+        assert_eq!(name_style(&theme, &r).fg, theme.palette.name_fg);
         r.status = Some(FileStatus::Modified);
         assert_eq!(
             name_style(&theme, &r).fg,
