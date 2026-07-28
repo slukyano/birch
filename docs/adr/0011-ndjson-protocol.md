@@ -34,7 +34,7 @@ Responses always carry `ok`:
 - Verbs: `reveal`, `get-path` (`form`: `name` | `rel` | `abs`, default `rel`), `get-root`,
   `set`, `set-root`, `open`, `quit` — the closed set, verbatim from the design doc. No
   mutation verbs, ever.
-- `set` settings: `hidden`, `ignored`, `noise`, `icons`, `compact`, `git`, `files-first`;
+- `set` settings: `hidden`, `ignored`, `noise`, `icons`, `compact`, `git`, `theme`;
   values `on`/`off`/`true`/`false`/`1`/`0`/`toggle`.
 - An unparseable line or unknown verb gets `ok: false` with an error; the connection
   stays open (one bad request must not kill a host's control channel).

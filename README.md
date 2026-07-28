@@ -181,7 +181,7 @@ surface — mostly driven by host adapters rather than run by hand:
 
 ```sh
 birch ctl reveal src/main.rs   # select and scroll to a path — this is how the tree follows an editor
-birch ctl set git off          # flip a setting: hidden | ignored | noise | icons | compact | git | files-first
+birch ctl set git off          # flip a setting: hidden | ignored | noise | icons | compact | git | theme
 birch ctl get-path --abs       # print the current selection
 birch ctl quit                 # exit the instance
 ```

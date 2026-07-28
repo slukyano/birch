@@ -52,7 +52,8 @@ enum VerbCmd {
         #[arg(value_enum)]
         setting: SettingArg,
         /// on/off/true/false/1/0/toggle — or, for `theme`, a theme id
-        /// (birch/vscode/jetbrains/xcode/retro/plain).
+        /// (birch/vscode/jetbrains/xcode/mocha/tokyonight/gruvbox/nord/
+        /// rosepine/retro/plain).
         value: String,
     },
     /// Re-root the tree.

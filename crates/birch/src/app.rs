@@ -565,7 +565,7 @@ impl App {
                     self.repo_root = None;
                 }
             }
-            SettingKey::Theme => unreachable!("theme is handled before value parsing"),
+            SettingKey::Theme => return Response::err("theme is handled before value parsing"),
         }
         Response::ok(None)
     }
