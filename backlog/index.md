@@ -31,6 +31,7 @@ okf_version: "0.1"
 * [Adapt themes to the terminal color scheme](tasks/058-adapt-themes-to-terminal-palette.md) - Themes assume black bg; make them respect the terminal palette (light/dark, base16).
 * [Indent guides look misaligned under wide Nerd Font glyphs](tasks/059-fix-guide-chevron-alignment.md) - Guides are cell-centered but oversized PUA chevrons/icons render right-of-center (~1/3 cell).
 * [→ should always advance — never a silent no-op](tasks/060-right-arrow-always-advances.md) - Right-arrow does nothing on files and expanded plain dirs; should descend or move to the next row.
+* [Highlight the active folder's indent guide](tasks/061-active-path-indent-guide.md) - Opt-in theme axis: dim all guides except the current folder's column, which brightens; indent lines and connectors.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
 * [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob/regex corpus restriction for picker mode.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.

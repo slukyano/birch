@@ -154,3 +154,7 @@
   centre, chevron ink +5 px in a 16 px cell; pixel-exact in a `Mono` variant). `060` — `→` is a
   silent no-op on files and on already-expanded plain directories; it should descend into a folder
   or advance to the next row, doing nothing only on the tree's last file.
+* **Active-guide feature seeded**: `061` — an opt-in theme axis dimming every indent guide except
+  the current folder's column, which brightens (current folder = the parent for files and collapsed
+  dirs, the directory itself when expanded). Covers both indent lines and classic connectors, and
+  takes up the guide-ancestry highlighting the theme engine left open.
