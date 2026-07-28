@@ -51,7 +51,9 @@ enum VerbCmd {
     Set {
         #[arg(value_enum)]
         setting: SettingArg,
-        /// on/off/true/false/1/0/toggle.
+        /// on/off/true/false/1/0/toggle — or, for `theme`, a theme id
+        /// (birch/vscode/jetbrains/xcode/mocha/tokyonight/gruvbox/nord/
+        /// rosepine/retro/plain).
         value: String,
     },
     /// Re-root the tree.
@@ -70,7 +72,7 @@ enum SettingArg {
     Icons,
     Compact,
     Git,
-    FilesFirst,
+    Theme,
 }
 
 impl From<SettingArg> for SettingKey {
@@ -82,7 +84,7 @@ impl From<SettingArg> for SettingKey {
             SettingArg::Icons => SettingKey::Icons,
             SettingArg::Compact => SettingKey::Compact,
             SettingArg::Git => SettingKey::Git,
-            SettingArg::FilesFirst => SettingKey::FilesFirst,
+            SettingArg::Theme => SettingKey::Theme,
         }
     }
 }

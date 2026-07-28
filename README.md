@@ -88,6 +88,50 @@ nvim "$(birch --pick)"        # pick a file to open
 cd "$(birch --pick)"          # pick a directory to cd into
 ```
 
+## Themes
+
+birch ships eleven built-in themes: its own flagship plus editor looks, popular terminal
+schemes, and two throwbacks.
+
+![The birch theme catalog](docs/assets/themes.png)
+
+```sh
+birch --theme mocha            # pick at launch
+birch ctl set theme gruvbox    # switch a running instance
+```
+
+| theme | look |
+|-------|------|
+| `birch` *(default)* | Silver bark with a single gold stroke — desaturated silver-green tree, sage icons, depth-fading guides, one gold selection bar. |
+| `vscode` `jetbrains` `xcode` | The editors' file trees, measured from the real apps — layouts, chevrons, icon families, and selection colors included. |
+| `mocha` `tokyonight` `gruvbox` `nord` `rosepine` | The community schemes, from their official palettes. |
+| `retro` | The Commander: DOS-blue canvas, black-on-cyan cursor bar, `+`/`-` tree marks, no icons. |
+| `plain` | No icons, ANSI-safe colors — works on any terminal, no Nerd Font needed. |
+
+Set a permanent default with the `theme` key in the [config file](#configuration).
+
+## Configuration
+
+Personal defaults live in `~/.config/birch/birch.toml` (or `$XDG_CONFIG_HOME/birch/birch.toml`);
+`--config <path>` points at an explicit file. Precedence: config file < CLI flags < `birch ctl set`
+at runtime. All keys are optional:
+
+```toml
+theme = "birch"        # birch | vscode | jetbrains | xcode | mocha | tokyonight
+                       #   | gruvbox | nord | rosepine | retro | plain
+icons = true           # Nerd Font icons
+git = true             # git status badges
+hidden = true          # show dot-files
+ignored = true         # show gitignored entries (dimmed)
+noise = false          # show .git, .DS_Store, ...
+compact = true         # compact single-child folder chains
+mouse = true           # mouse support
+open-cmd = "nvim {}"   # open command template ({} = path)
+```
+
+Boolean CLI flags are bidirectional (`--icons`/`--no-icons`, `--show-hidden`/`--hide-hidden`, …),
+so the command line can override the config in either direction.
+
 ## Host integration
 
 birch is built to live in a pane next to your editor and integrate with its host — a multiplexer
@@ -137,7 +181,7 @@ surface — mostly driven by host adapters rather than run by hand:
 
 ```sh
 birch ctl reveal src/main.rs   # select and scroll to a path — this is how the tree follows an editor
-birch ctl set git off          # flip a setting: hidden | ignored | noise | icons | compact | git | files-first
+birch ctl set git off          # flip a setting: hidden | ignored | noise | icons | compact | git | theme
 birch ctl get-path --abs       # print the current selection
 birch ctl quit                 # exit the instance
 ```
@@ -151,6 +195,12 @@ never mutates files.
 
 Build, test, and contribution guidance is in [`CONTRIBUTING.md`](CONTRIBUTING.md). The product and
 architecture spec — including the scope fence — is [`docs/design.md`](docs/design.md).
+
+## Trademarks
+
+Visual Studio Code, JetBrains, IntelliJ IDEA, and Xcode are trademarks of Microsoft, JetBrains,
+and Apple respectively. birch is not affiliated with, endorsed by, or sponsored by any of them;
+theme names describe only the look each theme emulates.
 
 ## License
 

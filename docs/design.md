@@ -56,12 +56,16 @@ birch ctl <verb> [...]    # control a running instance (see Control socket)
 |---|---|---|
 | Icons | on | `--no-icons` |
 | Git status | on | `--no-git` |
-| Directories first | on | `--files-first` |
 | Gitignored files | shown, dimmed, **auto-collapsed** | `--hide-ignored` |
 | Hidden (dot) files | shown | `--hide-hidden` |
 | Noise (`.git`, `.DS_Store`, …) | hidden | `--show-noise` |
 | Compact folders | on | `--no-compact` |
 | Mouse | on | `--no-mouse` |
+| Theme | `birch` | `--theme <id>` |
+
+Directories always sort before files. Defaults persist in the config file
+(`~/.config/birch/birch.toml`, ADR 0022); boolean flags are bidirectional, and the precedence is
+config < flags < `birch ctl set`. The theme catalog is ADR 0021.
 
 Flags set initial values; runtime changes go through `birch ctl set` (and possibly a few hotkeys later — added sparingly).
 

@@ -41,7 +41,9 @@ pub enum SettingKey {
     Icons,
     Compact,
     Git,
-    FilesFirst,
+    /// The active theme (ADR 0021). Unlike the on/off toggles, its value is a
+    /// theme-id string (`birch`, `plain`, …), not a `SettingValue`.
+    Theme,
 }
 
 /// One request line. Unknown fields are ignored on parse (serde default);
@@ -195,8 +197,8 @@ mod tests {
             r#""get-root""#
         );
         assert_eq!(
-            serde_json::to_string(&SettingKey::FilesFirst).unwrap(),
-            r#""files-first""#
+            serde_json::to_string(&SettingKey::Icons).unwrap(),
+            r#""icons""#
         );
     }
 

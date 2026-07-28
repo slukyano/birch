@@ -2,7 +2,7 @@
 type: Task
 title: Refine the tree's visual design — earn "beautiful"
 description: Tree/indent guides, a curated palette, refined selection, breathing room. General render-layer polish, distinct from the choosable style presets (025).
-status: Designed
+status: Done
 priority: medium
 ---
 

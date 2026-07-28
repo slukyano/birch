@@ -2,7 +2,7 @@
 type: Task
 title: Canonicalize symlinks before the reveal root-containment check
 description: `birch ctl reveal /tmp/foo` is rejected as "outside the root" when the root is /private/tmp (macOS /tmp → /private/tmp).
-status: Designed
+status: Done
 priority: high
 ---
 

@@ -2,7 +2,7 @@
 type: Task
 title: Remove the files-first setting
 description: Drop the files-first sort toggle — a rare option no common file tree offers; directories always sort first.
-status: Designed
+status: Done
 priority: low
 ---
 

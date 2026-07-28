@@ -4,8 +4,9 @@ okf_version: "0.1"
 
 # Documentation
 
-The `docs/` OKF bundle: the product and architecture spec, the integration guide, and the
-Architecture Decision Records (`adr/`, one `type: ADR` concept per decision).
+The `docs/` OKF bundle: the product and architecture spec, the integration guide, the
+Architecture Decision Records (`adr/`, one `type: ADR` concept per decision), and research
+artifacts (`research/`).
 
 # Docs
 
@@ -38,10 +39,19 @@ Process: see [the task workflow](../backlog/workflow.md#adrs).
 * [0016 — cmux integrates via the Dock, not a workspace-split adapter](adr/0016-cmux-integrates-via-the-dock.md)
 * [0018 — Release automation and the Homebrew tap via cargo-dist](adr/0018-release-via-cargo-dist.md) (supersedes 0017)
 * [0019 — The control client is a `birch ctl` subcommand, not a separate binary](adr/0019-control-client-is-a-birch-subcommand.md)
-
-## Proposed
-
 * [0020 — Defer crates.io publishing; Homebrew and cargo-install-from-git are the channels](adr/0020-defer-crates-io.md)
+* [0021 — The render layer is theme-parameterized; theme id in core, theme definition in tui](adr/0021-theme-system.md)
+* [0022 — Personal defaults live in ~/.config/birch/birch.toml; precedence is config < flags < ctl set](adr/0022-config-file.md)
+
+# Research
+
+Reference material gathered for design work; factual, sourced, and safe to rely on for future
+theming/UI decisions.
+
+* [Editor file trees — ground truth](research/editor-trees.md) - Measured layouts and colors of the VS Code / IDEA / Xcode trees.
+* [Nerd Font glyph reference](research/nerd-font-glyphs.md) - Verified codepoints: chevrons per tool, category glyphs per icon family, width hazards.
+* [TUI visual design synthesis](research/tui-design.md) - Design principles, scheme palettes, the semantics-global-hues-local rule.
+* [File browsers beyond the editors](research/app-trees.md) - Finder, Norton/Midnight Commander, Sublime, Zed, GitHub, Material, yazi/superfile, Warp.
 
 ## Superseded
 

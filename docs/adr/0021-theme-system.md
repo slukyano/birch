@@ -35,8 +35,9 @@ pure-data **`ThemeId`** enum in `birch-core` that selects one.
   - **palette** — name/dir foreground, selection background + accent-bar color, chevron, separator,
     ignored, match box, and the per-`FileStatus` git colors;
   - **badges** — `BadgeStyle` (letter `M`/`A`/… vs. symbol) and the directory-rollup glyph;
-  - **icons** — an `IconSet` (which glyph+color map) plus `folder_icon: bool` (show a folder glyph,
-    or let the chevron stand in its place, VS Code-style) and a monochrome flag;
+  - **icons** — an `IconSet` (which glyph+color map), a `FolderStyle` (`Icon` = chevron + folder
+    glyph; `Compact` = chevron in the icon column, VS Code-style; `Plain` = no icons), and
+    per-theme chevron glyphs (`▸▾` vs. filled `▶▼`);
   - **selection** — `SelectionStyle { FullRow, SoftBarAccent }`.
 - **`render.rs` and `icons.rs` take `&Theme`.** The current hardcoded constants become the `Birch`
   theme's values (re-tuned to the flagship design in `054`); `icon_for` becomes a method on the

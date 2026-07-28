@@ -17,11 +17,13 @@ use birch_core::protocol::{PathForm, Request, Response, SettingKey, SettingValue
 use birch_core::search::{IndexCmd, IndexEvent, Match, SearchIndex, search};
 use birch_core::watcher::{WatchCmd, WatchEvent};
 use birch_core::{
-    NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, Tree, TreeDelta, persist,
+    NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree, TreeDelta,
+    persist,
 };
 use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row};
 use birch_tui::input::{self, InputAction};
 use birch_tui::render;
+use birch_tui::theme::Theme;
 use ratatui::layout::Rect;
 
 use crate::ctl::{CtlRequest, SocketHandle};
@@ -125,7 +127,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
     } = wiring;
 
     let mut app = App {
-        tree: Tree::new(root.clone(), settings.files_first),
+        tree: Tree::new(root.clone()),
         view: FlatView::default(),
         root_label: root.display().to_string(),
         settings,
@@ -459,24 +461,13 @@ impl App {
         let mut effect = CtlEffect::None;
         let response = match request.verb {
             Verb::Reveal => match request.path {
-                Some(path) => {
-                    let abs = if path.is_absolute() {
-                        path
-                    } else {
-                        self.root.join(path)
-                    };
-                    // Lexical normalization, no canonicalize: the tree speaks
-                    // the paths as listed (a symlinked entry inside the tree
-                    // must not resolve outside it), while `..` segments must
-                    // not escape the root check.
-                    let abs = lexical_normalize(&abs);
-                    if abs.starts_with(&self.root) {
-                        self.reveal(abs);
+                Some(path) => match resolve_within_root(&self.root, &path) {
+                    Some(target) => {
+                        self.reveal(target);
                         Response::ok(None)
-                    } else {
-                        Response::err("path is outside the root")
                     }
-                }
+                    None => Response::err("path is outside the root"),
+                },
                 None => Response::err("reveal needs a path"),
             },
             Verb::GetPath => match self.view.selection.clone() {
@@ -534,6 +525,17 @@ impl App {
         let (Some(key), Some(value)) = (key, value) else {
             return Response::err("set needs a setting and a value");
         };
+        // Theme is a theme-id string, not the on/off SettingValue every other
+        // key parses. The redraw at the end of the loop applies it live.
+        if let SettingKey::Theme = key {
+            return match value.parse::<ThemeId>() {
+                Ok(id) => {
+                    self.settings.theme = id;
+                    Response::ok(None)
+                }
+                Err(e) => Response::err(e),
+            };
+        }
         let Some(value) = SettingValue::parse(value) else {
             return Response::err("value must be on/off/true/false/1/0/toggle");
         };
@@ -563,10 +565,7 @@ impl App {
                     self.repo_root = None;
                 }
             }
-            SettingKey::FilesFirst => {
-                self.settings.files_first = value.apply(self.settings.files_first);
-                self.tree.set_files_first(self.settings.files_first);
-            }
+            SettingKey::Theme => return Response::err("theme is handled before value parsing"),
         }
         Response::ok(None)
     }
@@ -593,7 +592,7 @@ impl App {
         }
         self.root_label = new_root.display().to_string();
         self.root = new_root.clone();
-        self.tree = Tree::new(new_root.clone(), self.settings.files_first);
+        self.tree = Tree::new(new_root.clone());
         self.view = FlatView::default();
         self.search = None;
         self.pending_reveal = None;
@@ -939,8 +938,9 @@ impl App {
             self.save_persisted(false);
         }
         let bottom = self.bottom_line();
+        let theme = Theme::for_id(self.settings.theme);
         let (view, settings) = (&self.view, &self.settings);
-        terminal.draw(|frame| render::draw(frame, &rows, view, settings, &bottom))?;
+        terminal.draw(|frame| render::draw(frame, &rows, view, settings, &theme, &bottom))?;
         Ok(())
     }
 
@@ -1165,6 +1165,41 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// Canonicalizes the longest existing prefix of `path` and re-appends any
+/// not-yet-existing tail, so a path whose leaf does not exist yet still has its
+/// symlinked ancestors resolved. Falls back to the input if nothing resolves.
+fn canonicalize_lenient(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => canonicalize_lenient(parent).join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Resolves a `reveal` argument to a path inside `root` (canonicalized at
+/// launch), or `None` if it lies outside. The path is taken **as given** first
+/// — lexically normalized (so `..` cannot escape) and matched against the root,
+/// which keeps relative inputs and in-tree symlink nodes working with no
+/// resolution — and symlinks are resolved only as a *fallback* for a path that
+/// did not already match (e.g. a symlinked root prefix such as macOS `/tmp` →
+/// `/private/tmp`). The lexical path is revealed when it matches; otherwise the
+/// resolved path (which is under the canonical root) is.
+fn resolve_within_root(root: &Path, input: &Path) -> Option<PathBuf> {
+    let abs = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        root.join(input)
+    };
+    let abs = lexical_normalize(&abs);
+    if abs.starts_with(root) {
+        return Some(abs);
+    }
+    let resolved = canonicalize_lenient(&abs);
+    resolved.starts_with(root).then_some(resolved)
+}
+
 fn area(terminal: &term::Term) -> Rect {
     terminal
         .size()
@@ -1197,7 +1232,7 @@ mod tests {
         let (git_tx, git_rx) = mpsc::channel();
         let root = PathBuf::from("/r");
         let mut app = App {
-            tree: Tree::new(root.clone(), false),
+            tree: Tree::new(root.clone()),
             view: FlatView::default(),
             settings: Settings::default(),
             open_cmd: OpenCmd::from_template("editor {}").expect("static template"),
@@ -1629,6 +1664,40 @@ mod ctl_tests {
     }
 
     #[test]
+    fn resolve_within_root_handles_symlinked_prefix() {
+        // A real dir plus a symlink pointing at it (mirrors macOS /tmp →
+        // /private/tmp). Reveal via the symlinked prefix must resolve.
+        let base = std::env::temp_dir().join(format!("birch-reveal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("real/sub")).unwrap();
+        std::fs::write(base.join("real/sub/main.rs"), b"x").unwrap();
+        let base = base.canonicalize().unwrap();
+        let real = base.join("real");
+        let link = base.join("alias");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        // Already under the root: returned as given, no symlink resolution.
+        assert_eq!(
+            resolve_within_root(&real, Path::new("sub/main.rs")),
+            Some(real.join("sub/main.rs"))
+        );
+        // Symlinked prefix: resolved via the fallback to the canonical path.
+        assert_eq!(
+            resolve_within_root(&real, &link.join("sub/main.rs")),
+            Some(real.join("sub/main.rs"))
+        );
+        // A not-yet-existing leaf under the symlinked prefix still resolves.
+        assert_eq!(
+            resolve_within_root(&real, &link.join("sub/new.rs")),
+            Some(real.join("sub/new.rs"))
+        );
+        // A genuinely outside path is rejected.
+        assert_eq!(resolve_within_root(&real, Path::new("/etc/passwd")), None);
+
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
     fn get_path_forms_and_root_dot() {
         let mut h = harness(Mode::Tree);
         feed(&mut h.app, "/r", &[("src", NodeKind::Dir)]);
@@ -1678,6 +1747,25 @@ mod ctl_tests {
         req.setting = Some(SettingKey::Hidden);
         req.value = Some("maybe".into());
         assert!(!h.app.ctl_response(req).0.ok, "bad value rejected");
+    }
+
+    #[test]
+    fn set_theme_selects_by_id_and_rejects_unknown() {
+        let mut h = harness(Mode::Tree);
+        assert_eq!(h.app.settings.theme, ThemeId::Birch);
+
+        let mut req = request(Verb::Set);
+        req.setting = Some(SettingKey::Theme);
+        req.value = Some("plain".into());
+        assert!(h.app.ctl_response(req).0.ok);
+        assert_eq!(h.app.settings.theme, ThemeId::Plain);
+
+        // An unknown theme id errors and leaves the current theme unchanged.
+        let mut req = request(Verb::Set);
+        req.setting = Some(SettingKey::Theme);
+        req.value = Some("neon".into());
+        assert!(!h.app.ctl_response(req).0.ok, "unknown theme rejected");
+        assert_eq!(h.app.settings.theme, ThemeId::Plain);
     }
 
     #[test]

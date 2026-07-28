@@ -9,6 +9,8 @@ pub mod flat_view;
 pub mod icons;
 pub mod input;
 pub mod render;
+pub mod theme;
 
 pub use flat_view::{FlatView, NavEffect, Row};
 pub use input::InputAction;
+pub use theme::Theme;

@@ -10,29 +10,11 @@ use ratatui::widgets::Paragraph;
 
 use crate::flat_view::{FlatView, Row};
 use crate::icons;
+use crate::theme::{BadgeStyle, FolderStyle, GuideStyle, SelectionStyle, Theme};
 
 pub const INDENT_WIDTH: u16 = 2;
 /// Width of the right-hand git badge column.
 pub const BADGE_WIDTH: u16 = 2;
-
-const SELECTION_BG: Color = Color::Rgb(0x2f, 0x3b, 0x54);
-const CHEVRON_COLOR: Color = Color::Rgb(0x6d, 0x80, 0x86);
-const SEPARATOR_COLOR: Color = Color::Rgb(0x6d, 0x80, 0x86);
-const IGNORED_COLOR: Color = Color::Rgb(0x7a, 0x82, 0x8e);
-/// Matched search characters render as IDEA-style boxes (ADR 0013).
-const MATCH_BG: Color = Color::Rgb(0xb8, 0x86, 0x2d);
-const MATCH_FG: Color = Color::Rgb(0x1a, 0x1b, 0x26);
-
-pub fn status_color(status: FileStatus) -> Color {
-    match status {
-        FileStatus::Conflicted => Color::Rgb(0xe4, 0x67, 0x6b),
-        FileStatus::Deleted => Color::Rgb(0xc7, 0x4e, 0x39),
-        FileStatus::Renamed => Color::Rgb(0x73, 0xc9, 0x91),
-        FileStatus::Modified => Color::Rgb(0xe2, 0xc0, 0x8d),
-        FileStatus::Added => Color::Rgb(0x81, 0xb8, 0x8b),
-        FileStatus::Untracked => Color::Rgb(0x73, 0xc9, 0x91),
-    }
-}
 
 /// The tree gets everything above the one-line status bar.
 pub fn tree_viewport_height(area: Rect) -> usize {
@@ -44,6 +26,7 @@ pub fn draw(
     rows: &[Row],
     view: &FlatView,
     settings: &Settings,
+    theme: &Theme,
     bottom_line: &str,
 ) {
     let area = frame.area();
@@ -52,8 +35,10 @@ pub fn draw(
     }
     let viewport = tree_viewport_height(area);
     let badge_width = BADGE_WIDTH.min(area.width);
+    // One gutter column before the badges so truncated text never touches
+    // a status indicator.
     let tree_area = Rect {
-        width: area.width - badge_width,
+        width: area.width - badge_width - 1.min(area.width - badge_width),
         height: viewport as u16,
         ..area
     };
@@ -72,72 +57,264 @@ pub fn draw(
     let selected = view.selection.as_deref();
     let mut lines = Vec::with_capacity(viewport);
     let mut badges = Vec::with_capacity(viewport);
-    for row in rows.iter().skip(view.scroll).take(viewport) {
-        let name_style = name_style(row);
-        let mut spans = vec![Span::raw(
-            " ".repeat((row.depth as u16 * INDENT_WIDTH) as usize),
-        )];
-        if row.kind.is_dir() && !row.missing {
-            let chevron = if row.expanded {
-                "\u{25be} "
-            } else {
-                "\u{25b8} "
-            };
-            spans.push(Span::styled(chevron, Style::default().fg(CHEVRON_COLOR)));
-        } else {
-            spans.push(Span::raw("  "));
+    let mut selected_visible: Option<u16> = None;
+    for (i, row) in rows.iter().skip(view.scroll).take(viewport).enumerate() {
+        let is_selected = selected == Some(row.path.as_path());
+        if is_selected {
+            selected_visible = Some(i as u16);
         }
-        if settings.icons {
-            let (glyph, color) = icons::icon_for(&row.name, row.kind);
-            let icon_color = if row.ignored { IGNORED_COLOR } else { color };
-            spans.push(Span::styled(
-                format!("{glyph} "),
-                Style::default().fg(icon_color),
-            ));
-        }
-        spans.extend(label_spans(row, name_style));
-        if let Some(annotation) = &row.annotation {
-            spans.push(Span::styled(
-                format!("  {annotation}"),
-                Style::default()
-                    .fg(SEPARATOR_COLOR)
-                    .add_modifier(Modifier::DIM),
-            ));
-        }
-        let mut line = Line::from(spans);
-        if selected == Some(row.path.as_path()) {
-            line = line.style(Style::default().bg(SELECTION_BG));
-        }
-        lines.push(line);
-
-        badges.push(match row.status {
-            Some(status) if row.kind.is_dir() && !row.missing => Line::from(Span::styled(
-                "\u{25cf}",
-                Style::default().fg(status_color(status)),
-            )),
-            Some(status) => Line::from(Span::styled(
-                status.badge().to_string(),
-                Style::default().fg(status_color(status)),
-            )),
-            None => Line::default(),
-        });
+        lines.push(row_line(theme, settings, row, is_selected));
+        badges.push(badge_line(theme, row));
     }
-    frame.render_widget(Paragraph::new(lines), tree_area);
-    frame.render_widget(Paragraph::new(badges), badge_area);
+    // A theme with an app_bg (the Commander's DOS blue) paints its whole
+    // canvas; the area is filled first so the badge gutter matches, and every
+    // paragraph carries the fill so empty cells match.
+    let canvas = match theme.palette.app_bg {
+        Some(bg) => Style::default().bg(bg),
+        None => Style::default(),
+    };
+    if theme.palette.app_bg.is_some() {
+        frame.buffer_mut().set_style(area, canvas);
+    }
+    frame.render_widget(Paragraph::new(lines).style(canvas), tree_area);
+    frame.render_widget(Paragraph::new(badges).style(canvas), badge_area);
 
     frame.render_widget(
-        Paragraph::new(format!(" {bottom_line}"))
-            .style(Style::default().add_modifier(Modifier::DIM)),
+        Paragraph::new(format!(" {bottom_line}")).style(canvas.add_modifier(Modifier::DIM)),
         status_area,
     );
+
+    // The selection wash runs edge to edge (badge gutter included), so the
+    // accent bar and the wash read as one gesture, not a floating chip.
+    if let Some(i) = selected_visible {
+        let row_rect = Rect {
+            y: tree_area.y + i,
+            height: 1,
+            ..area
+        };
+        frame
+            .buffer_mut()
+            .set_style(row_rect, Style::default().bg(theme.palette.selection_bg));
+    }
+}
+
+/// Builds the styled tree line for one row. Pure function of the row, the
+/// active theme, and whether the row is selected — the same geometry
+/// `hit_test` mirrors (guides and the accent bar occupy the existing indent
+/// columns, never shifting the chevron).
+fn row_line(theme: &Theme, settings: &Settings, row: &Row, selected: bool) -> Line<'static> {
+    let name_style = name_style(theme, row);
+    let mut spans = indent_spans(theme, row, selected);
+    spans.extend(glyph_column_spans(theme, settings, row));
+    spans.extend(label_spans(theme, row, name_style));
+    if let Some(annotation) = &row.annotation {
+        spans.push(Span::styled(
+            format!("  {annotation}"),
+            Style::default()
+                .fg(theme.palette.separator)
+                .add_modifier(Modifier::DIM),
+        ));
+    }
+    if selected && let Some(fg) = theme.palette.selection_fg {
+        for span in &mut spans {
+            span.style = span.style.fg(fg);
+        }
+    }
+    let mut line = Line::from(spans);
+    if selected {
+        line = line.style(Style::default().bg(theme.palette.selection_bg));
+    }
+    line
+}
+
+/// The glyph columns between the indent and the label, per `FolderStyle`. The
+/// chevron (for a non-missing dir) is ALWAYS the first glyph column, sitting at
+/// `depth * INDENT_WIDTH`, so `hit_test`'s chevron zone is identical across all
+/// three styles. Let `C` = the theme's chevron (2 cols), `I` = an icon (2 cols),
+/// `··` = two blanks:
+///
+/// - `Icon`    — dir: `C I`, file: `·· I` (two glyph columns; blank keeps icons
+///   aligned). With icons off it collapses to the `Plain` layout.
+/// - `Compact` — dir: `C`, file: `I` (one glyph column). With icons off files
+///   render `··`.
+/// - `Plain`   — dir: `C`, file: `··` (one glyph column, never any icon).
+///
+/// A missing dir (no chevron) renders `··` in that first column in every style.
+fn glyph_column_spans(theme: &Theme, settings: &Settings, row: &Row) -> Vec<Span<'static>> {
+    let is_dir = row.kind.is_dir();
+    let has_chevron = is_dir && !row.missing;
+    let chevron = || {
+        let glyph = if row.expanded {
+            theme.chevron_expanded
+        } else {
+            theme.chevron_collapsed
+        };
+        Span::styled(
+            format!("{glyph} "),
+            Style::default().fg(theme.palette.chevron),
+        )
+    };
+    let icon = || {
+        if !settings.icons {
+            return None;
+        }
+        icons::icon_for(theme, &row.name, row.kind).map(|(glyph, color)| {
+            let icon_color = if row.ignored {
+                theme.palette.ignored
+            } else {
+                // Hues are theme-owned: a tint overrides devicon colours.
+                theme.icon_tint.unwrap_or(color)
+            };
+            Span::styled(format!("{glyph} "), Style::default().fg(icon_color))
+        })
+    };
+    let blank = || Span::raw("  ");
+    let first = || if has_chevron { chevron() } else { blank() };
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(2);
+    match theme.folder_style {
+        // Two glyph columns: the chevron column, then the icon column. Files
+        // blank the chevron column so icons align under directories. When icons
+        // are suppressed the icon column simply vanishes (Plain-like layout).
+        FolderStyle::Icon => {
+            spans.push(first());
+            if let Some(glyph) = icon() {
+                spans.push(glyph);
+            }
+        }
+        // One glyph column: dirs show their chevron (no folder glyph), files
+        // show their icon (or a blank when icons are off).
+        FolderStyle::Compact => {
+            if is_dir {
+                spans.push(first());
+            } else {
+                spans.push(icon().unwrap_or_else(blank));
+            }
+        }
+        // One glyph column, no icons ever.
+        FolderStyle::Plain => spans.push(first()),
+    }
+    spans
+}
+
+/// The right-hand git badge for one row (directory rollups always use the `●`
+/// dot; files follow the theme's `BadgeStyle`).
+fn badge_line(theme: &Theme, row: &Row) -> Line<'static> {
+    match row.status {
+        Some(status) if row.kind.is_dir() && !row.missing => Line::from(Span::styled(
+            theme.badge_dot,
+            Style::default().fg(theme.palette.git.color(status)),
+        )),
+        Some(status) => {
+            let text = match theme.badges {
+                BadgeStyle::Letter => status.badge().to_string(),
+                BadgeStyle::Symbol => theme.badge_dot.to_string(),
+            };
+            Line::from(Span::styled(
+                text,
+                Style::default().fg(theme.palette.git.color(status)),
+            ))
+        }
+        None => Line::default(),
+    }
+}
+
+/// The ancestor-indent columns (`INDENT_WIDTH` each). Renders the theme's
+/// guide glyph, and — for a selected row under `SoftBarAccent` — turns the
+/// outermost column into the left accent bar (`▏`), keeping the total width
+/// identical so `hit_test` geometry is unchanged.
+///
+/// The outermost column (`level 0`) is never a guide: it is the root's spine,
+/// which always runs full-height and is uninformative. It is the selection
+/// accent bar (selected row, `SoftBarAccent`) or two blank spaces. Guides
+/// (`Indent` lines and `Connectors`) begin at `level >= 1`.
+///
+/// A depth-0 (root) row has no indent columns, so its accent bar cannot be
+/// drawn without clobbering the chevron; the soft background still marks it.
+fn indent_spans(theme: &Theme, row: &Row, selected: bool) -> Vec<Span<'static>> {
+    let depth = row.depth;
+    let guide_style = Style::default().fg(theme.palette.guide);
+    let accent = selected && theme.selection == SelectionStyle::SoftBarAccent;
+    // Depth fade (guide_fade = floor): lerp guide -> floor over levels 1..=4,
+    // clamped at the floor so deep trees never lose their guides.
+    let level_style = |level: usize| -> Style {
+        let Some(floor) = theme.guide_fade else {
+            return guide_style;
+        };
+        let (Color::Rgb(r0, g0, b0), Color::Rgb(r1, g1, b1)) = (theme.palette.guide, floor) else {
+            return guide_style;
+        };
+        let t = [0u16, 45, 75, 100][(level.saturating_sub(1)).min(3)];
+        let lerp = |a: u8, b: u8| -> u8 {
+            (u16::from(a) + (u16::from(b).saturating_sub(u16::from(a)) * t / 100).min(255)) as u8
+        };
+        // Components move toward the floor in either direction.
+        let mix = |a: u8, b: u8| -> u8 {
+            if b >= a {
+                lerp(a, b)
+            } else {
+                (u16::from(a) - (u16::from(a) - u16::from(b)) * t / 100) as u8
+            }
+        };
+        Style::default().fg(Color::Rgb(mix(r0, r1), mix(g0, g1), mix(b0, b1)))
+    };
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(depth);
+    for level in 0..depth {
+        // Level 0 is the root's spine: never a guide, just the accent bar or a
+        // blank pad. This keeps the column at INDENT_WIDTH so hit_test is
+        // unaffected.
+        if level == 0 {
+            if accent {
+                spans.push(Span::styled(
+                    "\u{258f}",
+                    Style::default()
+                        .fg(theme.palette.selection_accent)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(" ", guide_style));
+            } else {
+                spans.push(Span::raw("  "));
+            }
+            continue;
+        }
+        let segment = match theme.guides {
+            GuideStyle::None => "  ",
+            GuideStyle::Indent => "\u{2502} ",
+            GuideStyle::Connectors => connector_segment(row, level),
+        };
+        spans.push(Span::styled(segment, level_style(level)));
+    }
+    spans
+}
+
+/// The classic-connector glyph for column `level` (`>= 1`) of a row. The final
+/// column (`level == depth - 1`) is the row's own connector — `└─` if it is the
+/// last sibling, else `├─`. Interior columns draw a `│ ` continuation when the
+/// ancestor at that depth still has a following sibling below, else blank. Each
+/// segment is exactly `INDENT_WIDTH` (2) columns wide.
+fn connector_segment(row: &Row, level: usize) -> &'static str {
+    if level + 1 == row.depth {
+        if row.last_sibling {
+            "\u{2514}\u{2500}" // └─
+        } else {
+            "\u{251c}\u{2500}" // ├─
+        }
+    } else if row.guides.get(level).copied().unwrap_or(false) {
+        "\u{2502} " // │
+    } else {
+        "  "
+    }
 }
 
 /// Renders a row label with dim chain separators and lit match characters
 /// (ADR 0013). A hit without char detail (path-mode in the tree) keeps the
 /// whole-label bold from `name_style`.
-fn label_spans(row: &Row, base: Style) -> Vec<Span<'static>> {
-    let separator = Style::default().fg(SEPARATOR_COLOR);
-    let lit = base.bg(MATCH_BG).fg(MATCH_FG).add_modifier(Modifier::BOLD);
+fn label_spans(theme: &Theme, row: &Row, base: Style) -> Vec<Span<'static>> {
+    let separator = Style::default().fg(theme.palette.separator);
+    let lit = base
+        .bg(theme.palette.match_bg)
+        .fg(theme.palette.match_fg)
+        .add_modifier(Modifier::BOLD);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut run = String::new();
     let mut run_style: Option<Style> = None;
@@ -163,8 +340,8 @@ fn label_spans(row: &Row, base: Style) -> Vec<Span<'static>> {
     spans
 }
 
-fn name_style(row: &Row) -> Style {
-    let base = base_name_style(row);
+fn name_style(theme: &Theme, row: &Row) -> Style {
+    let base = base_name_style(theme, row);
     match row.search {
         Some(true) => base.add_modifier(Modifier::BOLD),
         Some(false) => base.add_modifier(Modifier::DIM),
@@ -172,21 +349,35 @@ fn name_style(row: &Row) -> Style {
     }
 }
 
-fn base_name_style(row: &Row) -> Style {
+fn base_name_style(theme: &Theme, row: &Row) -> Style {
     if row.missing {
         return Style::default()
-            .fg(status_color(FileStatus::Deleted))
+            .fg(theme.palette.git.color(FileStatus::Deleted))
             .add_modifier(Modifier::CROSSED_OUT);
     }
+    // Ignored rows mute via the fg colour step alone — no `DIM` attribute,
+    // which renders inconsistently across terminals and double-dims the colour.
     if row.ignored {
-        return Style::default()
-            .fg(IGNORED_COLOR)
-            .add_modifier(Modifier::DIM);
+        return Style::default().fg(theme.palette.ignored);
     }
-    match row.status {
-        Some(status) => Style::default().fg(status_color(status)),
-        None => Style::default(),
+    let mut style = match row.status {
+        Some(status) => Style::default().fg(theme.palette.git.color(status)),
+        None => {
+            let fg = if row.kind.is_dir() {
+                theme.palette.dir_fg
+            } else {
+                theme.palette.name_fg
+            };
+            match fg {
+                Some(color) => Style::default().fg(color),
+                None => Style::default(),
+            }
+        }
+    };
+    if row.kind.is_dir() && theme.bold_dirs {
+        style = style.add_modifier(Modifier::BOLD);
     }
+    style
 }
 
 /// Resolves a click at terminal coordinates to a row index and whether it hit
@@ -219,9 +410,13 @@ pub fn hit_test(
 mod tests {
     use std::path::PathBuf;
 
-    use birch_core::NodeKind;
+    use birch_core::{NodeKind, ThemeId};
 
     use super::*;
+
+    fn theme() -> Theme {
+        Theme::for_id(ThemeId::Birch)
+    }
 
     fn row(name: &str, kind: NodeKind, depth: usize) -> Row {
         Row {
@@ -238,6 +433,8 @@ mod tests {
             search: None,
             match_indices: Vec::new(),
             annotation: None,
+            guides: Vec::new(),
+            last_sibling: true,
         }
     }
 
@@ -288,29 +485,285 @@ mod tests {
 
     #[test]
     fn label_spans_group_runs_and_dim_separators() {
+        let theme = theme();
         let mut r = row("a/b/cc", NodeKind::Dir, 0);
         r.chain = vec![PathBuf::from("/r/a"), PathBuf::from("/r/a/b")];
         r.match_indices = vec![4, 5]; // "cc"
-        let spans = label_spans(&r, Style::default());
+        let spans = label_spans(&theme, &r, Style::default());
         let texts: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(texts, ["a", "/", "b", "/", "cc"]);
         // Separators are dim-styled, the matched run is lit.
         assert_ne!(spans[1].style, spans[0].style);
         assert_eq!(spans[1].style, spans[3].style);
-        assert_eq!(spans[4].style.bg, Some(MATCH_BG));
-        assert_eq!(spans[4].style.fg, Some(MATCH_FG));
+        assert_eq!(spans[4].style.bg, Some(theme.palette.match_bg));
+        assert_eq!(spans[4].style.fg, Some(theme.palette.match_fg));
         assert!(spans[4].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
     fn name_style_precedence() {
+        let theme = theme();
         let mut r = row("a.rs", NodeKind::File, 0);
-        assert_eq!(name_style(&r), Style::default());
+        // A plain file takes the theme's name_fg (the flagship sets one).
+        assert_eq!(name_style(&theme, &r).fg, theme.palette.name_fg);
         r.status = Some(FileStatus::Modified);
-        assert_eq!(name_style(&r).fg, Some(status_color(FileStatus::Modified)));
+        assert_eq!(
+            name_style(&theme, &r).fg,
+            Some(theme.palette.git.color(FileStatus::Modified))
+        );
         r.ignored = true;
-        assert_eq!(name_style(&r).fg, Some(IGNORED_COLOR));
+        assert_eq!(name_style(&theme, &r).fg, Some(theme.palette.ignored));
         r.missing = true;
-        assert!(name_style(&r).add_modifier.contains(Modifier::CROSSED_OUT));
+        assert!(
+            name_style(&theme, &r)
+                .add_modifier
+                .contains(Modifier::CROSSED_OUT)
+        );
+    }
+
+    #[test]
+    fn directories_are_bold_under_birch() {
+        let theme = theme();
+        let dir = row("src", NodeKind::Dir, 0);
+        assert!(
+            name_style(&theme, &dir)
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        let file = row("a.rs", NodeKind::File, 0);
+        assert!(
+            !name_style(&theme, &file)
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn birch_paints_indent_guides_but_never_the_leftmost_column() {
+        let theme = theme();
+        // A depth-2 row (unselected): level 0 is the root spine (blank), level 1
+        // a dim vertical guide — each two columns wide, so the chevron still
+        // starts at depth * 2.
+        let spans = indent_spans(&theme, &row("d", NodeKind::File, 2), false);
+        let texts: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(texts, ["  ", "\u{2502} "]);
+        // The level-1 guide carries the guide color.
+        assert_eq!(spans[1].style.fg, Some(theme.palette.guide));
+        let width: usize = texts.iter().map(|t| t.chars().count()).sum();
+        assert_eq!(width, 2 * INDENT_WIDTH as usize);
+    }
+
+    #[test]
+    fn birch_selection_paints_a_left_accent_bar() {
+        let theme = theme();
+        // Selected: the outermost indent column becomes the accent bar (▏),
+        // width preserved so hit-test geometry is unchanged.
+        let spans = indent_spans(&theme, &row("deep", NodeKind::File, 1), true);
+        assert_eq!(spans[0].content.as_ref(), "\u{258f}");
+        assert_eq!(spans[0].style.fg, Some(theme.palette.selection_accent));
+        let width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        assert_eq!(width, INDENT_WIDTH as usize);
+
+        // A whole selected row also carries the soft selection background.
+        let r = row("deep", NodeKind::File, 1);
+        let line = row_line(&theme, &Settings::default(), &r, true);
+        assert_eq!(line.style.bg, Some(theme.palette.selection_bg));
+    }
+
+    /// The glyph texts a row renders between the indent and the label, joined.
+    fn glyph_text(theme: &Theme, row: &Row) -> String {
+        glyph_column_spans(theme, &Settings::default(), row)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn icon_style_shows_chevron_then_folder_glyph_files_pad_then_icon() {
+        // birch is FolderStyle::Icon: dir = chevron + folder glyph; file = two
+        // blanks (chevron column) + file icon, so icons align under dirs.
+        let theme = theme();
+        let dir = row("src", NodeKind::Dir, 1);
+        assert_eq!(glyph_text(&theme, &dir), "\u{f460} \u{e5ff} "); // thin chevron + DIR glyph
+
+        let file = row("main.rs", NodeKind::File, 1);
+        assert_eq!(glyph_text(&theme, &file), "  \u{e7a8} "); // ·· + rust icon
+    }
+
+    #[test]
+    fn compact_style_uses_one_glyph_column() {
+        // vscode is FolderStyle::Compact: dir = chevron only (no folder glyph);
+        // file = its icon only. Names sit one column tighter than Icon.
+        let theme = Theme::for_id(ThemeId::Vscode);
+        let dir = row("src", NodeKind::Dir, 1);
+        let dtext = glyph_text(&theme, &dir);
+        assert_eq!(dtext, "\u{eab6} "); // codicon chevron and nothing else
+        assert!(!dtext.contains('\u{e5ff}'), "no folder glyph in compact");
+
+        let file = row("main.rs", NodeKind::File, 1);
+        assert_eq!(glyph_text(&theme, &file), "\u{e7a8} "); // rust icon only
+    }
+
+    #[test]
+    fn plain_style_draws_no_icons() {
+        // plain is FolderStyle::Plain: dir = chevron; file = two blanks; never
+        // an icon.
+        let theme = Theme::for_id(ThemeId::Plain);
+        let dir = row("src", NodeKind::Dir, 1);
+        assert_eq!(glyph_text(&theme, &dir), "\u{25b8} ");
+
+        let file = row("main.rs", NodeKind::File, 1);
+        assert_eq!(glyph_text(&theme, &file), "  ");
+    }
+
+    #[test]
+    fn icon_style_without_icons_setting_collapses_to_plain_layout() {
+        // Icons off: the icon column vanishes (dir = chevron, file = ··).
+        let theme = theme();
+        let settings = Settings {
+            icons: false,
+            ..Settings::default()
+        };
+        let dir = row("src", NodeKind::Dir, 1);
+        let dtext: String = glyph_column_spans(&theme, &settings, &dir)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(dtext, "\u{f460} ");
+        let file = row("main.rs", NodeKind::File, 1);
+        let ftext: String = glyph_column_spans(&theme, &settings, &file)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(ftext, "  ");
+    }
+
+    #[test]
+    fn xcode_uses_thin_disclosure_chevrons() {
+        // Modern macOS sidebars use thin chevrons (Big Sur+), not the old
+        // filled triangles; retro keeps the filled pair.
+        let theme = Theme::for_id(ThemeId::Xcode);
+        let mut collapsed = row("src", NodeKind::Dir, 0);
+        collapsed.expanded = false;
+        // xcode draws Material icons: the md folder-outline glyph.
+        assert_eq!(glyph_text(&theme, &collapsed), "\u{eab6} \u{f0256} ");
+        let mut expanded = row("src", NodeKind::Dir, 0);
+        expanded.expanded = true;
+        assert!(glyph_text(&theme, &expanded).starts_with('\u{eab4}'));
+    }
+
+    #[test]
+    fn missing_dir_pads_the_first_glyph_column_in_every_style() {
+        for id in [ThemeId::Birch, ThemeId::Vscode, ThemeId::Plain] {
+            let theme = Theme::for_id(id);
+            let mut r = row("gone", NodeKind::Dir, 1);
+            r.missing = true;
+            // No chevron: the first glyph column is two blanks regardless.
+            assert!(
+                glyph_text(&theme, &r).starts_with("  "),
+                "theme {id:?} missing dir must pad the chevron column"
+            );
+        }
+    }
+
+    #[test]
+    fn dir_chevron_resolves_at_depth_offset_across_every_folder_style() {
+        // hit_test is theme-independent geometry, but confirm each catalog theme
+        // keeps the chevron as the first glyph column at depth * INDENT_WIDTH so
+        // the chevron zone lines up with what is painted.
+        let view = FlatView::default();
+        let area = Rect::new(0, 0, 40, 10);
+        for id in [
+            ThemeId::Birch,
+            ThemeId::Vscode,
+            ThemeId::Jetbrains,
+            ThemeId::Xcode,
+            ThemeId::Retro,
+            ThemeId::Plain,
+        ] {
+            let theme = Theme::for_id(id);
+            let dir = row("src", NodeKind::Dir, 2);
+            // The rendered glyph columns begin with the chevron glyph.
+            assert!(
+                glyph_text(&theme, &dir).starts_with(theme.chevron_collapsed),
+                "theme {id:?} must paint the chevron first"
+            );
+            // And the chevron zone sits at depth * INDENT_WIDTH.
+            let start = 2 * INDENT_WIDTH; // depth 2
+            let rows = vec![dir];
+            assert_eq!(
+                hit_test(&rows, &view, area, start, 0),
+                Some((0, true)),
+                "theme {id:?} chevron hit at depth offset"
+            );
+            assert_eq!(
+                hit_test(&rows, &view, area, start.saturating_sub(1), 0),
+                Some((0, false)),
+                "theme {id:?} just left of the chevron is not the chevron"
+            );
+        }
+    }
+
+    #[test]
+    fn leftmost_column_is_never_a_guide() {
+        // For every guide style, a depth-2 unselected row leaves level 0 blank
+        // (the root spine is never drawn).
+        for id in [
+            ThemeId::Birch,
+            ThemeId::Vscode,
+            ThemeId::Retro,
+            ThemeId::Plain,
+        ] {
+            let theme = Theme::for_id(id);
+            let mut r = row("d", NodeKind::File, 2);
+            r.guides = vec![true, true];
+            let spans = indent_spans(&theme, &r, false);
+            assert_eq!(spans[0].content.as_ref(), "  ", "theme {id:?}");
+        }
+    }
+
+    #[test]
+    fn connectors_draw_branch_last_and_continuation_glyphs() {
+        let retro = Theme::for_id(ThemeId::Retro);
+        // A depth-2 middle child (not last): level 0 blank, level 1 is its own
+        // connector ├─.
+        let mut middle = row("mid", NodeKind::File, 2);
+        middle.guides = vec![true];
+        middle.last_sibling = false;
+        let texts: Vec<String> = indent_spans(&retro, &middle, false)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(texts, ["  ", "\u{251c}\u{2500}"]);
+
+        // A depth-2 last child: its own connector is └─.
+        let mut last = row("last", NodeKind::File, 2);
+        last.guides = vec![true];
+        last.last_sibling = true;
+        let texts: Vec<String> = indent_spans(&retro, &last, false)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(texts, ["  ", "\u{2514}\u{2500}"]);
+
+        // A depth-3 row under a non-last ancestor: level 0 blank, level 1 draws
+        // the ancestor's │ continuation, level 2 is the row's own connector.
+        let mut deep = row("deep", NodeKind::File, 3);
+        deep.guides = vec![true, true]; // ancestor at depth 2 has a following sibling
+        deep.last_sibling = true;
+        let texts: Vec<String> = indent_spans(&retro, &deep, false)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(texts, ["  ", "\u{2502} ", "\u{2514}\u{2500}"]);
+
+        // Same depth-3 row but the ancestor was the last sibling: continuation
+        // column goes blank.
+        deep.guides = vec![true, false];
+        let texts: Vec<String> = indent_spans(&retro, &deep, false)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(texts, ["  ", "  ", "\u{2514}\u{2500}"]);
     }
 }
