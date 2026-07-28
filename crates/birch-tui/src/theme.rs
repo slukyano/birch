@@ -150,6 +150,9 @@ pub struct Theme {
     /// colour toward `floor` as depth increases (clamped, never dimmer).
     /// `None` keeps a uniform guide colour.
     pub guide_fade: Option<Color>,
+    /// The directory-rollup badge glyph (`●` everywhere modern; the Commander
+    /// uses a CP437 `•` to keep the 1989 conceit).
+    pub badge_dot: &'static str,
     /// The collapsed-directory chevron glyph (e.g. `▸`, or a filled `▶`).
     pub chevron_collapsed: &'static str,
     /// The expanded-directory chevron glyph (e.g. `▾`, or a filled `▼`).
@@ -218,6 +221,7 @@ impl Theme {
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
             // One sage for all icons — file type is the filename's job here.
+            badge_dot: "\u{25cf}",
             icon_tint: Some(Color::Rgb(0x7d, 0x8b, 0x6f)),
             // Depth fade: guides recede into the canopy, clamped at the floor.
             guide_fade: Some(Color::Rgb(0x33, 0x36, 0x2f)),
@@ -263,6 +267,7 @@ impl Theme {
             icons: IconSet::Codicons,
             bold_dirs: false, // real editors do not bold dir names
             folder_style: FolderStyle::Compact,
+            badge_dot: "\u{25cf}",
             icon_tint: None,
             guide_fade: None,
             chevron_collapsed: "\u{eab6}", // codicon chevron-right (VS Code)
@@ -305,6 +310,7 @@ impl Theme {
             icons: IconSet::Devicons,
             bold_dirs: false, // real editors do not bold dir names
             folder_style: FolderStyle::Icon,
+            badge_dot: "\u{25cf}",
             icon_tint: None,
             guide_fade: None,
             chevron_collapsed: "\u{eab6}", // thin chevron (IDEA New UI)
@@ -347,6 +353,7 @@ impl Theme {
             icons: IconSet::Material,
             bold_dirs: false, // real editors do not bold dir names
             folder_style: FolderStyle::Icon,
+            badge_dot: "\u{25cf}",
             icon_tint: None,
             guide_fade: None,
             chevron_collapsed: "\u{eab6}", // thin chevron (modern macOS sidebar)
@@ -388,6 +395,7 @@ impl Theme {
             icons: IconSet::Devicons,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
+            badge_dot: "\u{25cf}",
             icon_tint: Some(Color::Rgb(0xfa, 0xb3, 0x87)), // peach
             guide_fade: None,
             chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
@@ -429,6 +437,7 @@ impl Theme {
             icons: IconSet::Devicons,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
+            badge_dot: "\u{25cf}",
             icon_tint: None,
             guide_fade: None,
             chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
@@ -470,6 +479,7 @@ impl Theme {
             icons: IconSet::Devicons,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
+            badge_dot: "\u{25cf}",
             icon_tint: None,
             guide_fade: None,
             chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
@@ -510,7 +520,8 @@ impl Theme {
             icons: IconSet::Devicons,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
-            icon_tint: None,
+            badge_dot: "\u{25cf}",
+            icon_tint: Some(Color::Rgb(0x81, 0xa1, 0xc1)), // frost
             guide_fade: None,
             chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
             chevron_expanded: "\u{f47c}",  // octicon chevron-down
@@ -551,6 +562,7 @@ impl Theme {
             icons: IconSet::Devicons,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
+            badge_dot: "\u{25cf}",
             icon_tint: Some(Color::Rgb(0xeb, 0xbc, 0xba)), // rose
             guide_fade: None,
             chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
@@ -594,6 +606,7 @@ impl Theme {
             icons: IconSet::None,
             bold_dirs: true,
             folder_style: FolderStyle::Plain,
+            badge_dot: "\u{2022}", // CP437 bullet
             icon_tint: None,
             guide_fade: None,
             chevron_collapsed: "+",
@@ -634,6 +647,7 @@ impl Theme {
             icons: IconSet::None,
             bold_dirs: true,
             folder_style: FolderStyle::Plain,
+            badge_dot: "\u{25cf}",
             icon_tint: None,
             guide_fade: None,
             chevron_collapsed: "\u{25b8}", // ▸

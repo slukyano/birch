@@ -57,8 +57,12 @@ pub fn draw(
     let selected = view.selection.as_deref();
     let mut lines = Vec::with_capacity(viewport);
     let mut badges = Vec::with_capacity(viewport);
-    for row in rows.iter().skip(view.scroll).take(viewport) {
+    let mut selected_visible: Option<u16> = None;
+    for (i, row) in rows.iter().skip(view.scroll).take(viewport).enumerate() {
         let is_selected = selected == Some(row.path.as_path());
+        if is_selected {
+            selected_visible = Some(i as u16);
+        }
         lines.push(row_line(theme, settings, row, is_selected));
         badges.push(badge_line(theme, row));
     }
@@ -79,6 +83,19 @@ pub fn draw(
         Paragraph::new(format!(" {bottom_line}")).style(canvas.add_modifier(Modifier::DIM)),
         status_area,
     );
+
+    // The selection wash runs edge to edge (badge gutter included), so the
+    // accent bar and the wash read as one gesture, not a floating chip.
+    if let Some(i) = selected_visible {
+        let row_rect = Rect {
+            y: tree_area.y + i,
+            height: 1,
+            ..area
+        };
+        frame
+            .buffer_mut()
+            .set_style(row_rect, Style::default().bg(theme.palette.selection_bg));
+    }
 }
 
 /// Builds the styled tree line for one row. Pure function of the row, the
@@ -185,13 +202,13 @@ fn glyph_column_spans(theme: &Theme, settings: &Settings, row: &Row) -> Vec<Span
 fn badge_line(theme: &Theme, row: &Row) -> Line<'static> {
     match row.status {
         Some(status) if row.kind.is_dir() && !row.missing => Line::from(Span::styled(
-            "\u{25cf}",
+            theme.badge_dot,
             Style::default().fg(theme.palette.git.color(status)),
         )),
         Some(status) => {
             let text = match theme.badges {
                 BadgeStyle::Letter => status.badge().to_string(),
-                BadgeStyle::Symbol => "\u{25cf}".to_string(),
+                BadgeStyle::Symbol => theme.badge_dot.to_string(),
             };
             Line::from(Span::styled(
                 text,
