@@ -149,3 +149,8 @@
   prefixes (`052`), `files-first` was removed (`057`), and the research was preserved under
   `docs/research/`. Follow-ups live as `055` (tui encapsulation), `056` (user themes), `058`
   (terminal-palette adaptation). Released as **v0.1.1**.
+* **Two bug reports filed**: `059` — indent guides read as misaligned because non-`Mono` Nerd Font
+  PUA glyphs render wider than one cell and shift right (measured: guide centred at the cell
+  centre, chevron ink +5 px in a 16 px cell; pixel-exact in a `Mono` variant). `060` — `→` is a
+  silent no-op on files and on already-expanded plain directories; it should descend into a folder
+  or advance to the next row, doing nothing only on the tree's last file.

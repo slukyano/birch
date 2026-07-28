@@ -29,6 +29,8 @@ okf_version: "0.1"
 * [Encapsulate visual styles entirely in birch-tui](tasks/055-encapsulate-themes-in-tui.md) - Tech debt: remove ThemeId from core; DI seam so the render layer owns theme identities.
 * [Support user-authored themes](tasks/056-add-user-themes.md) - Future: load custom themes from disk (~/.config/birch/themes/*.toml) beyond the built-in catalog.
 * [Adapt themes to the terminal color scheme](tasks/058-adapt-themes-to-terminal-palette.md) - Themes assume black bg; make them respect the terminal palette (light/dark, base16).
+* [Indent guides look misaligned under wide Nerd Font glyphs](tasks/059-fix-guide-chevron-alignment.md) - Guides are cell-centered but oversized PUA chevrons/icons render right-of-center (~1/3 cell).
+* [→ should always advance — never a silent no-op](tasks/060-right-arrow-always-advances.md) - Right-arrow does nothing on files and expanded plain dirs; should descend or move to the next row.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
 * [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob/regex corpus restriction for picker mode.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
