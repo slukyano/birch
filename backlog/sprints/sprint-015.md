@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Visual design — earn "beautiful"
-status: Implementing
+status: Done
 branch: sprint/015
 tasks:
 - 054-refine-tree-visual-design
@@ -68,16 +68,51 @@ original three-task scope with `031` per maintainer direction).
 
 # Checklist
 
-- [ ] 054-refine-tree-visual-design
-- [ ] 025-add-visual-styles
+- [x] 054-refine-tree-visual-design
+- [x] 025-add-visual-styles
 - [x] 031-add-config-file
 - [x] 052-fix-reveal-symlink-canonicalization
 - [x] 057-remove-files-first
 
 # Open questions
 
-_(none blocking — design decisions captured in the task `## Design` sections and ADRs 0021/0022,
-pending design approval.)_
+_(none — all resolved in chat during design and the design-review rounds.)_
+
+# Sprint summary
+
+The tree is themed. A `Theme` abstraction in `birch-tui` (ADR 0021) parameterizes every paint
+decision — palette, indent-guide style (uniform / depth-fading / classic connectors), selection
+treatment (full-row / soft wash + accent bar, with optional fg swap), chevron glyphs, folder
+layout (`Icon`/`Compact`/`Plain`), badge glyph, and per-theme Nerd Font icon families with a
+tint override — selected by a pure-data `ThemeId` in `birch-core` (the crate stays ratatui-free).
+
+Eleven built-in themes, produced through a research-driven workshop (editor ground truth captured
+from the real apps on-screen and pixel-sampled; glyph codepoints verified from tool sources; TUI
+design synthesis; an eight-app survey) and two rounds of an adversarial design review:
+
+- **`birch`** (default) — "silver bark with a single gold stroke": desaturated silver-green tree,
+  bold bark-silver dirs, one sage tint for all icons, depth-fading indent guides, and a gold
+  accent bar over an edge-to-edge warm wash as the only saturated mark.
+- **`vscode` / `jetbrains` / `xcode`** — measured mimics (layouts, thin chevrons, icon families,
+  selection colors from the real apps).
+- **`mocha` / `tokyonight` / `gruvbox` / `nord` / `rosepine`** — official-palette scheme themes
+  with theme-owned icon hues.
+- **`retro`** — the Commander: canonical CGA `#0000AA` canvas, black-on-cyan cursor bar, white
+  bold dirs, `+`/`-` marks, CP437 bullets, no icons.
+- **`plain`** — ANSI-safe, icon-free fallback.
+
+The config file (ADR 0022) landed at `~/.config/birch/birch.toml` with tolerant TOML parsing in
+core, `--config <path>`, and bidirectional CLI toggles completing the precedence chain
+`default → config → flags → ctl set`. `reveal` now resolves symlinked prefixes (as-given first,
+canonicalize as fallback; `052`), and the `files-first` setting is gone (`057`). The catalog rule
+"semantics global, hues local" is enforced in the engine (`icon_tint`, themed badge glyph — no
+global constant punches through a palette). Research preserved in `docs/research/`; the workshop's
+every variant archived in a grouped PDF (session artifact). Released as **v0.1.1**.
+
+Deliberately not done: guide-ancestry brightening and the header-path ellipsis (cosmetic
+polish), per-theme distinct glyph *sets* beyond the four families (`TODO(025)` note retained) —
+all small; terminal-palette adaptation is `058`, tui-encapsulation tech debt is `055`, user
+themes are `056`.
 
 # Session log
 
@@ -91,3 +126,9 @@ pending design approval.)_
   switched config overrides to **bidirectional flags** (ADR 0022); refined `052` to match the path
   as-given and canonicalize only as a fallback; config bad-input warnings go to stderr, never the
   TUI; dropped `--print-config-path`, added `--config <path>`.
+- Implementation: `057` and `052` first (mechanical), then the theme engine (`054`), config
+  (`031`), and the catalog (`025`) — iterated through research (real-app captures + glyph-source
+  verification + TUI-design and app surveys, seeded `058`) and two adversarial design-review
+  rounds; the flagship rebuilt as "silver bark with a single gold stroke", retro rebuilt as the
+  Commander, the hues-local rule enforced in the engine. Docs: README Themes/Configuration
+  sections, `docs/research/` bundle. Closed out and released as v0.1.1.

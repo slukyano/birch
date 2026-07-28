@@ -134,3 +134,18 @@
   symlink canonicalization), `053` (state-persistence toggle), `054` (tree visual polish) — and
   `025` was rescoped to style presets only. The many small doc commits were squashed before an
   independent diff review and the merge to `main`.
+
+## 2026-07-28
+
+* **Sprint 015 done — themes shipped, v0.1.1 released**: The render layer became a theme system
+  ([ADR 0021](../docs/adr/0021-theme-system.md)) with eleven built-in themes — the `birch`
+  flagship ("silver bark with a single gold stroke", depth-fading guides, sage-tinted icons),
+  editor mimics measured from the real VS Code / IDEA / Xcode on-screen, five official-palette
+  scheme themes, the Commander retro (canonical CGA), and the ANSI-safe `plain` — produced
+  through a research workshop (glyph codepoints verified from tool sources; TUI-design and
+  app-tree surveys) and two adversarial design-review rounds, with the "semantics global, hues
+  local" rule enforced in the engine. The config file landed
+  ([ADR 0022](../docs/adr/0022-config-file.md), `054`/`025`/`031`), `reveal` handles symlinked
+  prefixes (`052`), `files-first` was removed (`057`), and the research was preserved under
+  `docs/research/`. Follow-ups live as `055` (tui encapsulation), `056` (user themes), `058`
+  (terminal-palette adaptation). Released as **v0.1.1**.

@@ -22,15 +22,12 @@ okf_version: "0.1"
 * [Sprint 012 — Publishable repo & process docs](sprints/sprint-012.md) - Done.
 * [Sprint 013 — Installable & CI-guarded](sprints/sprint-013.md) - Done.
 * [Sprint 014 — Docs & publication polish](sprints/sprint-014.md) - Done.
-* [Sprint 015 — Visual design: earn "beautiful"](sprints/sprint-015.md) - Implementing.
+* [Sprint 015 — Visual design: earn "beautiful"](sprints/sprint-015.md) - Done.
 
 # Tasks
 
-* [Add visual styles](tasks/025-add-visual-styles.md) - default / vscode / plain presets (choosable styles only).
-* [Refine the tree's visual design — earn "beautiful"](tasks/054-refine-tree-visual-design.md) - Tree/indent guides, curated palette, selection, spacing — general render-layer polish.
 * [Encapsulate visual styles entirely in birch-tui](tasks/055-encapsulate-themes-in-tui.md) - Tech debt: remove ThemeId from core; DI seam so the render layer owns theme identities.
 * [Support user-authored themes](tasks/056-add-user-themes.md) - Future: load custom themes from disk (~/.config/birch/themes/*.toml) beyond the built-in catalog.
-* [Remove the files-first setting](tasks/057-remove-files-first.md) - Drop the rare files-before-dirs sort toggle; directories always sort first.
 * [Adapt themes to the terminal color scheme](tasks/058-adapt-themes-to-terminal-palette.md) - Themes assume black bg; make them respect the terminal palette (light/dark, base16).
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
 * [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob/regex corpus restriction for picker mode.
@@ -39,7 +36,6 @@ okf_version: "0.1"
 
 * [Add file operations, context menu, and copy paths](tasks/029-add-file-operations.md) - Rename/delete/new inline ops, right-click context menu, hover highlight, copy name/paths over OSC 52.
 * [Add the content search source](tasks/030-add-content-search.md) - Ctrl-F swaps the pane's source to files-with-matches, built on the ripgrep crates.
-* [Add the config file](tasks/031-add-config-file.md) - Personal defaults in ~/.config/birch/birch.toml; CLI flags override; birch-ctl set changes at runtime.
 * [Add the Git Changes source](tasks/032-add-git-changes-source.md) - A third source listing changed files, reusing the source-as-delta-stream interface.
 * [Add the Project View source](tasks/033-add-project-view-source.md) - A curated/virtual tree source, reusing the source-as-delta-stream interface.
 * [Add "Open with…" to the context menu](tasks/034-add-open-with.md) - Choose an alternative open command for the selected node.
@@ -51,7 +47,6 @@ Pre-publication work — repo hygiene, distribution, and process docs. Not produ
 so outside the `docs/design.md` scope fence.
 
 * [Install the contrib adapters on PATH](tasks/051-install-adapters-on-path.md) - brew install puts them in share/birch/, not PATH; make them callable by bare name (or document the path).
-* [Canonicalize symlinks before the reveal root-containment check](tasks/052-fix-reveal-symlink-canonicalization.md) - `birch ctl reveal /tmp/...` wrongly "outside the root" on macOS; bug from the DX review.
 * [Add a flag to disable state persistence](tasks/053-add-state-persistence-toggle.md) - Turn off remembering/restoring expansion/selection/scroll per root.
 
 # Done
@@ -95,5 +90,11 @@ so outside the `docs/design.md` scope fence.
 * [Decide the crates.io publishing story](archive/047-decide-crates-io-publish.md) - Defer crates.io; Homebrew + cargo-install-from-git are the channels (ADR 0020).
 * [Add a changelog](archive/048-add-changelog.md) - CHANGELOG.md (Keep a Changelog), [0.1.0] entry.
 * [Deduplicate and route the documentation set](archive/049-dedup-and-route-docs.md) - Single home per topic across README / AGENTS / CONTRIBUTING / workflow.md / docs/; docs/ + backlog/ as OKF bundles; README overhaul, logo, badges.
+
+* [Refine the tree's visual design — earn "beautiful"](archive/054-refine-tree-visual-design.md) - The theme engine (ADR 0021) + the birch flagship: silver bark, sage icons, depth-fading guides, one gold stroke.
+* [Add visual styles](archive/025-add-visual-styles.md) - Eleven built-in themes: measured editor mimics, official-palette schemes, the Commander, plain; per-theme icon families.
+* [Add the config file](archive/031-add-config-file.md) - ~/.config/birch/birch.toml (ADR 0022): theme + toggles + open-cmd; bidirectional flags; config < flags < ctl set.
+* [Canonicalize symlinks before the reveal root-containment check](archive/052-fix-reveal-symlink-canonicalization.md) - reveal matches as-given, canonicalizes as fallback; /tmp works on macOS.
+* [Remove the files-first setting](archive/057-remove-files-first.md) - Setting, flag, and protocol key dropped; directories always sort first.
 
 # Dropped

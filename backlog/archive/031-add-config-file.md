@@ -2,7 +2,7 @@
 type: Task
 title: Add the config file
 description: Personal defaults in ~/.config/birch/birch.toml; CLI flags override; birch-ctl set changes at runtime.
-status: Designed
+status: Done
 priority: low
 blocked_by:
 - 002-build-core-tree-view

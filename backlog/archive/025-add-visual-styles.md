@@ -2,7 +2,7 @@
 type: Task
 title: Add visual styles
 description: Selectable styles - default (Nerd Font), vscode (no folder icons, compact), plain (no icons, compact).
-status: Designed
+status: Done
 priority: medium
 ---
 
