@@ -198,13 +198,15 @@ impl Theme {
         Theme {
             id: ThemeId::Vscode,
             palette: Palette {
-                name_fg: Some(Color::Rgb(0xd4, 0xd4, 0xd4)),
-                dir_fg: Some(Color::Rgb(0xcf, 0xcf, 0xcf)),
-                // VS Code list active-selection blue (full-row).
-                selection_bg: Color::Rgb(0x09, 0x47, 0x71),
+                // Measured from VS Code Dark Modern: files and dirs share the
+                // same text colour, and dir names are NOT bold.
+                name_fg: Some(Color::Rgb(0xbf, 0xbf, 0xbf)),
+                dir_fg: Some(Color::Rgb(0xbf, 0xbf, 0xbf)),
+                // Dark Modern list.activeSelectionBackground (full-row).
+                selection_bg: Color::Rgb(0x04, 0x39, 0x5e),
                 selection_accent: Color::Rgb(0x00, 0x7a, 0xcc),
-                guide: Color::Rgb(0x40, 0x40, 0x40),
-                chevron: Color::Rgb(0x80, 0x80, 0x80),
+                guide: Color::Rgb(0x58, 0x58, 0x58),   // measured
+                chevron: Color::Rgb(0x8c, 0x8c, 0x8c), // measured
                 separator: Color::Rgb(0x6a, 0x73, 0x7d),
                 ignored: Color::Rgb(0x6a, 0x6a, 0x6a),
                 match_bg: Color::Rgb(0x0e, 0x63, 0x9c),
@@ -222,28 +224,29 @@ impl Theme {
             selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
             icons: IconSet::NerdFont,
-            bold_dirs: true,
+            bold_dirs: false, // real editors do not bold dir names
             folder_style: FolderStyle::Compact,
             chevron_collapsed: "\u{eab6}", // codicon chevron-right (VS Code)
             chevron_expanded: "\u{eab4}",  // codicon chevron-down
         }
     }
 
-    /// JetBrains/Darcula-like: dim indent guides, folder glyphs shown, a full-
-    /// row IDEA-blue selection over a near-neutral warm palette.
+    /// JetBrains New UI-like: no indent guides (the New UI default), folder
+    /// glyphs shown, a full-row New UI-blue selection over cool greys.
     fn jetbrains() -> Theme {
         Theme {
             id: ThemeId::Jetbrains,
             palette: Palette {
-                name_fg: Some(Color::Rgb(0xb8, 0xb4, 0xac)),
-                dir_fg: Some(Color::Rgb(0xd0, 0xcb, 0xc0)),
-                // IDEA full-row selection blue.
-                selection_bg: Color::Rgb(0x21, 0x42, 0x83),
+                // Measured from IDEA New UI dark: cool greys, dirs not bold.
+                name_fg: Some(Color::Rgb(0xbc, 0xbe, 0xc4)),
+                dir_fg: Some(Color::Rgb(0xd1, 0xd3, 0xd9)),
+                // New UI tree selection blue (full-row).
+                selection_bg: Color::Rgb(0x2e, 0x43, 0x6e),
                 selection_accent: Color::Rgb(0xd9, 0x97, 0x5a),
                 guide: Color::Rgb(0x4b, 0x4b, 0x48),
-                chevron: Color::Rgb(0x9a, 0x93, 0x86),
+                chevron: Color::Rgb(0xb5, 0xb8, 0xbe), // measured
                 separator: Color::Rgb(0x80, 0x7a, 0x70),
-                ignored: Color::Rgb(0x6f, 0x6b, 0x63),
+                ignored: Color::Rgb(0x6f, 0x73, 0x7a),
                 match_bg: Color::Rgb(0x32, 0x59, 0x3d),
                 match_fg: Color::Rgb(0xe8, 0xe4, 0xdc),
                 git: GitColors {
@@ -255,11 +258,11 @@ impl Theme {
                     untracked: Color::Rgb(0x6a, 0x87, 0x59),
                 },
             },
-            guides: GuideStyle::Indent,
+            guides: GuideStyle::None,
             selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
             icons: IconSet::NerdFont,
-            bold_dirs: true,
+            bold_dirs: false, // real editors do not bold dir names
             folder_style: FolderStyle::Icon,
             chevron_collapsed: "\u{eab6}", // thin chevron (IDEA New UI)
             chevron_expanded: "\u{eab4}",
@@ -279,7 +282,7 @@ impl Theme {
                 selection_bg: Color::Rgb(0x1e, 0x57, 0xc4),
                 selection_accent: Color::Rgb(0x3f, 0x7a, 0xf6),
                 guide: Color::Rgb(0x3a, 0x41, 0x4b),
-                chevron: Color::Rgb(0x98, 0xa0, 0xab),
+                chevron: Color::Rgb(0xa7, 0xa6, 0xa7), // measured
                 separator: Color::Rgb(0x8a, 0x92, 0x9c),
                 ignored: Color::Rgb(0x6c, 0x75, 0x80),
                 match_bg: Color::Rgb(0x3f, 0x6f, 0xb5),
@@ -297,7 +300,7 @@ impl Theme {
             selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
             icons: IconSet::NerdFont,
-            bold_dirs: true,
+            bold_dirs: false, // real editors do not bold dir names
             folder_style: FolderStyle::Icon,
             chevron_collapsed: "\u{eab6}", // thin chevron (modern macOS sidebar)
             chevron_expanded: "\u{eab4}",
@@ -494,9 +497,10 @@ mod tests {
         assert_eq!(vscode.guides, GuideStyle::Indent);
         assert_eq!(vscode.selection, SelectionStyle::FullRow);
 
-        // jetbrains: indent guides, folder glyphs, full-row selection.
+        // jetbrains: no guides (New UI default), folder glyphs, full-row
+        // selection.
         let jb = Theme::for_id(ThemeId::Jetbrains);
-        assert_eq!(jb.guides, GuideStyle::Indent);
+        assert_eq!(jb.guides, GuideStyle::None);
         assert_eq!(jb.folder_style, FolderStyle::Icon);
         assert_eq!(jb.selection, SelectionStyle::FullRow);
 
