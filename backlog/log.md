@@ -158,3 +158,11 @@
   the current folder's column, which brightens (current folder = the parent for files and collapsed
   dirs, the directory itself when expanded). Covers both indent lines and classic connectors, and
   takes up the guide-ancestry highlighting the theme engine left open.
+* **Search/picker bugs and theme features filed**: `062` (picker mode replaces the tree with a flat
+  match list and disables `→`/`←`, diverging from tree-mode search), `063` (`↑`/`↓` cycle matches in
+  fuzzy-score order — `search.rs` sorts by score — so the selection teleports; should walk tree
+  order), `064` (badge placement as a theme axis + setting: right / left / none, defaults grounded
+  in the measured editors; left placement moves `hit_test` geometry), `065` (a `random` theme), and
+  `066` (animated gradient colours — blocked less by colour maths than by birch having no frame
+  clock; needs an opt-in tick and focus-aware pausing). `027` (picker filter) was expanded with the
+  repeatable-glob spelling, `hide`/`skip` modes, and the folders-navigable-but-not-pickable rule.

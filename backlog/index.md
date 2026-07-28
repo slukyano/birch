@@ -32,8 +32,13 @@ okf_version: "0.1"
 * [Indent guides look misaligned under wide Nerd Font glyphs](tasks/059-fix-guide-chevron-alignment.md) - Guides are cell-centered but oversized PUA chevrons/icons render right-of-center (~1/3 cell).
 * [→ should always advance — never a silent no-op](tasks/060-right-arrow-always-advances.md) - Right-arrow does nothing on files and expanded plain dirs; should descend or move to the next row.
 * [Highlight the active folder's indent guide](tasks/061-active-path-indent-guide.md) - Opt-in theme axis: dim all guides except the current folder's column, which brightens; indent lines and connectors.
+* [Picker mode changes what search does](tasks/062-unify-search-in-pick-mode.md) - A query replaces the tree with a flat list and disables →/←; should match tree-mode search.
+* [Search match cycling jumps around](tasks/063-search-cycles-in-tree-order.md) - ↑/↓ step matches in fuzzy-score order; should walk them in tree order.
+* [Make git badge placement configurable](tasks/064-configurable-badge-placement.md) - Theme axis + setting: right / left / none, with a fitting default per built-in theme.
+* [Add a "random" theme](tasks/065-random-theme.md) - --theme random resolves to a randomly chosen built-in theme at launch.
+* [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
-* [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob/regex corpus restriction for picker mode.
+* [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob pattern(s) + hide/skip mode; folders navigable but only pickable when they match.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
 
 
