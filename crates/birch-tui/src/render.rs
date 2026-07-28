@@ -586,7 +586,8 @@ mod tests {
         let theme = Theme::for_id(ThemeId::Xcode);
         let mut collapsed = row("src", NodeKind::Dir, 0);
         collapsed.expanded = false;
-        assert_eq!(glyph_text(&theme, &collapsed), "\u{eab6} \u{e5ff} ");
+        // xcode draws Material icons: the md folder-outline glyph.
+        assert_eq!(glyph_text(&theme, &collapsed), "\u{eab6} \u{f0256} ");
         let mut expanded = row("src", NodeKind::Dir, 0);
         expanded.expanded = true;
         assert!(glyph_text(&theme, &expanded).starts_with('\u{eab4}'));

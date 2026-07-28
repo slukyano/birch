@@ -134,6 +134,9 @@ enum ThemeArg {
     Xcode,
     Mocha,
     Tokyonight,
+    Gruvbox,
+    Nord,
+    Rosepine,
     Retro,
     Plain,
 }
@@ -148,6 +151,9 @@ impl From<ThemeArg> for birch_core::ThemeId {
             ThemeArg::Xcode => ThemeId::Xcode,
             ThemeArg::Mocha => ThemeId::Mocha,
             ThemeArg::Tokyonight => ThemeId::Tokyonight,
+            ThemeArg::Gruvbox => ThemeId::Gruvbox,
+            ThemeArg::Nord => ThemeId::Nord,
+            ThemeArg::Rosepine => ThemeId::Rosepine,
             ThemeArg::Retro => ThemeId::Retro,
             ThemeArg::Plain => ThemeId::Plain,
         }

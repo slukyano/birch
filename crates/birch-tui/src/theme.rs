@@ -56,13 +56,22 @@ pub enum FolderStyle {
     Plain,
 }
 
-/// Which glyph map supplies per-file icons.
+/// Which glyph family supplies per-file icons. The devicon map (`icons.rs`)
+/// is the base; the other families override a handful of common categories
+/// (folder, generic file, markdown, config, …) with their own Nerd Font
+/// glyphs and fall back to the devicon map for everything else.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IconSet {
     /// No icons at all (e.g. the `plain` theme).
     None,
-    /// The built-in Nerd Font map (`icons.rs`).
-    NerdFont,
+    /// The built-in devicon map — the Nerd Font community default.
+    Devicons,
+    /// VS Code's codicon glyphs (outline, single-weight).
+    Codicons,
+    /// Material Design glyphs (outline variants where available).
+    Material,
+    /// GitHub's octicon glyphs.
+    Octicons,
 }
 
 /// Per-`FileStatus` git colors.
@@ -134,10 +143,10 @@ pub struct Theme {
 
 impl Theme {
     /// Resolves a `ThemeId` to its `Theme`. Every catalog theme is a distinct
-    /// value tuned for a black terminal background (ADR 0021). Icon glyphs are
-    /// shared (the Nerd Font map); themes differentiate via palette, guides,
-    /// folder-icon, and selection. TODO(025): a per-theme icon *palette* /
-    /// blocky retro glyph set would sharpen the emulation further.
+    /// value tuned for a black terminal background (ADR 0021). Themes
+    /// differentiate via palette, guides, folder-icon, selection, and icon
+    /// family (`IconSet`): the devicon map is the shared base, and the
+    /// codicon/material/octicon families override the common categories.
     pub fn for_id(id: ThemeId) -> Theme {
         match id {
             ThemeId::Birch => Theme::birch(),
@@ -146,6 +155,9 @@ impl Theme {
             ThemeId::Xcode => Theme::xcode(),
             ThemeId::Mocha => Theme::mocha(),
             ThemeId::Tokyonight => Theme::tokyonight(),
+            ThemeId::Gruvbox => Theme::gruvbox(),
+            ThemeId::Nord => Theme::nord(),
+            ThemeId::Rosepine => Theme::rosepine(),
             ThemeId::Retro => Theme::retro(),
             ThemeId::Plain => Theme::plain(),
         }
@@ -183,7 +195,7 @@ impl Theme {
             guides: GuideStyle::Indent,
             selection: SelectionStyle::SoftBarAccent,
             badges: BadgeStyle::Letter,
-            icons: IconSet::NerdFont,
+            icons: IconSet::Devicons,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
             chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
@@ -223,7 +235,7 @@ impl Theme {
             guides: GuideStyle::Indent,
             selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
-            icons: IconSet::NerdFont,
+            icons: IconSet::Codicons,
             bold_dirs: false, // real editors do not bold dir names
             folder_style: FolderStyle::Compact,
             chevron_collapsed: "\u{eab6}", // codicon chevron-right (VS Code)
@@ -261,7 +273,7 @@ impl Theme {
             guides: GuideStyle::None,
             selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
-            icons: IconSet::NerdFont,
+            icons: IconSet::Devicons,
             bold_dirs: false, // real editors do not bold dir names
             folder_style: FolderStyle::Icon,
             chevron_collapsed: "\u{eab6}", // thin chevron (IDEA New UI)
@@ -299,7 +311,7 @@ impl Theme {
             guides: GuideStyle::None,
             selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
-            icons: IconSet::NerdFont,
+            icons: IconSet::Material,
             bold_dirs: false, // real editors do not bold dir names
             folder_style: FolderStyle::Icon,
             chevron_collapsed: "\u{eab6}", // thin chevron (modern macOS sidebar)
@@ -336,7 +348,7 @@ impl Theme {
             guides: GuideStyle::Indent,
             selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
-            icons: IconSet::NerdFont,
+            icons: IconSet::Devicons,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
             chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
@@ -373,7 +385,117 @@ impl Theme {
             guides: GuideStyle::Indent,
             selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
-            icons: IconSet::NerdFont,
+            icons: IconSet::Devicons,
+            bold_dirs: true,
+            folder_style: FolderStyle::Icon,
+            chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
+            chevron_expanded: "\u{f47c}",  // octicon chevron-down
+        }
+    }
+
+    /// Gruvbox (dark): the warm retro scheme. Yellow bold dirs — the gruvbox
+    /// signature, not blue — bg1 full-row selection, orange accent — values
+    /// from the official gruvbox palette.
+    fn gruvbox() -> Theme {
+        Theme {
+            id: ThemeId::Gruvbox,
+            palette: Palette {
+                name_fg: Some(Color::Rgb(0xeb, 0xdb, 0xb2)),    // fg1
+                dir_fg: Some(Color::Rgb(0xfa, 0xbd, 0x2f)),     // bright yellow
+                selection_bg: Color::Rgb(0x3c, 0x38, 0x36),     // bg1
+                selection_accent: Color::Rgb(0xfe, 0x80, 0x19), // bright orange
+                guide: Color::Rgb(0x50, 0x49, 0x45),            // bg2
+                chevron: Color::Rgb(0x92, 0x83, 0x74),          // gray
+                separator: Color::Rgb(0x92, 0x83, 0x74),
+                ignored: Color::Rgb(0x92, 0x83, 0x74),
+                match_bg: Color::Rgb(0xfa, 0xbd, 0x2f), // bright yellow
+                match_fg: Color::Rgb(0x28, 0x28, 0x28), // bg0
+                git: GitColors {
+                    conflicted: Color::Rgb(0xfb, 0x49, 0x34), // bright red
+                    deleted: Color::Rgb(0xfb, 0x49, 0x34),
+                    renamed: Color::Rgb(0x8e, 0xc0, 0x7c), // bright aqua
+                    modified: Color::Rgb(0xfa, 0xbd, 0x2f), // bright yellow
+                    added: Color::Rgb(0xb8, 0xbb, 0x26),   // bright green
+                    untracked: Color::Rgb(0x8e, 0xc0, 0x7c), // bright aqua
+                },
+            },
+            guides: GuideStyle::Indent,
+            selection: SelectionStyle::FullRow,
+            badges: BadgeStyle::Letter,
+            icons: IconSet::Devicons,
+            bold_dirs: true,
+            folder_style: FolderStyle::Icon,
+            chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
+            chevron_expanded: "\u{f47c}",  // octicon chevron-down
+        }
+    }
+
+    /// Nord: the arctic, calm blue-grey scheme. Frost-cyan bold dirs, nord2
+    /// full-row selection — values from the official nord palette.
+    fn nord() -> Theme {
+        Theme {
+            id: ThemeId::Nord,
+            palette: Palette {
+                name_fg: Some(Color::Rgb(0xd8, 0xde, 0xe9)), // nord4 (snow storm)
+                dir_fg: Some(Color::Rgb(0x88, 0xc0, 0xd0)),  // nord8 (frost cyan)
+                selection_bg: Color::Rgb(0x43, 0x4c, 0x5e),  // nord2
+                selection_accent: Color::Rgb(0x88, 0xc0, 0xd0), // nord8
+                guide: Color::Rgb(0x4c, 0x56, 0x6a),         // nord3
+                chevron: Color::Rgb(0x61, 0x6e, 0x88),       // nord3 bright (comments)
+                separator: Color::Rgb(0x61, 0x6e, 0x88),
+                ignored: Color::Rgb(0x61, 0x6e, 0x88),
+                match_bg: Color::Rgb(0xeb, 0xcb, 0x8b), // nord13 (yellow)
+                match_fg: Color::Rgb(0x2e, 0x34, 0x40), // nord0
+                git: GitColors {
+                    conflicted: Color::Rgb(0xbf, 0x61, 0x6a), // nord11 (red)
+                    deleted: Color::Rgb(0xbf, 0x61, 0x6a),
+                    renamed: Color::Rgb(0x8f, 0xbc, 0xbb), // nord7 (frost teal)
+                    modified: Color::Rgb(0xeb, 0xcb, 0x8b), // nord13 (yellow)
+                    added: Color::Rgb(0xa3, 0xbe, 0x8c),   // nord14 (green)
+                    untracked: Color::Rgb(0xa3, 0xbe, 0x8c),
+                },
+            },
+            guides: GuideStyle::Indent,
+            selection: SelectionStyle::FullRow,
+            badges: BadgeStyle::Letter,
+            icons: IconSet::Devicons,
+            bold_dirs: true,
+            folder_style: FolderStyle::Icon,
+            chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
+            chevron_expanded: "\u{f47c}",  // octicon chevron-down
+        }
+    }
+
+    /// Rosé Pine: the elegant dusk scheme. Iris-violet bold dirs, rose accent,
+    /// highlight-med full-row selection — values from the official rosé pine
+    /// palette.
+    fn rosepine() -> Theme {
+        Theme {
+            id: ThemeId::Rosepine,
+            palette: Palette {
+                name_fg: Some(Color::Rgb(0xe0, 0xde, 0xf4)),    // text
+                dir_fg: Some(Color::Rgb(0xc4, 0xa7, 0xe7)),     // iris
+                selection_bg: Color::Rgb(0x40, 0x3d, 0x52),     // highlight med
+                selection_accent: Color::Rgb(0xeb, 0xbc, 0xba), // rose
+                guide: Color::Rgb(0x40, 0x3d, 0x52),            // highlight med
+                chevron: Color::Rgb(0x90, 0x8c, 0xaa),          // subtle
+                separator: Color::Rgb(0x90, 0x8c, 0xaa),
+                ignored: Color::Rgb(0x6e, 0x6a, 0x86),  // muted
+                match_bg: Color::Rgb(0xf6, 0xc1, 0x77), // gold
+                match_fg: Color::Rgb(0x19, 0x17, 0x24), // base
+                git: GitColors {
+                    conflicted: Color::Rgb(0xeb, 0x6f, 0x92), // love
+                    deleted: Color::Rgb(0xeb, 0x6f, 0x92),
+                    renamed: Color::Rgb(0x9c, 0xcf, 0xd8), // foam
+                    modified: Color::Rgb(0xf6, 0xc1, 0x77), // gold
+                    added: Color::Rgb(0x31, 0x74, 0x8f),   // pine
+                    untracked: Color::Rgb(0x9c, 0xcf, 0xd8), // foam
+                },
+            },
+            guides: GuideStyle::Indent,
+            selection: SelectionStyle::FullRow,
+            badges: BadgeStyle::Letter,
+            icons: IconSet::Devicons,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
             chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
@@ -410,7 +532,7 @@ impl Theme {
             guides: GuideStyle::Connectors,
             selection: SelectionStyle::FullRow,
             badges: BadgeStyle::Letter,
-            icons: IconSet::NerdFont,
+            icons: IconSet::Devicons,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
             chevron_collapsed: "\u{25b6}", // ▶ (filled)
@@ -468,6 +590,9 @@ mod tests {
             ThemeId::Xcode,
             ThemeId::Mocha,
             ThemeId::Tokyonight,
+            ThemeId::Gruvbox,
+            ThemeId::Nord,
+            ThemeId::Rosepine,
             ThemeId::Retro,
             ThemeId::Plain,
         ] {
@@ -480,7 +605,7 @@ mod tests {
         let birch = Theme::for_id(ThemeId::Birch);
         assert_eq!(birch.guides, GuideStyle::Indent);
         assert_eq!(birch.selection, SelectionStyle::SoftBarAccent);
-        assert_eq!(birch.icons, IconSet::NerdFont);
+        assert_eq!(birch.icons, IconSet::Devicons);
 
         let plain = Theme::for_id(ThemeId::Plain);
         assert_eq!(plain.guides, GuideStyle::Connectors);
@@ -516,23 +641,50 @@ mod tests {
         // vscode uses its own codicon twistie — the exact VS Code glyph.
         assert_eq!(vscode.chevron_collapsed, "\u{eab6}");
 
-        // mocha / tokyonight: palette themes — blue bold dirs, surface-level
-        // full-row selection, indent guides, thin octicon chevrons.
-        for id in [ThemeId::Mocha, ThemeId::Tokyonight] {
+        // Icon families: vscode draws codicons, xcode material glyphs; the
+        // rest of the catalog stays on the devicon base map.
+        assert_eq!(vscode.icons, IconSet::Codicons);
+        assert_eq!(xcode.icons, IconSet::Material);
+        assert_eq!(jb.icons, IconSet::Devicons);
+
+        // mocha / tokyonight / gruvbox / nord / rosepine: palette themes —
+        // colored bold dirs, surface-level full-row selection, indent guides,
+        // thin octicon chevrons, devicon glyphs.
+        for id in [
+            ThemeId::Mocha,
+            ThemeId::Tokyonight,
+            ThemeId::Gruvbox,
+            ThemeId::Nord,
+            ThemeId::Rosepine,
+        ] {
             let t = Theme::for_id(id);
             assert_eq!(t.guides, GuideStyle::Indent);
             assert_eq!(t.selection, SelectionStyle::FullRow);
+            assert_eq!(t.badges, BadgeStyle::Letter);
             assert_eq!(t.folder_style, FolderStyle::Icon);
+            assert_eq!(t.icons, IconSet::Devicons);
+            assert!(t.bold_dirs);
             assert_eq!(t.chevron_collapsed, "\u{f460}"); // octicon thin chevron
+            assert_eq!(t.chevron_expanded, "\u{f47c}");
             assert!(t.palette.dir_fg.is_some());
         }
+
+        // The palette themes carry deliberately distinct dir colours (gruvbox
+        // yellow, nord frost cyan, rosé pine iris — not blue-everywhere).
+        let dir_colors: Vec<_> = [ThemeId::Gruvbox, ThemeId::Nord, ThemeId::Rosepine]
+            .into_iter()
+            .map(|id| Theme::for_id(id).palette.dir_fg)
+            .collect();
+        assert_eq!(dir_colors[0], Some(Color::Rgb(0xfa, 0xbd, 0x2f)));
+        assert_eq!(dir_colors[1], Some(Color::Rgb(0x88, 0xc0, 0xd0)));
+        assert_eq!(dir_colors[2], Some(Color::Rgb(0xc4, 0xa7, 0xe7)));
 
         // retro: classic connectors, full-row selection, filled triangles (the
         // one deliberately legacy chevron in the catalog).
         let retro = Theme::for_id(ThemeId::Retro);
         assert_eq!(retro.guides, GuideStyle::Connectors);
         assert_eq!(retro.selection, SelectionStyle::FullRow);
-        assert_eq!(retro.icons, IconSet::NerdFont);
+        assert_eq!(retro.icons, IconSet::Devicons);
         assert_eq!(retro.chevron_collapsed, "\u{25b6}"); // ▶ filled
 
         // plain: no icons at all (Plain folder style), width-safe ▸ chevron.
