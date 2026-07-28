@@ -23,6 +23,7 @@ okf_version: "0.1"
 * [Sprint 013 — Installable & CI-guarded](sprints/sprint-013.md) - Done.
 * [Sprint 014 — Docs & publication polish](sprints/sprint-014.md) - Done.
 * [Sprint 015 — Visual design: earn "beautiful"](sprints/sprint-015.md) - Done.
+* [Sprint 016 — Navigation & search feel](sprints/sprint-016.md) - Designing.
 
 # Tasks
 
