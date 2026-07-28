@@ -296,10 +296,10 @@ fn base_name_style(theme: &Theme, row: &Row) -> Style {
             .fg(theme.palette.git.color(FileStatus::Deleted))
             .add_modifier(Modifier::CROSSED_OUT);
     }
+    // Ignored rows mute via the fg colour step alone — no `DIM` attribute,
+    // which renders inconsistently across terminals and double-dims the colour.
     if row.ignored {
-        return Style::default()
-            .fg(theme.palette.ignored)
-            .add_modifier(Modifier::DIM);
+        return Style::default().fg(theme.palette.ignored);
     }
     let mut style = match row.status {
         Some(status) => Style::default().fg(theme.palette.git.color(status)),
@@ -525,7 +525,7 @@ mod tests {
         // blanks (chevron column) + file icon, so icons align under dirs.
         let theme = theme();
         let dir = row("src", NodeKind::Dir, 1);
-        assert_eq!(glyph_text(&theme, &dir), "\u{25b8} \u{e5ff} "); // ▸ + DIR glyph
+        assert_eq!(glyph_text(&theme, &dir), "\u{f460} \u{e5ff} "); // thin chevron + DIR glyph
 
         let file = row("main.rs", NodeKind::File, 1);
         assert_eq!(glyph_text(&theme, &file), "  \u{e7a8} "); // ·· + rust icon
@@ -538,7 +538,7 @@ mod tests {
         let theme = Theme::for_id(ThemeId::Vscode);
         let dir = row("src", NodeKind::Dir, 1);
         let dtext = glyph_text(&theme, &dir);
-        assert_eq!(dtext, "\u{25b8} "); // ▸ and nothing else
+        assert_eq!(dtext, "\u{eab6} "); // codicon chevron and nothing else
         assert!(!dtext.contains('\u{e5ff}'), "no folder glyph in compact");
 
         let file = row("main.rs", NodeKind::File, 1);
@@ -570,7 +570,7 @@ mod tests {
             .iter()
             .map(|s| s.content.to_string())
             .collect();
-        assert_eq!(dtext, "\u{25b8} ");
+        assert_eq!(dtext, "\u{f460} ");
         let file = row("main.rs", NodeKind::File, 1);
         let ftext: String = glyph_column_spans(&theme, &settings, &file)
             .iter()
@@ -580,14 +580,16 @@ mod tests {
     }
 
     #[test]
-    fn xcode_uses_filled_disclosure_triangles() {
+    fn xcode_uses_thin_disclosure_chevrons() {
+        // Modern macOS sidebars use thin chevrons (Big Sur+), not the old
+        // filled triangles; retro keeps the filled pair.
         let theme = Theme::for_id(ThemeId::Xcode);
         let mut collapsed = row("src", NodeKind::Dir, 0);
         collapsed.expanded = false;
-        assert_eq!(glyph_text(&theme, &collapsed), "\u{25b6} \u{e5ff} "); // ▶
+        assert_eq!(glyph_text(&theme, &collapsed), "\u{eab6} \u{e5ff} ");
         let mut expanded = row("src", NodeKind::Dir, 0);
         expanded.expanded = true;
-        assert!(glyph_text(&theme, &expanded).starts_with('\u{25bc}')); // ▼
+        assert!(glyph_text(&theme, &expanded).starts_with('\u{eab4}'));
     }
 
     #[test]

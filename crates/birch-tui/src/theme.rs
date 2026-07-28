@@ -144,6 +144,8 @@ impl Theme {
             ThemeId::Vscode => Theme::vscode(),
             ThemeId::Jetbrains => Theme::jetbrains(),
             ThemeId::Xcode => Theme::xcode(),
+            ThemeId::Mocha => Theme::mocha(),
+            ThemeId::Tokyonight => Theme::tokyonight(),
             ThemeId::Retro => Theme::retro(),
             ThemeId::Plain => Theme::plain(),
         }
@@ -156,7 +158,9 @@ impl Theme {
             id: ThemeId::Birch,
             palette: Palette {
                 name_fg: None,
-                dir_fg: None,
+                // Blue + bold directories — the near-universal file-browser
+                // signature (yazi, nvim-tree, LS_COLORS tradition).
+                dir_fg: Some(Color::Rgb(0x7a, 0xa2, 0xf7)),
                 // Softer / lower-contrast than the previous #2f3b54 full-row fill.
                 selection_bg: Color::Rgb(0x28, 0x30, 0x40),
                 // Birch green, echoing the logo.
@@ -182,8 +186,8 @@ impl Theme {
             icons: IconSet::NerdFont,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
-            chevron_collapsed: "\u{25b8}", // ▸
-            chevron_expanded: "\u{25be}",  // ▾
+            chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
+            chevron_expanded: "\u{f47c}",  // octicon chevron-down
         }
     }
 
@@ -220,8 +224,8 @@ impl Theme {
             icons: IconSet::NerdFont,
             bold_dirs: true,
             folder_style: FolderStyle::Compact,
-            chevron_collapsed: "\u{25b8}", // ▸
-            chevron_expanded: "\u{25be}",  // ▾
+            chevron_collapsed: "\u{eab6}", // codicon chevron-right (VS Code)
+            chevron_expanded: "\u{eab4}",  // codicon chevron-down
         }
     }
 
@@ -257,12 +261,13 @@ impl Theme {
             icons: IconSet::NerdFont,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
-            chevron_collapsed: "\u{25b8}", // ▸
-            chevron_expanded: "\u{25be}",  // ▾
+            chevron_collapsed: "\u{eab6}", // thin chevron (IDEA New UI)
+            chevron_expanded: "\u{eab4}",
         }
     }
 
-    /// Xcode-like: no guides, folder glyphs shown, filled disclosure triangles,
+    /// Xcode-like: no guides, folder glyphs shown, thin disclosure chevrons
+    /// (the modern macOS sidebar look — filled triangles died with Big Sur),
     /// a full-row macOS-blue selection over a lighter, cooler palette.
     fn xcode() -> Theme {
         Theme {
@@ -294,8 +299,82 @@ impl Theme {
             icons: IconSet::NerdFont,
             bold_dirs: true,
             folder_style: FolderStyle::Icon,
-            chevron_collapsed: "\u{25b6}", // ▶ (filled)
-            chevron_expanded: "\u{25bc}",  // ▼ (filled)
+            chevron_collapsed: "\u{eab6}", // thin chevron (modern macOS sidebar)
+            chevron_expanded: "\u{eab4}",
+        }
+    }
+
+    /// Catppuccin Mocha: the pastel-on-violet-grey community favourite. Blue
+    /// bold dirs, surface0 full-row selection, lavender accent, overlay-level
+    /// guides — values from the official mocha palette.
+    fn mocha() -> Theme {
+        Theme {
+            id: ThemeId::Mocha,
+            palette: Palette {
+                name_fg: None,
+                dir_fg: Some(Color::Rgb(0x89, 0xb4, 0xfa)), // blue
+                selection_bg: Color::Rgb(0x31, 0x32, 0x44), // surface0
+                selection_accent: Color::Rgb(0xb4, 0xbe, 0xfe), // lavender
+                guide: Color::Rgb(0x45, 0x47, 0x5a),        // surface1
+                chevron: Color::Rgb(0x7f, 0x84, 0x9c),      // overlay1
+                separator: Color::Rgb(0x7f, 0x84, 0x9c),
+                ignored: Color::Rgb(0x6c, 0x70, 0x86), // overlay0
+                match_bg: Color::Rgb(0xf9, 0xe2, 0xaf), // yellow
+                match_fg: Color::Rgb(0x11, 0x11, 0x1b), // crust
+                git: GitColors {
+                    conflicted: Color::Rgb(0xeb, 0xa0, 0xac), // maroon
+                    deleted: Color::Rgb(0xf3, 0x8b, 0xa8),    // red
+                    renamed: Color::Rgb(0x89, 0xb4, 0xfa),    // blue
+                    modified: Color::Rgb(0xf9, 0xe2, 0xaf),   // yellow
+                    added: Color::Rgb(0xa6, 0xe3, 0xa1),      // green
+                    untracked: Color::Rgb(0x94, 0xe2, 0xd5),  // teal
+                },
+            },
+            guides: GuideStyle::Indent,
+            selection: SelectionStyle::FullRow,
+            badges: BadgeStyle::Letter,
+            icons: IconSet::NerdFont,
+            bold_dirs: true,
+            folder_style: FolderStyle::Icon,
+            chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
+            chevron_expanded: "\u{f47c}",  // octicon chevron-down
+        }
+    }
+
+    /// Tokyo Night: the cool blue-violet scheme. Blue bold dirs, bg-highlight
+    /// full-row selection, comment-colour muting — values from the official
+    /// tokyonight palette.
+    fn tokyonight() -> Theme {
+        Theme {
+            id: ThemeId::Tokyonight,
+            palette: Palette {
+                name_fg: None,
+                dir_fg: Some(Color::Rgb(0x7a, 0xa2, 0xf7)), // blue
+                selection_bg: Color::Rgb(0x29, 0x2e, 0x42), // bg_highlight
+                selection_accent: Color::Rgb(0x7a, 0xa2, 0xf7),
+                guide: Color::Rgb(0x3b, 0x42, 0x61),
+                chevron: Color::Rgb(0x56, 0x5f, 0x89), // comment
+                separator: Color::Rgb(0x56, 0x5f, 0x89),
+                ignored: Color::Rgb(0x56, 0x5f, 0x89),
+                match_bg: Color::Rgb(0xe0, 0xaf, 0x68), // orange-yellow
+                match_fg: Color::Rgb(0x1a, 0x1b, 0x26), // bg
+                git: GitColors {
+                    conflicted: Color::Rgb(0xf7, 0x76, 0x8e), // red
+                    deleted: Color::Rgb(0xdb, 0x4b, 0x4b),
+                    renamed: Color::Rgb(0x7d, 0xcf, 0xff), // cyan
+                    modified: Color::Rgb(0xe0, 0xaf, 0x68),
+                    added: Color::Rgb(0x9e, 0xce, 0x6a), // green
+                    untracked: Color::Rgb(0x73, 0xda, 0xca), // teal
+                },
+            },
+            guides: GuideStyle::Indent,
+            selection: SelectionStyle::FullRow,
+            badges: BadgeStyle::Letter,
+            icons: IconSet::NerdFont,
+            bold_dirs: true,
+            folder_style: FolderStyle::Icon,
+            chevron_collapsed: "\u{f460}", // octicon chevron-right (thin)
+            chevron_expanded: "\u{f47c}",  // octicon chevron-down
         }
     }
 
@@ -384,6 +463,8 @@ mod tests {
             ThemeId::Vscode,
             ThemeId::Jetbrains,
             ThemeId::Xcode,
+            ThemeId::Mocha,
+            ThemeId::Tokyonight,
             ThemeId::Retro,
             ThemeId::Plain,
         ] {
@@ -419,31 +500,48 @@ mod tests {
         assert_eq!(jb.folder_style, FolderStyle::Icon);
         assert_eq!(jb.selection, SelectionStyle::FullRow);
 
-        // xcode: no guides, full-row selection, filled disclosure triangles.
+        // xcode: no guides, full-row selection, thin chevrons (modern macOS —
+        // the filled triangle is the pre-Big Sur look).
         let xcode = Theme::for_id(ThemeId::Xcode);
         assert_eq!(xcode.guides, GuideStyle::None);
         assert_eq!(xcode.folder_style, FolderStyle::Icon);
         assert_eq!(xcode.selection, SelectionStyle::FullRow);
-        assert_eq!(xcode.chevron_collapsed, "\u{25b6}"); // ▶ filled
-        assert_eq!(xcode.chevron_expanded, "\u{25bc}"); // ▼ filled
+        assert_eq!(xcode.chevron_collapsed, "\u{eab6}"); // codicon thin chevron
+        assert_eq!(xcode.chevron_expanded, "\u{eab4}");
 
-        // retro: classic connectors, full-row selection, filled triangles.
+        // vscode uses its own codicon twistie — the exact VS Code glyph.
+        assert_eq!(vscode.chevron_collapsed, "\u{eab6}");
+
+        // mocha / tokyonight: palette themes — blue bold dirs, surface-level
+        // full-row selection, indent guides, thin octicon chevrons.
+        for id in [ThemeId::Mocha, ThemeId::Tokyonight] {
+            let t = Theme::for_id(id);
+            assert_eq!(t.guides, GuideStyle::Indent);
+            assert_eq!(t.selection, SelectionStyle::FullRow);
+            assert_eq!(t.folder_style, FolderStyle::Icon);
+            assert_eq!(t.chevron_collapsed, "\u{f460}"); // octicon thin chevron
+            assert!(t.palette.dir_fg.is_some());
+        }
+
+        // retro: classic connectors, full-row selection, filled triangles (the
+        // one deliberately legacy chevron in the catalog).
         let retro = Theme::for_id(ThemeId::Retro);
         assert_eq!(retro.guides, GuideStyle::Connectors);
         assert_eq!(retro.selection, SelectionStyle::FullRow);
         assert_eq!(retro.icons, IconSet::NerdFont);
-        assert_eq!(retro.chevron_collapsed, "\u{25b6}");
+        assert_eq!(retro.chevron_collapsed, "\u{25b6}"); // ▶ filled
 
-        // plain: no icons at all (Plain folder style).
+        // plain: no icons at all (Plain folder style), width-safe ▸ chevron.
         let plain = Theme::for_id(ThemeId::Plain);
         assert_eq!(plain.folder_style, FolderStyle::Plain);
+        assert_eq!(plain.chevron_collapsed, "\u{25b8}");
 
         // The catalog is not a single theme wearing different ids: at least the
         // guide/folder-style/chevron axes vary across the set.
         assert_ne!(vscode.folder_style, jb.folder_style);
         assert_ne!(jb.folder_style, plain.folder_style);
         assert_ne!(xcode.guides, retro.guides);
-        assert_ne!(birch_default_chevron(), xcode.chevron_collapsed);
+        assert_ne!(retro.chevron_collapsed, birch_default_chevron());
     }
 
     fn birch_default_chevron() -> &'static str {

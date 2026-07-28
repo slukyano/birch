@@ -132,6 +132,8 @@ enum ThemeArg {
     Vscode,
     Jetbrains,
     Xcode,
+    Mocha,
+    Tokyonight,
     Retro,
     Plain,
 }
@@ -144,6 +146,8 @@ impl From<ThemeArg> for birch_core::ThemeId {
             ThemeArg::Vscode => ThemeId::Vscode,
             ThemeArg::Jetbrains => ThemeId::Jetbrains,
             ThemeArg::Xcode => ThemeId::Xcode,
+            ThemeArg::Mocha => ThemeId::Mocha,
+            ThemeArg::Tokyonight => ThemeId::Tokyonight,
             ThemeArg::Retro => ThemeId::Retro,
             ThemeArg::Plain => ThemeId::Plain,
         }

@@ -17,6 +17,8 @@ pub enum ThemeId {
     Vscode,
     Jetbrains,
     Xcode,
+    Mocha,
+    Tokyonight,
     Retro,
     Plain,
 }
@@ -28,6 +30,8 @@ impl std::fmt::Display for ThemeId {
             ThemeId::Vscode => "vscode",
             ThemeId::Jetbrains => "jetbrains",
             ThemeId::Xcode => "xcode",
+            ThemeId::Mocha => "mocha",
+            ThemeId::Tokyonight => "tokyonight",
             ThemeId::Retro => "retro",
             ThemeId::Plain => "plain",
         })
@@ -43,6 +47,8 @@ impl std::str::FromStr for ThemeId {
             "vscode" => Ok(ThemeId::Vscode),
             "jetbrains" => Ok(ThemeId::Jetbrains),
             "xcode" => Ok(ThemeId::Xcode),
+            "mocha" => Ok(ThemeId::Mocha),
+            "tokyonight" => Ok(ThemeId::Tokyonight),
             "retro" => Ok(ThemeId::Retro),
             "plain" => Ok(ThemeId::Plain),
             other => Err(format!("unknown theme: {other}")),
@@ -107,6 +113,8 @@ mod tests {
             ThemeId::Vscode,
             ThemeId::Jetbrains,
             ThemeId::Xcode,
+            ThemeId::Mocha,
+            ThemeId::Tokyonight,
             ThemeId::Retro,
             ThemeId::Plain,
         ] {
