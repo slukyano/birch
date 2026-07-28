@@ -63,11 +63,15 @@ pub fn draw(
         badges.push(badge_line(theme, row));
     }
     // A theme with an app_bg (the Commander's DOS blue) paints its whole
-    // canvas; every paragraph carries the fill so empty cells match.
+    // canvas; the area is filled first so the badge gutter matches, and every
+    // paragraph carries the fill so empty cells match.
     let canvas = match theme.palette.app_bg {
         Some(bg) => Style::default().bg(bg),
         None => Style::default(),
     };
+    if theme.palette.app_bg.is_some() {
+        frame.buffer_mut().set_style(area, canvas);
+    }
     frame.render_widget(Paragraph::new(lines).style(canvas), tree_area);
     frame.render_widget(Paragraph::new(badges).style(canvas), badge_area);
 
