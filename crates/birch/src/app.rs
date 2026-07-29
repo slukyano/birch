@@ -1781,6 +1781,33 @@ mod tests {
     }
 
     #[test]
+    fn right_advances_over_dim_rows_under_a_search() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("aa.md", NodeKind::File),
+                ("skip.txt", NodeKind::File),
+                ("zz.md", NodeKind::File),
+            ],
+        );
+        h.app.index = Some(index_of(&[("aa.md", false), ("zz.md", false)]));
+        h.app.search_push('m');
+
+        // Anchored on the first match; `→` advances to the next *live* row,
+        // stepping over the dim one between them (060 + ADR 0023).
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/aa.md")));
+        let rows = h.app.rows();
+        h.app.view.on_right(&mut h.app.tree, &rows);
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/zz.md")));
+
+        // No live row follows, so it stays — the one case where `→` is inert.
+        h.app.view.on_right(&mut h.app.tree, &rows);
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/zz.md")));
+    }
+
+    #[test]
     fn dim_rows_are_inert_and_no_match_means_no_selection() {
         let mut h = harness(Mode::Pick);
         feed(

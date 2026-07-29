@@ -84,7 +84,7 @@ resolution shapes `027`.
 - [x] 063-search-cycles-in-tree-order (the "no matches means no selection" half lands with 062)
 - [x] 062-unify-search-in-pick-mode
 - [ ] 027-add-picker-filter
-- [ ] 060-right-arrow-always-advances
+- [x] 060-right-arrow-always-advances
 - [x] 059-fix-guide-chevron-alignment
 
 # Open questions

@@ -77,8 +77,8 @@ Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and 
 
 | Key | Action |
 |---|---|
-| `↑` / `↓` | Move selection |
-| `→` on dir | Expand; on an expanded chain, split it into member rows |
+| `↑` / `↓` | Move selection (during a search: step matches, in tree order) |
+| `→` | **Always moves or reveals** (task 060): a collapsed dir expands; an expanded chain splits into member rows; otherwise the selection advances to the next row. Nothing happens only on the last row. |
 | `Enter` on dir | Toggle expand/collapse |
 | `←` on dir / into parent | Collapse / jump to parent |
 | `Enter` on file | Open (see Opening files). **Enter always opens — never contextual.** |

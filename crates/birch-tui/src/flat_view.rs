@@ -482,9 +482,12 @@ impl FlatView {
         }
     }
 
-    /// `→`: expand a dir (design doc keyboard table; collapse is `←`'s job).
-    /// A chain expands at its tail; on an already-expanded chain, `→` splits
-    /// it into its member rows (ADR 0014).
+    /// `→` always does something (task 060), in three cases, first match wins:
+    /// a collapsed directory **expands** (the selection stays); an expanded
+    /// compact chain **splits** into its member rows (ADR 0014); anything else
+    /// **advances** to the next live row. It is a no-op only when no live row
+    /// follows — the last row of the tree, or the last match under a
+    /// narrowing.
     pub fn on_right(&mut self, tree: &mut Tree, rows: &[Row]) -> NavEffect {
         let Some(idx) = self.sync(rows) else {
             return NavEffect::None;
@@ -501,6 +504,13 @@ impl FlatView {
                 tree.set_expanded(member, true);
                 self.split.insert(member.clone());
             }
+            return NavEffect::None;
+        }
+        // Nothing left to reveal, so advance (task 060). Because directories
+        // sort before files, the next live row *is* "the next sibling file,
+        // else the parent's next sibling" — no separate walk is needed.
+        if let Some(next) = step_live(rows, idx, true) {
+            self.select(rows, next);
         }
         NavEffect::None
     }
@@ -1030,15 +1040,39 @@ mod tests {
     }
 
     #[test]
-    fn right_on_expanded_plain_dir_still_does_nothing() {
+    fn right_advances_when_there_is_nothing_left_to_reveal() {
+        // An expanded plain directory has no structure left to reveal, so `→`
+        // moves into it — which is the next visible row, because directories
+        // sort before files (task 060).
         let mut tree = fixture();
         tree.set_expanded(Path::new("/r/src"), true);
         let mut view = FlatView::default();
         view.focus(PathBuf::from("/r/src"));
         let rows = rows_plain(&tree);
+        let src = rows.iter().position(|r| r.path.ends_with("src")).unwrap();
         view.on_right(&mut tree, &rows);
-        assert!(view.split.is_empty());
-        assert_eq!(row_names(&rows_plain(&tree)), row_names(&rows));
+        assert!(view.split.is_empty(), "a plain dir never splits");
+        assert_eq!(
+            row_names(&rows_plain(&tree)),
+            row_names(&rows),
+            "no expansion changed"
+        );
+        assert_eq!(
+            view.selection.as_deref(),
+            Some(rows[src + 1].path.as_path()),
+            "the selection advanced to the next row"
+        );
+
+        // A file advances to its following sibling.
+        let last = rows.len() - 1;
+        view.focus(rows[last - 1].path.clone());
+        view.on_right(&mut tree, &rows);
+        assert_eq!(view.selection.as_deref(), Some(rows[last].path.as_path()));
+
+        // The last row of the tree is the one place `→` may do nothing.
+        view.focus(rows[last].path.clone());
+        view.on_right(&mut tree, &rows);
+        assert_eq!(view.selection.as_deref(), Some(rows[last].path.as_path()));
     }
 
     #[test]
