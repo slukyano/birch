@@ -193,3 +193,17 @@
   1.67 cells and sit +0.42 cell off centre while the indent guide, drawn by the primary font, sits
   at +0.00. No birch change: the fix is a `Mono` primary family, now documented in the README and
   [the glyph reference](../docs/research/nerd-font-glyphs.md) with the upstream Ghostty reports.
+
+## 2026-07-29
+
+* **Four seeds from the maintainer, two of them against the fence**: `071` splits the **context
+  menu** out of the phase-0.5 bundle (following `028`, which had already taken copy-paths), so the
+  action surface can land before the ops it hosts; `029` narrows to the op layer accordingly.
+  `073` asks for an in-app **hotkey reference** and exists to decide always-on footer vs. summoned
+  overlay — sharpened by the fact that `?`, the conventional summon key, is a search character and
+  can never be bound. `072` (**move by dragging**) and `074` (**multi-selection**) are both named on
+  the *permanently out of scope* list in [the design doc](../docs/design.md) — "drag-and-drop move",
+  "multi-select", "bulk operations" — so each records the conflict rather than assuming it away:
+  neither is designable until the scope fence is amended, which is a maintainer decision and
+  warrants an ADR. `074` sketches the defensible middle stop (read-only plurality: multi-select
+  feeds copy-paths and `--pick`, mutations stay single-target).

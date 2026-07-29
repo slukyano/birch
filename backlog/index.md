@@ -38,11 +38,15 @@ okf_version: "0.1"
 * [Add a scrollbar](tasks/068-add-scrollbar.md) - Scroll indicator on the pane edge, hidden when everything fits, with a way to turn it off.
 * [Mouse-wheel scrolling feels broken](tasks/069-fix-wheel-scrolling.md) - Runs away, freezes on heavy overscroll; viewport-driven peek-loading is the leading suspect.
 * [Show how much a filter actually matches](tasks/070-show-filter-match-counts.md) - Per-folder or total match counts, so a filtered browse knows where to go.
+* [Add the context menu](tasks/071-add-context-menu.md) - The right-click action surface, split out of the 0.5 bundle so it can land before the ops it hosts.
+* [Move files and folders by dragging](tasks/072-drag-to-move.md) - Drag a row onto a directory to move it; blocked on a scope-fence amendment, since drag-and-drop move is on the permanent out-of-scope list.
+* [Show a hotkey reference](tasks/073-hotkey-reference.md) - In-app discoverability: always-on footer vs. summoned overlay, with `?` unavailable (printables are search).
+* [Support multi-selection](tasks/074-add-multi-selection.md) - Shift/Ctrl range and toggle, mouse and keyboard; blocked on a scope-fence amendment, since multi-select is on the permanent out-of-scope list.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
 
 
-* [Add file operations, context menu, and copy paths](tasks/029-add-file-operations.md) - Rename/delete/new inline ops, right-click context menu, hover highlight, copy name/paths over OSC 52.
+* [Add file operations](tasks/029-add-file-operations.md) - Rename/delete/new inline ops with git-aware delete; context menu split to 071, copy paths to 028.
 * [Add the content search source](tasks/030-add-content-search.md) - Ctrl-F swaps the pane's source to files-with-matches, built on the ripgrep crates.
 * [Add the Git Changes source](tasks/032-add-git-changes-source.md) - A third source listing changed files, reusing the source-as-delta-stream interface.
 * [Add the Project View source](tasks/033-add-project-view-source.md) - A curated/virtual tree source, reusing the source-as-delta-stream interface.
