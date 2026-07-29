@@ -240,10 +240,31 @@ agent finishes an iteration or needs a decision, it formats the ask as:
 4. **references to the key files** touched or decided on (paths, with line numbers where it
    helps), so the maintainer can double-click into any detail,
 5. the **explicit list of questions** to answer (or the single question), each answerable
-   with a short reply.
+   with a short reply,
+6. a closing **TLDR block** — always last, and mandatory (format below).
 
 This applies to scope approval, design approval, implementation approval, ADR acceptance,
 and stop-and-ask questions raised mid-implementation.
+
+## The closing TLDR
+
+Every approval gate and every question set ends with:
+
+```
+# TLDR - <topic> - <phase> <Approval | Questions>
+```
+
+`Questions` means the phase continues after the answers; `Approval` means the next phase begins
+on approval. Example headings: `# TLDR - Sprint 016 - Navigation & search feel - Design Approval`,
+`# TLDR - Sprint 016 - Design Questions`.
+
+Under the heading:
+
+- a **bullet summary** of what is being looked at;
+- the **list of questions or items to approve explicitly**, with the recommendation in **bold**.
+
+Each question must be understandable **on its own** — no reliance on the prose above it, on an
+earlier message, or on a file. The TLDR repeats what a decision needs rather than referring to it.
 
 Every presentation is **self-contained**: full context and the explicit question(s) spelled out
 each time, never "as before" or a bare pointer. **Final approvals** (scope, design, implementation)

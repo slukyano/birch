@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Navigation & search feel
-status: Designing
+status: Implementing
 branch: sprint/016
 tasks:
 - 063-search-cycles-in-tree-order
@@ -89,9 +89,29 @@ resolution shapes `027`.
 
 # Open questions
 
-_(none yet)_
+_(none — the design-phase questions were answered in chat: the flat picker list is deleted; a
+directory that fails the search is not selectable; the filter gets no config key and no `ctl` key;
+the chevron shape is not chosen around a font defect.)_
 
 # Session log
 
 - Scoped and cut: `063`, `062`, `027`, `060`, plus `059` added at scope approval. Branch
   `sprint/016` cut from `main`.
+- Design phase: `063` designed (tree-order permutation). Maintainer reframed the narrowing model —
+  dimming disables selection, navigation skips dimmed rows, and the filter applies in tree mode too
+  — which became **ADR 0023** and the shared basis for `062` and `027`. `060` settled on
+  two-press folder entry with chain splitting keeping `→`. `059` investigated with a new vhs +
+  pixel-measurement harness: the ⅓-cell offset is reproduced in the non-`Mono` font and traced to
+  **PUA chevron glyphs**, which base-font `▸`/`▾` avoid entirely. The chat protocol gained a
+  mandatory closing TLDR block (`workflow.md`).
+- Design review round: a directory that fails the search is **not selectable** either, so ADR 0023's
+  rule became per-narrowing (the search judges every row; the filter judges files only). The
+  selection now **anchors forward** on every rematch — the first match at or after the current
+  selection, wrapping — which removed the score-ordered initial selection from `063`. The filter
+  gets no config key and no `ctl` key (`067` deleted). `059` dropped the glyph change and was
+  re-grounded on the **font files themselves**: cmux embeds unpatched JetBrains Mono plus
+  **Symbols Nerd Font**, the primary carries no Nerd Font codepoint, and in the fallback the octicon
+  chevron sits +0.42 cell off centre while the guide (drawn by the primary) sits at +0.00. The
+  outcome is documentation plus a `Mono` primary family, verified live in cmux.
+- Design approved: ADR 0023 `Proposed → Accepted`; the five tasks `Draft → Designed`; the sprint
+  `Designing → Implementing`. Design merge to `main`.
