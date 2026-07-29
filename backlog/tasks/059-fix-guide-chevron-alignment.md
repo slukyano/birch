@@ -125,11 +125,31 @@ stay: octicons `\u{f460}`/`\u{f47c}` for `birch` and the scheme themes, codicons
 4. **Keep the measurement harness** under `docs/research/` — the tape, the measuring script, and the
    measured table — so any future report is answered with numbers instead of impressions.
 
-**To verify during implementation.** The font-file measurements predict the fix; a live check
-confirms it. The harness renders through `vhs`, which is not the reporting terminal and substitutes
-a different fallback, so the check runs in a **separate cmux instance** (per `AGENTS.md`:
-`open -na cmux`, targeted by `CMUX_SOCKET_PATH`, never the maintainer's own), with and without a
-`Mono` primary family, and the screenshot measured both times.
+**Verified.** Setting the terminal's primary family to the installed `Mono` build resolved it in
+the reported environment. The setting is **not** a cmux one — cmux exposes no font key at all
+(`cmux-settings list-supported`), and delegates fonts to Ghostty, so the fix is
+`font-family = JetBrainsMono NFM` in `~/.config/ghostty/config`. The family name matters: Nerd
+Fonts abbreviates its families, so the installed `Mono` build is `JetBrainsMono NFM` and not
+"JetBrainsMono Nerd Font Mono"; an unresolvable name fails silently back to the substitute.
+
+**Known upstream.** The class of defect is tracked in Ghostty, whose bundled fallback is
+"Symbols Nerd Font" (not the `Mono` build) beside an unpatched JetBrains Mono primary:
+
+- [discussion 8822](https://github.com/ghostty-org/ghostty/discussions/8822) — Nerd Font glyphs
+  taking two cells and losing alignment with regular characters, answered with the icon
+  scaling/alignment PR series ([8563](https://github.com/ghostty-org/ghostty/pull/8563),
+  [8847](https://github.com/ghostty-org/ghostty/pull/8847),
+  [8580](https://github.com/ghostty-org/ghostty/pull/8580) for macOS);
+- [issue 9076](https://github.com/ghostty-org/ghostty/issues/9076) — scale groups derived from a
+  wrong assumption about codepoint offsets, naming **the Octicon chevrons** (birch's default
+  chevron family) as scaled and aligned incorrectly. Closed 2025-10-11;
+- [discussions 7204](https://github.com/ghostty-org/ghostty/discussions/7204) and
+  [13298](https://github.com/ghostty-org/ghostty/discussions/13298) — fallback metrics differing
+  from the primary font's, same symptom from other codepoints.
+
+So no new report is warranted from birch: the behaviour is known, tracked, and partly fixed
+upstream, and the user-side remedy is a one-line font setting. Ghostty requires a discussion before
+an issue ([3558](https://github.com/ghostty-org/ghostty/issues/3558)) should that change.
 
 **Public surface.** None — no flags, config keys, protocol fields, environment variables, on-disk
 paths, public APIs, or theme values. Documentation only, plus research artifacts.

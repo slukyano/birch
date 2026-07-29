@@ -59,6 +59,15 @@ A terminal with a Nerd Font gives the icons; `--no-icons` works everywhere. Git 
 on PATH and degrade to a plain tree without it. Installed via Homebrew, the contrib adapters land in
 `$(brew --prefix)/share/birch/` (not on PATH).
 
+**Set a `Mono` Nerd Font as the terminal's primary font** — `JetBrainsMono NFM`, `Hack Nerd Font
+Mono`, and so on. It is not enough for *some* installed font to have the icons: when the primary
+font lacks them, the terminal substitutes a symbols-only font whose glyphs are 1.1–1.7 cells wide
+and sit off-centre, so chevrons drift right of the indent guides and icons overflow their column.
+Ghostty (and cmux, which embeds it) ships exactly such a fallback by default, so the family must be
+set explicitly. Note that Nerd Fonts abbreviates its family names — `NFM` is the `Mono` build, `NF`
+is not — and a name the terminal cannot resolve fails silently back to the substitute. Details and
+measurements: [Nerd Font glyph reference](docs/research/nerd-font-glyphs.md).
+
 ## Opening files
 
 `Enter` (or a double-click) runs the open command on the selected file. By default that is

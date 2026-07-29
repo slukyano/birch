@@ -85,7 +85,7 @@ resolution shapes `027`.
 - [ ] 062-unify-search-in-pick-mode
 - [ ] 027-add-picker-filter
 - [ ] 060-right-arrow-always-advances
-- [ ] 059-fix-guide-chevron-alignment
+- [x] 059-fix-guide-chevron-alignment
 
 # Open questions
 
