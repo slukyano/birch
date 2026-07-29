@@ -137,12 +137,13 @@ Examples: `nvim {}`, `code -r {}`, or a host adapter's open primitive (herdr typ
 
 ### Filename fuzzy search (just type)
 
-- **Jump, not filter**: non-matches dim, matches highlight; `↑`/`↓` cycles matches; tree stays spatially stable (it's an ambient pane you glance at constantly). `Esc` restores.
+- **Jump, not filter**: non-matches dim, matches highlight; `↑`/`↓` cycles matches **in tree order**, so the selection travels down the pane rather than by relevance; tree stays spatially stable (it's an ambient pane you glance at constantly). `Esc` restores.
+- **A dim row is inert** (ADR 0023): it stays on screen for context, but the selection cannot land on it — arrows step over it, a click does nothing, `Enter` never acts on it. With no matches there is no selection at all. The selection anchors forward on every keystroke: the first match at or after the current row, wrapping at the end.
 - Whole-tree scope, auto-expanding to reveal matches, **never descending into ignored dirs**.
 - Matches **simple names**; a query containing `/` matches full root-relative paths
   instead. Matched characters highlight in place — including inside compacted labels
   (`a/b/c`). Uppercase query characters anchor to capitals (camel humps).
-- In `--pick` mode, search *filters* instead (transient picker → density wins). Same engine, two render policies.
+- `--pick` behaves identically (ADR 0023). One engine, one render policy: the picker was the mode that most needed the surrounding context, and two models behind one keystroke taught two mental models.
 
 ### Content search (Ctrl-F) — a source, not a mode
 
@@ -246,10 +247,10 @@ A running birch instance exposes a Unix domain socket; `birch ctl` (a subcommand
 
 ## Picker mode
 
-`birch --pick` — same UI as a transient fuzzy picker: search filters (not jumps), Enter
-prints the selected path — file or dir — to stdout and exits. Arrows browse; a mouse
-click selects, only double-click picks (chevrons browse dirs), so exploratory clicks
-never confirm by accident.
+`birch --pick` — the same UI and the same search as the pane (ADR 0023): the tree stays,
+non-matches dim and go inert, `↑`/`↓` step the matches. Enter prints the selected path —
+file or dir — to stdout and exits. Arrows browse; a mouse click selects, only double-click
+picks (chevrons browse dirs), so exploratory clicks never confirm by accident.
 
 ```
 nvim "$(birch --pick)"

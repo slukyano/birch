@@ -58,8 +58,9 @@ pub struct AppWiring {
     pub input_paused: Arc<AtomicBool>,
 }
 
-/// Active fuzzy search (ADR 0009). In tree mode the pane jumps over matches;
-/// in picker mode the matches replace the rows.
+/// Active fuzzy search (ADR 0009). The pane keeps its tree and steps over the
+/// matches; everything else dims and stops being selectable (ADR 0023). Matches
+/// are held in tree order, and `current` indexes them (063).
 struct SearchState {
     query: String,
     matches: Vec<Match>,
@@ -321,9 +322,9 @@ impl App {
 
         let rows = self.rows();
         let viewport = render::tree_viewport_height(area(terminal));
-        // With a live search in tree mode, ↑/↓ cycle the matches.
-        if self.mode == Mode::Tree
-            && let Some(state) = &self.search
+        // With a live search, ↑/↓ cycle the matches — in both modes now
+        // (ADR 0023): the picker is the same tree, so it steps the same way.
+        if let Some(state) = &self.search
             && !state.matches.is_empty()
             && matches!(action, InputAction::Up | InputAction::Down)
         {
@@ -339,17 +340,9 @@ impl App {
                 self.view.move_by(&rows, 1);
                 NavEffect::None
             }
-            InputAction::Right => {
-                if self.filter_list_active() {
-                    NavEffect::None
-                } else {
-                    self.view.on_right(&mut self.tree, &rows)
-                }
-            }
+            InputAction::Right => self.view.on_right(&mut self.tree, &rows),
             InputAction::Left => {
-                if !self.filter_list_active() {
-                    self.view.on_left(&mut self.tree, &rows);
-                }
+                self.view.on_left(&mut self.tree, &rows);
                 NavEffect::None
             }
             InputAction::Enter => self.activate(&rows, None),
@@ -628,9 +621,8 @@ impl App {
     /// Click decision (ADR 0015): chevron clicks activate immediately (each
     /// press is its own toggle, and it disarms a pending double — chevron-
     /// then-name fast is a select); name clicks select, and only a completed
-    /// double-click activates. The flat filter list has no tree semantics,
-    /// so its chevron zone counts as the name there — otherwise a single
-    /// click on a dir match could confirm a pick.
+    /// double-click activates. Tree semantics now apply in both modes, since
+    /// the picker renders the same tree (ADR 0023).
     fn resolve_click(
         &mut self,
         rows: &[Row],
@@ -638,7 +630,12 @@ impl App {
         on_chevron: bool,
         now: Instant,
     ) -> NavEffect {
-        if on_chevron && !self.filter_list_active() {
+        if !rows[idx].live {
+            // Dim rows are inert: a click neither selects nor arms a double.
+            self.click_timer.disarm();
+            return NavEffect::None;
+        }
+        if on_chevron {
             self.click_timer.disarm();
             self.activate(rows, Some((idx, true)))
         } else if self.click_timer.observe(&rows[idx].path, now) {
@@ -653,19 +650,21 @@ impl App {
     /// chevron clicks or completed double-clicks — ADR 0015). In picker mode
     /// Enter picks whatever is selected — file or dir; a double-click picks
     /// files but browses dirs (chevrons browse too), so exploratory clicks
-    /// never confirm by accident. On the filter list a double-click picks
-    /// (it is a selection list).
+    /// never confirm by accident. With a narrowing active there may be no
+    /// selection at all, and then there is nothing to pick (ADR 0023).
     fn activate(&mut self, rows: &[Row], click: Option<(usize, bool)>) -> NavEffect {
         let idx = match click {
             Some((idx, _)) => Some(idx),
             None => self.view.sync(rows),
         };
+        let Some(idx) = idx else {
+            return NavEffect::Message(self.nothing_selectable_message());
+        };
         if self.mode.is_pick()
-            && let Some(idx) = idx
             && let Some(row) = rows.get(idx)
             && !row.missing
         {
-            let browsing_click = click.is_some() && row.kind.is_dir() && !self.filter_list_active();
+            let browsing_click = click.is_some() && row.kind.is_dir();
             if !browsing_click {
                 if click.is_some() {
                     // A picking click also moves the selection there.
@@ -675,13 +674,18 @@ impl App {
                 return NavEffect::None;
             }
         }
-        if self.filter_list_active() {
-            // No tree semantics on the flat list beyond confirming.
-            return NavEffect::None;
-        }
         match click {
             Some((idx, on_chevron)) => self.view.on_click(&mut self.tree, rows, idx, on_chevron),
             None => self.view.on_enter(&mut self.tree, rows),
+        }
+    }
+
+    /// Why nothing happened when there is no selection to act on.
+    fn nothing_selectable_message(&self) -> String {
+        match &self.search {
+            Some(state) if !state.matches.is_empty() => String::new(),
+            Some(_) => "no matches".into(),
+            None => String::new(),
         }
     }
 
@@ -740,10 +744,10 @@ impl App {
     fn on_esc(&mut self) -> bool {
         match self.search.take() {
             Some(state) => {
-                if self.mode == Mode::Tree {
-                    self.view.selection = state.saved_selection;
-                    self.view.scroll = state.saved_scroll;
-                }
+                // Both modes restore the pre-search view now: the picker keeps
+                // the tree, so it has a view worth putting back (ADR 0023).
+                self.view.selection = state.saved_selection;
+                self.view.scroll = state.saved_scroll;
                 self.pending_reveal = None;
                 false
             }
@@ -917,25 +921,16 @@ impl App {
 
     // ---- rows & drawing ----
 
-    fn filter_list_active(&self) -> bool {
-        self.mode.is_pick() && self.search.as_ref().is_some_and(|s| !s.query.is_empty())
-    }
-
+    /// The rows, in both modes alike (ADR 0023): the picker renders the same
+    /// tree the pane does, with the same narrowing applied — there is no flat
+    /// match list.
     fn rows(&self) -> Vec<Row> {
         let git = if self.settings.git {
             self.git_state.as_deref()
         } else {
             None
         };
-        if self.filter_list_active() {
-            let state = self.search.as_ref().expect("filter list implies search");
-            return flat_view::match_rows(&state.matches, git);
-        }
-        let matched = if self.mode == Mode::Tree {
-            self.search.as_ref().map(|s| &s.matched_set)
-        } else {
-            None
-        };
+        let matched = self.search.as_ref().map(|s| &s.matched_set);
         flat_view::visible_rows(
             &self.tree,
             &self.settings,
@@ -974,10 +969,16 @@ impl App {
     fn bottom_line(&self) -> String {
         let base = if let Some(state) = &self.search {
             let n = state.matches.len();
-            match self.mode {
-                Mode::Tree if n == 0 => format!("search: {} (no matches)", state.query),
-                Mode::Tree => format!("search: {} ({}/{})", state.query, state.current + 1, n),
-                Mode::Pick => format!("> {} ({n} matches)", state.query),
+            // Same counter in both modes; only the prompt marker differs, so a
+            // picker still reads as a picker (ADR 0023).
+            let prompt = match self.mode {
+                Mode::Tree => format!("search: {}", state.query),
+                Mode::Pick => format!("> {}", state.query),
+            };
+            if n == 0 {
+                format!("{prompt} (no matches)")
+            } else {
+                format!("{prompt} ({}/{n})", state.current + 1)
             }
         } else if self.mode.is_pick() {
             "> type to filter, Enter picks the selection, Esc quits".into()
@@ -1093,7 +1094,7 @@ impl App {
     /// repo exists), and never through symlinks — only real dirs can join
     /// chains, so only real dirs are worth peeking.
     fn request_peeks(&mut self, rows: &[Row], viewport: usize) {
-        if !self.settings.compact || self.filter_list_active() {
+        if !self.settings.compact {
             return;
         }
         if self.settings.git && self.repo_root.is_some() && !self.git_answered {
@@ -1721,45 +1722,107 @@ mod tests {
     }
 
     #[test]
-    fn filter_list_single_click_never_picks() {
+    fn picker_chevron_click_browses_and_never_picks() {
         let mut h = harness(Mode::Pick);
         feed(&mut h.app, "/r", &[("src", NodeKind::Dir)]);
         h.app.index = Some(index_of(&[("src", true)]));
         h.app.search_push('s');
         let rows = h.app.rows();
-        assert_eq!(rows[0].name, "src");
+        assert_eq!(rows[1].name, "src");
         let t0 = Instant::now();
-        // The flat list draws no real chevron, so its chevron zone is the
-        // name: a single click on a dir match selects — it must never
-        // confirm the pick (sprint-010 review finding).
+        // The picker renders the real tree now (ADR 0023), so a chevron click
+        // toggles the directory. It must still never confirm the pick.
         assert!(matches!(
-            h.app.resolve_click(&rows, 0, true, t0),
-            NavEffect::None
+            h.app.resolve_click(&rows, 1, true, t0),
+            NavEffect::None | NavEffect::RequestExpand(_)
         ));
         assert!(h.app.picked.is_none());
-        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/src")));
-        // The completed double-click picks.
+        assert!(h.app.tree.node_at(Path::new("/r/src")).unwrap().expanded);
+        // A completed double-click on a directory browses it too — only Enter
+        // confirms a directory, so exploratory clicks never pick by accident.
         h.app
-            .resolve_click(&rows, 0, false, t0 + Duration::from_millis(100));
+            .resolve_click(&rows, 1, false, t0 + Duration::from_millis(100));
+        assert!(h.app.picked.is_none());
+        // Enter on the same row picks it.
+        let rows = h.app.rows();
+        h.app.activate(&rows, None);
         assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/src")));
     }
 
     #[test]
-    fn picker_filter_list_shows_matches_flat() {
+    fn picker_search_keeps_the_tree_and_dims_non_matches() {
         let mut h = harness(Mode::Pick);
         feed(&mut h.app, "/r", &[("src", NodeKind::Dir)]);
+        feed(&mut h.app, "/r/src", &[("main.rs", NodeKind::File)]);
+        h.app.tree.set_expanded(Path::new("/r/src"), true);
         h.app.index = Some(index_of(&[("src/main.rs", false), ("src", true)]));
         h.app.search_push('m');
-        let rows = h.app.rows();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].name, "src/main.rs");
-        assert_eq!(rows[0].depth, 0);
 
-        // Confirming on the flat list picks the absolute path.
-        h.app.view.focus("/r/src/main.rs".into());
+        // The tree survives the query: root and ancestors still render, at
+        // their real depths, instead of a flat list of hits (ADR 0023).
         let rows = h.app.rows();
+        let names: Vec<(&str, usize, bool)> = rows
+            .iter()
+            .map(|r| (r.name.as_str(), r.depth, r.live))
+            .collect();
+        assert_eq!(
+            names,
+            [("r", 0, false), ("src", 1, false), ("main.rs", 2, true)],
+            "ancestors stay visible but dim; only the match is live"
+        );
+
+        // The selection anchored to the match, and Enter picks it.
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/src/main.rs"))
+        );
         h.app.activate(&rows, None);
         assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/src/main.rs")));
+    }
+
+    #[test]
+    fn dim_rows_are_inert_and_no_match_means_no_selection() {
+        let mut h = harness(Mode::Pick);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("keep.md", NodeKind::File), ("other.txt", NodeKind::File)],
+        );
+        h.app.index = Some(index_of(&[("keep.md", false), ("other.txt", false)]));
+        h.app.search_push('k');
+
+        let rows = h.app.rows();
+        let dim = rows
+            .iter()
+            .position(|r| r.name == "other.txt")
+            .expect("row present");
+        assert!(!rows[dim].live);
+
+        // A click on a dim row neither selects nor picks.
+        h.app.resolve_click(&rows, dim, false, Instant::now());
+        assert!(h.app.picked.is_none());
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/keep.md")),
+            "the selection stays on the match"
+        );
+
+        // Stepping never lands on a dim row either.
+        h.app.view.move_by(&rows, 1);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/keep.md"))
+        );
+
+        // A query that matches nothing leaves nothing selected, and Enter
+        // picks nothing and says why.
+        h.app.search_push('z');
+        let rows = h.app.rows();
+        assert!(rows.iter().all(|r| !r.live));
+        assert!(h.app.view.sync(&rows).is_none());
+        let effect = h.app.activate(&rows, None);
+        assert_eq!(effect, NavEffect::Message("no matches".into()));
+        assert!(h.app.picked.is_none());
     }
 }
 

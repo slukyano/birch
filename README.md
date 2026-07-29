@@ -88,9 +88,10 @@ birch --open-cmd 'code -r {}'
 
 ## Picker
 
-`birch --pick` turns birch into a chooser: search and navigate as usual, and `Enter` prints the
-selection (a file **or** a directory) to stdout and exits. The UI stays on stderr, so stdout
-carries only the picked path.
+`birch --pick` turns birch into a chooser: search and navigate exactly as in the pane — the tree
+stays put, non-matching rows dim and cannot be selected, `↑`/`↓` step between matches — and `Enter`
+prints the selection (a file **or** a directory) to stdout and exits. The UI stays on stderr, so
+stdout carries only the picked path.
 
 ```sh
 nvim "$(birch --pick)"        # pick a file to open

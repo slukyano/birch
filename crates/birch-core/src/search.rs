@@ -1,8 +1,8 @@
 //! Fuzzy filename search (ADRs 0009/0013): an index worker walks the root
 //! with the `ignore` crate; `search` scores the query against simple names —
 //! or full relative paths when the query contains `/` — with nucleo, and
-//! reports the matched character positions. One engine — the main pane jumps
-//! over the matches, the picker filters to them.
+//! reports the matched character positions. One engine, one behaviour: the
+//! pane keeps its tree and steps over the matches, in the picker too (ADR 0023).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -8,7 +8,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use birch_core::git::GitState;
-use birch_core::search::Match;
 use birch_core::{FileStatus, NodeId, NodeKind, Settings, Tree, settings};
 
 #[derive(Clone, Debug)]
@@ -27,8 +26,16 @@ pub struct Row {
     pub ignored: bool,
     /// Deleted-but-tracked: rendered from git state, absent on disk.
     pub missing: bool,
-    /// Active search: `Some(true)` = match (highlight), `Some(false)` = dim.
-    pub search: Option<bool>,
+    /// Whether the row survives the active narrowing (ADR 0023). A live row can
+    /// hold the selection; a dim one is inert — navigation steps over it, a
+    /// click on it does nothing, and `Enter` never acts on it. Every row is live
+    /// when no search or filter is active.
+    pub live: bool,
+    /// Whether the row is a *match* of the active narrowing, which is what the
+    /// label highlights. Equal to `live` under a search, which judges every row;
+    /// they diverge under a glob filter, where a directory is live (navigable)
+    /// without matching the patterns.
+    pub matched: bool,
     /// Char positions inside `name` to light up (empty for whole-row
     /// highlight — e.g. path-mode matches whose characters are off-screen).
     pub match_indices: Vec<u32>,
@@ -84,8 +91,17 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    fn search_flag(&self, hit: bool) -> Option<bool> {
-        self.matched.map(|_| hit)
+    /// Liveness under the active narrowing (ADR 0023): with no narrowing every
+    /// row is live; under a search only a match is, files and directories
+    /// alike — a directory that fails the query is dim like any other row.
+    fn live(&self, hit: bool) -> bool {
+        self.matched.is_none_or(|_| hit)
+    }
+
+    /// Whether the row matches the active narrowing — what the label
+    /// highlights, as distinct from what the selection may land on.
+    fn matched_flag(&self, hit: bool) -> bool {
+        self.matched.is_some() && hit
     }
 
     fn is_hit(&self, path: &std::path::Path) -> bool {
@@ -188,7 +204,8 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
         status: ctx.git.and_then(|git| git.dir_status(&root.path)),
         ignored: false,
         missing: false,
-        search: ctx.search_flag(ctx.is_hit(&root.path)),
+        live: ctx.live(ctx.is_hit(&root.path)),
+        matched: ctx.matched_flag(ctx.is_hit(&root.path)),
         match_indices: ctx.hit_indices(&root.path),
         annotation: Some(abbreviate_home(&root.path, std::env::home_dir().as_deref())),
         guides: Vec::new(),
@@ -214,7 +231,9 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], ro
         match child {
             Child::Missing(name) => {
                 let path = dir_path.join(&name);
-                let search = ctx.search_flag(ctx.is_hit(&path));
+                let hit = ctx.is_hit(&path);
+                let live = ctx.live(hit);
+                let matched = ctx.matched_flag(hit);
                 let match_indices = ctx.hit_indices(&path);
                 rows.push(Row {
                     path,
@@ -227,7 +246,8 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], ro
                     status: Some(FileStatus::Deleted),
                     ignored: false,
                     missing: true,
-                    search,
+                    live,
+                    matched,
                     match_indices,
                     annotation: None,
                     guides: ancestors.to_vec(),
@@ -329,7 +349,8 @@ fn push_node(
         status,
         ignored: ctx.is_ignored(&node.path),
         missing: false,
-        search: ctx.search_flag(hit),
+        live: ctx.live(hit),
+        matched: ctx.matched_flag(hit),
         match_indices,
         annotation: None,
         guides: ancestors.to_vec(),
@@ -343,51 +364,6 @@ fn push_node(
         child_ancestors.push(!last_sibling);
         push_children(ctx, tail, depth + 1, &child_ancestors, rows);
     }
-}
-
-/// The picker's filter render policy (ADR 0009): matches as a dense flat
-/// list, best first, decorated from git state. The displayed string is the
-/// relative path, so name-mode match indices shift by the dir-prefix length;
-/// path-mode indices apply directly (ADR 0013).
-pub fn match_rows(matches: &[Match], git: Option<&GitState>) -> Vec<Row> {
-    matches
-        .iter()
-        .map(|m| {
-            let entry = &m.entry;
-            let kind = if entry.is_dir {
-                NodeKind::Dir
-            } else {
-                NodeKind::File
-            };
-            let status = match git {
-                Some(git) if entry.is_dir => git.dir_status(&entry.abs),
-                Some(git) => git.status_of(&entry.abs),
-                None => None,
-            };
-            let match_indices = if m.by_path {
-                m.indices.clone()
-            } else {
-                m.indices.iter().map(|i| i + entry.name_offset).collect()
-            };
-            Row {
-                path: entry.abs.clone(),
-                name: entry.rel.clone(),
-                kind,
-                depth: 0,
-                expanded: false,
-                loaded: true,
-                chain: Vec::new(),
-                status,
-                ignored: false,
-                missing: false,
-                search: None,
-                match_indices,
-                annotation: None,
-                guides: Vec::new(),
-                last_sibling: true,
-            }
-        })
-        .collect()
 }
 
 /// `$HOME`-abbreviated display form of a path (IDEA-style root annotation).
@@ -419,10 +395,35 @@ pub struct FlatView {
     follow: bool,
 }
 
+/// The first live row at or after `from`, else the last live row before it.
+/// `None` when the narrowing leaves nothing selectable at all.
+fn nearest_live(rows: &[Row], from: usize) -> Option<usize> {
+    rows[from..]
+        .iter()
+        .position(|r| r.live)
+        .map(|offset| from + offset)
+        .or_else(|| rows[..from].iter().rposition(|r| r.live))
+}
+
+/// The next live row after `from` in the given direction, if any.
+fn step_live(rows: &[Row], from: usize, forward: bool) -> Option<usize> {
+    if forward {
+        rows[from + 1..]
+            .iter()
+            .position(|r| r.live)
+            .map(|offset| from + 1 + offset)
+    } else {
+        rows[..from].iter().rposition(|r| r.live)
+    }
+}
+
 impl FlatView {
     /// Reconciles selection with the current rows: keeps it if the path is
-    /// still visible, otherwise falls back near the remembered position.
-    /// Returns the selected index, if any rows exist.
+    /// still visible **and live**, otherwise re-homes it to the nearest live
+    /// row at or after the remembered position. Returns the selected index.
+    /// `None` means nothing can hold the selection — no rows, or every row
+    /// dimmed by the active narrowing (ADR 0023), in which case no cursor is
+    /// drawn and `Enter` has nothing to act on.
     pub fn sync(&mut self, rows: &[Row]) -> Option<usize> {
         if rows.is_empty() {
             self.selection = None;
@@ -430,17 +431,23 @@ impl FlatView {
         }
         if let Some(path) = &self.selection {
             if let Some(idx) = rows.iter().position(|r| &r.path == path) {
-                self.last_index = idx;
-                return Some(idx);
-            }
-            // A path that is an interior member of a compacted chain resolves
-            // to the chain row (and normalizes the selection to its tail).
-            if let Some(idx) = rows.iter().position(|r| r.chain.iter().any(|m| m == path)) {
-                self.select(rows, idx);
-                return Some(idx);
+                if rows[idx].live {
+                    self.last_index = idx;
+                    return Some(idx);
+                }
+            } else if let Some(idx) = rows.iter().position(|r| r.chain.iter().any(|m| m == path)) {
+                // A path that is an interior member of a compacted chain
+                // resolves to the chain row (and normalizes the selection to
+                // its tail).
+                if rows[idx].live {
+                    self.select(rows, idx);
+                    return Some(idx);
+                }
             }
         }
-        let idx = self.last_index.min(rows.len() - 1);
+        // Either the selection vanished or it just went dim: re-home forward.
+        let from = self.last_index.min(rows.len() - 1);
+        let idx = nearest_live(rows, from)?;
         self.select(rows, idx);
         Some(idx)
     }
@@ -458,10 +465,21 @@ impl FlatView {
         self.follow = true;
     }
 
+    /// Moves the selection by `delta` **live** rows: dim rows are stepped over
+    /// rather than landed on (ADR 0023), so `delta` counts targets, not screen
+    /// lines. Stops at the first or last live row.
     pub fn move_by(&mut self, rows: &[Row], delta: isize) {
         let Some(idx) = self.sync(rows) else { return };
-        let new = idx.saturating_add_signed(delta).min(rows.len() - 1);
-        self.select(rows, new);
+        let mut current = idx;
+        for _ in 0..delta.unsigned_abs() {
+            match step_live(rows, current, delta > 0) {
+                Some(next) => current = next,
+                None => break,
+            }
+        }
+        if current != idx {
+            self.select(rows, current);
+        }
     }
 
     /// `→`: expand a dir (design doc keyboard table; collapse is `←`'s job).
@@ -488,7 +506,9 @@ impl FlatView {
     }
 
     /// `←`: collapse an expanded dir (a chain collapses back to one row);
-    /// otherwise jump to the parent.
+    /// otherwise jump to the parent. Under a narrowing the parent may be dim
+    /// and so unselectable (ADR 0023); the selection then falls back to the
+    /// previous live row, which keeps the key from going dead mid-search.
     pub fn on_left(&mut self, tree: &mut Tree, rows: &[Row]) {
         let Some(idx) = self.sync(rows) else { return };
         let row = &rows[idx];
@@ -496,8 +516,14 @@ impl FlatView {
             self.collapse(tree, row);
             return;
         }
-        if let Some(parent_idx) = rows[..idx].iter().rposition(|r| r.depth + 1 == row.depth) {
-            self.select(rows, parent_idx);
+        let parent = rows[..idx].iter().rposition(|r| r.depth + 1 == row.depth);
+        match parent {
+            Some(parent_idx) if rows[parent_idx].live => self.select(rows, parent_idx),
+            _ => {
+                if let Some(previous) = step_live(rows, idx, false) {
+                    self.select(rows, previous);
+                }
+            }
         }
     }
 
@@ -511,9 +537,10 @@ impl FlatView {
     }
 
     /// A single click on a row's name: selection only — activation is the
-    /// double-click's job (ADR 0015).
+    /// double-click's job (ADR 0015). A click on a dim row does nothing, like
+    /// every other way of reaching one (ADR 0023).
     pub fn on_single_click(&mut self, rows: &[Row], idx: usize) {
-        if idx < rows.len() {
+        if rows.get(idx).is_some_and(|row| row.live) {
             self.select(rows, idx);
         }
     }
@@ -531,6 +558,9 @@ impl FlatView {
         let Some(row) = rows.get(idx) else {
             return NavEffect::None;
         };
+        if !row.live {
+            return NavEffect::None; // dim rows are inert (ADR 0023)
+        }
         if row.kind.is_dir() && on_chevron && !row.missing {
             return self.toggle(tree, row);
         }
@@ -1090,29 +1120,9 @@ mod tests {
             },
         );
         let chain = rows.iter().find(|r| r.name == "a/b/c").unwrap();
-        assert_eq!(chain.search, Some(true));
+        assert!(chain.live);
         // Label chars: a(0) /(1) b(2) /(3) c(4).
         assert_eq!(chain.match_indices, [0, 4]);
-    }
-
-    #[test]
-    fn picker_rows_shift_name_indices_onto_the_rel_path() {
-        use birch_core::search::{IndexEntry, Match};
-        let name_hit = Match {
-            entry: IndexEntry::new("src/main.rs".into(), "/r/src/main.rs".into(), false),
-            indices: vec![0, 1],
-            by_path: false,
-        };
-        let path_hit = Match {
-            entry: IndexEntry::new("src/lib.rs".into(), "/r/src/lib.rs".into(), false),
-            indices: vec![0, 4],
-            by_path: true,
-        };
-        let rows = match_rows(&[name_hit, path_hit], None);
-        // "src/" is 4 chars: name indices 0,1 land at 4,5 of the rel path.
-        assert_eq!(rows[0].match_indices, [4, 5]);
-        // Path-mode indices already address the displayed rel path.
-        assert_eq!(rows[1].match_indices, [0, 4]);
     }
 
     #[test]
