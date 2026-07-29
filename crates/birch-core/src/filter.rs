@@ -6,10 +6,20 @@
 //! its root-relative **path**. So `*.md` is a filename rule and `src/**/*.rs`
 //! is a path rule, with no extra flag to explain the difference.
 //!
-//! Only files are judged. A directory is never dimmed by a filter — file-shaped
-//! patterns match no directory at all, and judging directories by them would
-//! make the tree unnavigable — but it is *pickable* only when it matches
-//! (ADR 0023).
+//! Only files are judged for visibility. A directory is never dimmed by a
+//! filter — file-shaped patterns match no directory at all, and judging
+//! directories by them would make the tree unnavigable — but it is *pickable*
+//! only when it matches (ADR 0023).
+//!
+//! Two consequences worth knowing, both inherited from ordinary glob rules
+//! rather than chosen here:
+//!
+//! - `src/*` names the **files** directly in `src/`, not the directories:
+//!   directories are offered as `src/cli/`, and `literal_separator` stops `*`
+//!   at that trailing slash. `src/*/` is the directory form.
+//! - A leading `/` does not anchor to the root. `/README.md` is routed to the
+//!   path patterns and compared against `README.md`, so it matches nothing;
+//!   write `README.md` for the name rule.
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 

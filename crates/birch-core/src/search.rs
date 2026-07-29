@@ -79,7 +79,13 @@ pub fn build_index(root: &Path, show_hidden: bool) -> SearchIndex {
             continue;
         };
         let rel = rel_path.to_string_lossy().replace('\\', "/");
-        let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+        // The walker does not follow links, so a symlinked directory reports
+        // as a symlink here while the tree calls it a directory. Resolve it, or
+        // tree ordering, the forward anchor, and the filter each disagree with
+        // the row on screen.
+        let file_type = entry.file_type();
+        let is_dir = file_type.is_some_and(|t| t.is_dir())
+            || (file_type.is_some_and(|t| t.is_symlink()) && abs.is_dir());
         entries.push(IndexEntry::new(rel, abs.to_path_buf(), is_dir));
     }
     SearchIndex { entries }

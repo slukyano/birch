@@ -111,8 +111,8 @@ filter`), reusing the existing `NavEffect::Message` channel that already reports
 - Multiple `--filter` flags union; a malformed glob fails at startup with the pattern named.
 - `skip`: non-matching files render dimmed, cannot be selected by keyboard or mouse, and `Enter`
   on one reports instead of picking.
-- `hide`: non-matching files and dead-end directories are absent from the rows; directories holding
-  matches remain.
+- `hide`: non-matching files are absent from the rows; directories always remain, whether or not
+  anything under them matches.
 - A directory that does not match the patterns is selectable and navigable but not pickable.
 - Filter ∩ search: a query cannot surface a filtered-out entry.
 - Tree mode honours the same filter (no pick semantics involved).

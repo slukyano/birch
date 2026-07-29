@@ -69,7 +69,6 @@ struct SearchState {
     /// Path → matched char indices into the simple name (empty for path-mode
     /// hits, meaning whole-name highlight).
     matched_set: HashMap<PathBuf, Vec<u32>>,
-    current: usize,
     saved_selection: Option<PathBuf>,
     saved_scroll: usize,
 }
@@ -724,7 +723,6 @@ impl App {
                 query: String::new(),
                 matches: Vec::new(),
                 matched_set: HashMap::new(),
-                current: 0,
                 saved_selection: self.view.selection.clone(),
                 saved_scroll: self.view.scroll,
             });
@@ -784,7 +782,6 @@ impl App {
             if let Some(state) = &mut self.search {
                 state.matches = Vec::new();
                 state.matched_set = HashMap::new();
-                state.current = 0;
             }
             return;
         };
@@ -818,13 +815,14 @@ impl App {
         if let Some(state) = &mut self.search {
             state.matches = matches;
             state.matched_set = matched_set;
-            state.current = current;
         }
-        // Reveal the anchored match — but only when it is somewhere new. A
-        // rematch also runs on every index refresh, and revealing a match the
-        // selection already sits on would scroll the pane back to it, undoing
-        // whatever the wheel just did while a search is open.
+        // Reveal the anchored match — but only when it is somewhere new, and
+        // never over a reveal already in flight. A rematch also runs on every
+        // index refresh: revealing a match the selection already sits on would
+        // undo whatever the wheel just did, and overwriting a pending reveal
+        // would swallow the keystroke that started it.
         if let Some(target) = target
+            && self.pending_reveal.is_none()
             && self.view.selection.as_deref() != Some(target.as_path())
         {
             self.reveal(target);
@@ -861,21 +859,32 @@ impl App {
         }
     }
 
+    /// Steps to the next or previous match **relative to the selection**, not
+    /// to a remembered pointer. `→`, `←`, and the mouse all move the selection
+    /// without going through here, so a stored index goes stale the moment one
+    /// of them is used — stepping would then swallow a keystroke or jump
+    /// backwards. Deriving the position each time cannot desynchronise.
     fn cycle_match(&mut self, forward: bool) {
-        let Some(state) = &mut self.search else {
-            return;
+        let matches = match &self.search {
+            Some(state) if !state.matches.is_empty() => state.matches.clone(),
+            _ => return,
         };
-        let n = state.matches.len();
-        if n == 0 {
-            return;
-        }
-        state.current = if forward {
-            (state.current + 1) % n
+        let n = matches.len();
+        // The first match at or after the selection, and whether that *is* the
+        // selected row.
+        let anchor = self.anchor_index(&matches);
+        let on_match = self
+            .view
+            .selection
+            .as_deref()
+            .is_some_and(|selected| selected == matches[anchor].entry.abs);
+        let next = if forward {
+            // Off a match, the anchor already sits after it.
+            if on_match { (anchor + 1) % n } else { anchor }
         } else {
-            (state.current + n - 1) % n
+            (anchor + n - 1) % n
         };
-        let target = state.matches[state.current].entry.abs.clone();
-        self.reveal(target);
+        self.reveal(matches[next].entry.abs.clone());
     }
 
     /// Expand ancestors toward `path` (requesting loads as needed) and focus
@@ -1007,7 +1016,7 @@ impl App {
             if n == 0 {
                 format!("{prompt} (no matches)")
             } else {
-                format!("{prompt} ({}/{n})", state.current + 1)
+                format!("{prompt} ({}/{n})", self.anchor_index(&state.matches) + 1)
             }
         } else if self.mode.is_pick() {
             "> type to filter, Enter picks the selection, Esc quits".into()
@@ -1443,7 +1452,7 @@ mod tests {
     }
 
     #[test]
-    fn cycle_wraps_and_index_refresh_keeps_current() {
+    fn cycle_wraps_and_survives_an_index_refresh() {
         let mut h = harness(Mode::Tree);
         feed(
             &mut h.app,
@@ -1452,25 +1461,30 @@ mod tests {
         );
         h.app.index = Some(index_of(&[("a.txt", false), ("ab.txt", false)]));
         h.app.search_push('a');
-        let n = h.app.search.as_ref().unwrap().matches.len();
-        assert_eq!(n, 2);
+        assert_eq!(h.app.search.as_ref().unwrap().matches.len(), 2);
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/a.txt")));
 
+        // Stepping is expressed by where the selection lands, which is the only
+        // thing the user can see — and the only thing that cannot go stale.
         h.app.cycle_match(true);
-        assert_eq!(h.app.search.as_ref().unwrap().current, 1);
-        h.app.cycle_match(true);
-        assert_eq!(h.app.search.as_ref().unwrap().current, 0);
-        h.app.cycle_match(false);
-        assert_eq!(h.app.search.as_ref().unwrap().current, 1);
-
-        // A fresh index (watcher churn) leaves the cycled position alone: the
-        // selection still matches, so the forward anchor keeps it there.
-        let current_target = h.app.search.as_ref().unwrap().matches[1].entry.abs.clone();
-        h.app.index = Some(index_of(&[("a.txt", false), ("ab.txt", false)]));
-        h.app.rematch();
-        assert_eq!(h.app.search.as_ref().unwrap().current, 1);
         assert_eq!(
             h.app.view.selection.as_deref(),
-            Some(current_target.as_path())
+            Some(Path::new("/r/ab.txt"))
+        );
+        h.app.cycle_match(true);
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/a.txt")));
+        h.app.cycle_match(false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/ab.txt"))
+        );
+
+        // A fresh index (watcher churn) leaves the cycled position alone.
+        h.app.index = Some(index_of(&[("a.txt", false), ("ab.txt", false)]));
+        h.app.rematch();
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/ab.txt"))
         );
     }
 
@@ -1516,7 +1530,11 @@ mod tests {
             ],
             "directories sort first, then files by name"
         );
-        assert_eq!(h.app.search.as_ref().unwrap().current, 0);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/src/deep.md")),
+            "the anchor starts on the first match in tree order"
+        );
 
         // Stepping walks down the tree, then wraps.
         h.app.cycle_match(true);
@@ -1863,6 +1881,37 @@ mod tests {
     }
 
     #[test]
+    fn filtered_out_files_are_inert_to_keyboard_and_mouse() {
+        // 027 asks for this explicitly; it was only ever covered under a
+        // *search* before, never under a filter.
+        use birch_core::FilterMode;
+        let mut h = harness(Mode::Pick);
+        with_filter(&mut h.app, &["*.md"], FilterMode::Skip);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("a.md", NodeKind::File),
+                ("b.rs", NodeKind::File),
+                ("c.md", NodeKind::File),
+            ],
+        );
+        h.app.view.focus("/r/a.md".into());
+        let rows = h.app.rows();
+        let dim = rows.iter().position(|r| r.name == "b.rs").unwrap();
+        assert!(!rows[dim].live);
+
+        // The keyboard steps over it.
+        h.app.view.move_by(&rows, 1);
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/c.md")));
+
+        // The mouse cannot land on it, and it cannot be picked.
+        h.app.resolve_click(&rows, dim, false, Instant::now());
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/c.md")));
+        assert!(h.app.picked.is_none());
+    }
+
+    #[test]
     fn filter_hide_omits_files_but_never_folders() {
         use birch_core::FilterMode;
         let mut h = harness(Mode::Tree);
@@ -2042,6 +2091,53 @@ mod tests {
     }
 
     #[test]
+    fn stepping_follows_the_selection_after_an_arrow_or_a_click() {
+        // Independent-review finding: `→`, `←` and clicks move the selection
+        // without going through cycle_match, so a remembered match pointer goes
+        // stale — `↓` then either swallowed a keystroke or jumped backwards.
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("aa.md", NodeKind::File),
+                ("bb.md", NodeKind::File),
+                ("cc.md", NodeKind::File),
+            ],
+        );
+        h.app.index = Some(index_of(&[
+            ("aa.md", false),
+            ("bb.md", false),
+            ("cc.md", false),
+        ]));
+        h.app.search_push('m');
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/aa.md")));
+
+        // `→` advances to the next match; `↓` must then continue from there.
+        let rows = h.app.rows();
+        h.app.view.on_right(&mut h.app.tree, &rows);
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/bb.md")));
+        h.app.cycle_match(true);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/cc.md")),
+            "the keystroke must not be swallowed"
+        );
+
+        // A click moves the selection too; stepping continues from the click.
+        let rows = h.app.rows();
+        let idx = rows.iter().position(|r| r.name == "aa.md").unwrap();
+        h.app.resolve_click(&rows, idx, false, Instant::now());
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/aa.md")));
+        h.app.cycle_match(true);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/bb.md")),
+            "stepping must not jump backwards to a stale pointer"
+        );
+    }
+
+    #[test]
     fn a_dim_folders_chevron_still_toggles() {
         let mut h = harness(Mode::Tree);
         feed(
@@ -2145,6 +2241,13 @@ mod tests {
         let effect = h.app.activate(&rows, None);
         assert_eq!(effect, NavEffect::Message("no matches".into()));
         assert!(h.app.picked.is_none());
+        // Independent-review finding: reporting "no selection" is not enough —
+        // the field itself must be cleared, or the painter keeps drawing a
+        // cursor on a dim row that answers to no key.
+        assert!(
+            h.app.view.selection.is_none(),
+            "no live row means no selection, not a phantom one"
+        );
     }
 }
 

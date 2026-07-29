@@ -56,8 +56,11 @@ It computes **liveness** over the existing tree, and the tree renders as it alwa
 6. **Composition is intersection.** The filter defines the corpus; a search runs *inside* it. A
    query can never surface something the filter excluded.
 7. **Presentation.** Search always dims and never hides — tree-mode search keeps today's feel. The
-   filter chooses: `skip` dims non-matching files in place (default), `hide` omits them, including
-   directories with no live descendant, which are dead ends under that filter.
+   filter chooses: `skip` dims non-matching files in place (default), `hide` omits them. **Neither
+   mode ever hides a directory.** Hiding directories that hold nothing was tried and withdrawn: the
+   tree loads lazily, so "this branch is empty" only becomes known while browsing, and rows vanished
+   under the cursor as listings arrived. An empty branch costs less than a tree that rearranges
+   itself while being read.
 8. **Nothing to select means nothing selected.** When no row can hold the selection, the selection
    is empty, no cursor is drawn, and `Enter` reports "no matches" and picks nothing — so a picker
    can never return a path that the active narrowing excluded.

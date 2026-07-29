@@ -147,17 +147,23 @@ impl Ctx<'_> {
         filter.matches(&rel, name, is_dir)
     }
 
-    /// Liveness including the filter: a file must pass it, a directory need not
-    /// — directories are never dimmed by a filter, whatever its patterns say,
-    /// because the tree has to stay walkable to reach what does match.
-    fn live_entry(&self, hit: bool, is_dir: bool, path: &std::path::Path, name: &str) -> bool {
-        self.live(hit) && (is_dir || self.passes_filter(path, name, false))
-    }
-
-    /// Pickability (ADR 0023): everything liveness asks, plus the filter — this
-    /// time for directories too, which is the rule `027` asks for.
-    fn pickable(&self, hit: bool, is_dir: bool, path: &std::path::Path, name: &str) -> bool {
-        self.live_entry(hit, is_dir, path, name) && self.passes_filter(path, name, is_dir)
+    /// Liveness and pickability together, from **one** filter evaluation —
+    /// rows are rebuilt on every event, and the glob test allocates, so asking
+    /// the same question three times per row per frame was pure waste.
+    ///
+    /// A file must pass the filter to be live; a directory need not, because
+    /// the tree has to stay walkable to reach what does match. Pickability adds
+    /// the filter for directories too, which is the rule `027` asks for.
+    fn row_flags(
+        &self,
+        hit: bool,
+        is_dir: bool,
+        path: &std::path::Path,
+        name: &str,
+    ) -> (bool, bool) {
+        let passes = self.passes_filter(path, name, is_dir);
+        let live = self.live(hit) && (is_dir || passes);
+        (live, live && passes)
     }
 
     /// `hide` mode drops non-matching **files**. Directories always stay: the
@@ -250,6 +256,8 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
     };
     let mut rows = Vec::new();
     let root = tree.get(tree.root());
+    let root_hit = ctx.is_hit(&root.path);
+    let (root_live, root_pickable) = ctx.row_flags(root_hit, true, &root.path, &root.name);
     rows.push(Row {
         path: root.path.clone(),
         name: root.name.clone(),
@@ -261,9 +269,9 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
         status: ctx.git.and_then(|git| git.dir_status(&root.path)),
         ignored: false,
         missing: false,
-        live: ctx.live(ctx.is_hit(&root.path)),
-        matched: ctx.matched_flag(ctx.is_hit(&root.path)),
-        pickable: ctx.pickable(ctx.is_hit(&root.path), true, &root.path, &root.name),
+        live: root_live,
+        matched: ctx.matched_flag(root_hit),
+        pickable: root_pickable,
         match_indices: ctx.hit_indices(&root.path),
         annotation: Some(abbreviate_home(&root.path, std::env::home_dir().as_deref())),
         guides: Vec::new(),
@@ -290,9 +298,8 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], ro
             Child::Missing(name) => {
                 let path = dir_path.join(&name);
                 let hit = ctx.is_hit(&path);
-                let live = ctx.live_entry(hit, false, &path, &name);
                 let matched = ctx.matched_flag(hit);
-                let pickable = ctx.pickable(hit, false, &path, &name);
+                let (live, pickable) = ctx.row_flags(hit, false, &path, &name);
                 let match_indices = ctx.hit_indices(&path);
                 rows.push(Row {
                     path,
@@ -391,6 +398,12 @@ fn push_node(
     }
     match_indices.sort_unstable();
     match_indices.dedup();
+    let (live, pickable) = ctx.row_flags(
+        hit,
+        tail_node.kind.is_dir(),
+        &tail_node.path,
+        &tail_node.name,
+    );
     rows.push(Row {
         path: tail_node.path.clone(),
         name: label,
@@ -409,19 +422,9 @@ fn push_node(
         status,
         ignored: ctx.is_ignored(&node.path),
         missing: false,
-        live: ctx.live_entry(
-            hit,
-            tail_node.kind.is_dir(),
-            &tail_node.path,
-            &tail_node.name,
-        ),
+        live,
         matched: ctx.matched_flag(hit),
-        pickable: ctx.pickable(
-            hit,
-            tail_node.kind.is_dir(),
-            &tail_node.path,
-            &tail_node.name,
-        ),
+        pickable,
         match_indices,
         annotation: None,
         guides: ancestors.to_vec(),
@@ -524,7 +527,14 @@ impl FlatView {
         // Either the selection vanished or it just went dim: re-home forward
         // from where it sat, so a narrowing moves the cursor the shortest way.
         let from = origin.unwrap_or(self.last_index).min(rows.len() - 1);
-        let idx = nearest_live(rows, from)?;
+        let Some(idx) = nearest_live(rows, from) else {
+            // Nothing can hold the selection, so nothing *is* selected: the
+            // field must be cleared, not merely reported empty, or the painter
+            // keeps drawing a cursor on a dim row that answers to no key
+            // (ADR 0023).
+            self.selection = None;
+            return None;
+        };
         self.select_resolved(rows, idx);
         Some(idx)
     }
@@ -566,6 +576,10 @@ impl FlatView {
         }
         if current != idx {
             self.select(rows, current);
+        } else {
+            // Nowhere to go, but the keystroke still means "show me where I
+            // am": scroll the selection back into view.
+            self.follow = true;
         }
     }
 
@@ -1127,6 +1141,83 @@ mod tests {
         assert_eq!(rows[3].depth, 3);
         assert!(rows[1..4].iter().all(|r| r.expanded && r.chain.is_empty()));
         assert_eq!(view.selection.as_deref(), Some(Path::new("/r/a/b/c")));
+    }
+
+    /// Rows with a chosen liveness pattern, for the narrowing-aware paths.
+    fn live_rows(pattern: &[bool]) -> Vec<Row> {
+        pattern
+            .iter()
+            .enumerate()
+            .map(|(i, &live)| Row {
+                path: PathBuf::from(format!("/r/{i}")),
+                name: format!("{i}"),
+                kind: NodeKind::File,
+                depth: 1,
+                expanded: false,
+                loaded: true,
+                chain: Vec::new(),
+                status: None,
+                ignored: false,
+                missing: false,
+                live,
+                matched: live,
+                pickable: live,
+                match_indices: Vec::new(),
+                annotation: None,
+                guides: Vec::new(),
+                last_sibling: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn move_by_steps_over_several_dim_rows_at_once() {
+        // A multi-row jump counts live rows, not screen lines.
+        let rows = live_rows(&[true, false, false, true, false, true]);
+        let mut view = FlatView::default();
+        view.focus(PathBuf::from("/r/0"));
+        view.move_by(&rows, 2);
+        assert_eq!(view.selection.as_deref(), Some(rows[5].path.as_path()));
+        view.move_by(&rows, -2);
+        assert_eq!(view.selection.as_deref(), Some(rows[0].path.as_path()));
+    }
+
+    #[test]
+    fn a_selection_below_the_last_live_row_re_homes_backwards() {
+        // `nearest_live`'s backward arm: nothing live at or after the remembered
+        // spot, so the nearest live row above it takes the selection.
+        let rows = live_rows(&[true, false, false]);
+        let mut view = FlatView::default();
+        view.focus(PathBuf::from("/r/2")); // a dim row
+        assert_eq!(view.sync(&rows), Some(0));
+        assert_eq!(view.selection.as_deref(), Some(rows[0].path.as_path()));
+    }
+
+    #[test]
+    fn nothing_live_leaves_no_selection() {
+        let rows = live_rows(&[false, false]);
+        let mut view = FlatView::default();
+        view.focus(PathBuf::from("/r/0"));
+        assert_eq!(view.sync(&rows), None);
+        assert!(view.selection.is_none(), "no cursor may be left behind");
+    }
+
+    #[test]
+    fn left_falls_back_when_the_parent_is_dim() {
+        // Under a narrowing the parent may be unselectable; `←` then steps to
+        // the previous live row instead of going dead.
+        let mut rows = live_rows(&[true, false, true]);
+        rows[1].depth = 1; // the dim parent
+        rows[2].depth = 2; // its child, selected
+        let mut tree = Tree::new(PathBuf::from("/r"));
+        let mut view = FlatView::default();
+        view.focus(rows[2].path.clone());
+        view.on_left(&mut tree, &rows);
+        assert_eq!(
+            view.selection.as_deref(),
+            Some(rows[0].path.as_path()),
+            "the dim parent is skipped, not selected"
+        );
     }
 
     #[test]

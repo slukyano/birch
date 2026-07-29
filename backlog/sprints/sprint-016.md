@@ -114,8 +114,8 @@ navigable and are gated on *pick* alone.
 - **`027`** — `--filter <glob>` (repeatable) and `--filter-mode hide|skip`, in **both** modes. A
   pattern without `/` matches the name, one with `/` the root-relative path — search's corpus rule.
   `globset` was already in the tree under `ignore`, so brace expansion came free with no new
-  transitive crate, and patterns compile before the terminal is taken over. `hide` also drops
-  directories *known* to hold nothing; a directory whose listing has not been read is always kept.
+  transitive crate, and patterns compile before the terminal is taken over. `hide` omits files only
+  — never directories (see bug 4 below).
 - **`060`** — `→` expands a collapsed directory, splits an expanded chain (ADR 0014 intact), or
   advances to the next live row. Inert only where the task allows: no live row follows.
 - **`059`** — no code change, by decision. The reported misalignment was traced to font metrics with
@@ -125,7 +125,7 @@ navigable and are gated on *pick* alone.
   font, sits at +0.00. Setting the primary family to a `Mono` build fixes it; documented in the
   README and `docs/research/nerd-font-glyphs.md`, with the upstream Ghostty reports.
 
-Nine commits, 26 files, +1665/−265. Tests went from 144 on `main` to **165**; `cargo clippy
+Ten commits, 27 files. Tests went from 144 on `main` to **171**; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Every scenario the sprint touched was
 also run and read back — the CLI surface by driving the binary, the rendering by capturing frames
 with `vhs` — per the verification gate this sprint added to `workflow.md`.
@@ -158,6 +158,27 @@ a unit test):
    case was fixed alongside: `sync` re-pointing a selection through a compacted chain counted as
    movement, so bookkeeping could drag the viewport too.
 
+# Independent review
+
+A fresh reviewer with no implementation context read the full `main..sprint/016` diff against the
+sprint's own claims. It found no reachable panic, overflow, or aliasing bug, and confirmed the
+crate boundary, the deletion of the flat list, and the dim-row contract including the chevron
+exception. Seven findings were fixed:
+
+| finding | resolution |
+|---|---|
+| **major** — the match pointer desynced: `→`, `←`, and clicks move the selection without going through `cycle_match`, so `↓` could swallow a keystroke or jump backwards, and the counter lied | The pointer is **gone**. Stepping and the counter derive their position from the selection, which is the only thing the user can see and the only thing that cannot go stale. |
+| **major** — with zero matches, `sync` reported "no selection" but left the field set, so a cursor stayed painted on a dim, inert row | `sync` clears the selection, matching what ADR 0023 promised. |
+| **minor** — a symlinked directory was a file to the index and a directory to the tree, so ordering, anchoring, and filtering disagreed with the row on screen | `build_index` resolves a symlink that points at a directory. |
+| **minor** — an index refresh arriving mid-reveal overwrote a reveal a keystroke had started | `rematch` never clobbers a reveal already in flight. |
+| **minor** — the Accepted ADR and two records still described the withdrawn dead-end hiding | ADR 0023 §7, this summary, and `027`'s test list now state what the code does. |
+| **minor** — several new branches had no test | Added: multi-row stepping over dim rows, the backward re-home arm, nothing-live clearing, `←`'s dim-parent fallback, and filter rows inert to keyboard and mouse. |
+| **minor (perf)** — the glob filter ran three or four times per row per frame, allocating each time | One evaluation per row, via `Ctx::row_flags`. |
+
+Two nits were also taken: a move that cannot move now scrolls the selection back into view, and
+`filter.rs` documents the two glob shapes that silently match nothing (`src/*` names files only;
+a leading `/` does not anchor).
+
 # Session log
 
 - Scoped and cut: `063`, `062`, `027`, `060`, plus `059` added at scope approval. Branch
@@ -184,6 +205,9 @@ a unit test):
   the offset to the embedded Symbols Nerd Font), `062` (one search model; the flat picker list
   deleted), `060` (the three-case right arrow), `027` (the glob filter, both modes). Two rendering
   bugs found on screen and fixed. Closed out; gates green.
+- Independent review round: seven findings fixed, two majors among them — a match pointer that went
+  stale whenever an arrow or a click moved the selection, and a cursor left painted on a dim row
+  when nothing matched. Both now carry regression tests verified to fail without their fix.
 - Live-use round after close-out: four more defects fixed — a dim folder's chevron was dead,
   `--filter '*/'` matched nothing, `--filter-mode hide` made rows vanish mid-browse, and an index
   refresh snapped a scrolled viewport back to the match. Reports that were new work rather than
