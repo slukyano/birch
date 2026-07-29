@@ -6,6 +6,7 @@
 
 pub mod config;
 pub mod files_source;
+pub mod filter;
 pub mod git;
 pub mod open_cmd;
 pub mod persist;
@@ -17,6 +18,7 @@ pub mod tree;
 pub mod watcher;
 
 pub use config::Config;
+pub use filter::{Filter, FilterMode};
 pub use git::{FileStatus, GitState};
 pub use open_cmd::{OpenCmd, OpenMode};
 pub use settings::{Settings, ThemeId};

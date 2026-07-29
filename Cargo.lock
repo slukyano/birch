@@ -84,6 +84,7 @@ dependencies = [
 name = "birch-core"
 version = "0.1.1"
 dependencies = [
+ "globset",
  "ignore",
  "notify",
  "nucleo-matcher",

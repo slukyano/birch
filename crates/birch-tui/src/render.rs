@@ -445,6 +445,7 @@ mod tests {
             missing: false,
             live: true,
             matched: false,
+            pickable: true,
             match_indices: Vec::new(),
             annotation: None,
             guides: Vec::new(),

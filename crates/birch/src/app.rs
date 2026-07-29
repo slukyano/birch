@@ -17,8 +17,8 @@ use birch_core::protocol::{PathForm, Request, Response, SettingKey, SettingValue
 use birch_core::search::{self, IndexCmd, IndexEvent, Match, SearchIndex, search};
 use birch_core::watcher::{WatchCmd, WatchEvent};
 use birch_core::{
-    NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree, TreeDelta,
-    persist,
+    Filter, NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree,
+    TreeDelta, persist,
 };
 use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row};
 use birch_tui::input::{self, InputAction};
@@ -55,6 +55,8 @@ pub struct AppWiring {
     pub repo_root: Option<PathBuf>,
     /// The control socket, when one was bound (never in picker mode).
     pub socket: Option<SocketHandle>,
+    /// The compiled glob filter (task 027), when `--filter` was given.
+    pub filter: Option<Filter>,
     pub input_paused: Arc<AtomicBool>,
 }
 
@@ -87,6 +89,7 @@ struct App {
     git_cmds: Sender<GitCmd>,
     repo_root: Option<PathBuf>,
     socket: Option<SocketHandle>,
+    filter: Option<Filter>,
     git_state: Option<Arc<GitState>>,
     /// The git worker answered at least once — peeks wait for it so ignored
     /// dirs are known before any auto-load fires.
@@ -124,6 +127,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         git_cmds,
         repo_root,
         socket,
+        filter,
         input_paused,
     } = wiring;
 
@@ -142,6 +146,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         git_cmds,
         repo_root,
         socket,
+        filter,
         git_state: None,
         git_answered: false,
         watched: HashSet::new(),
@@ -665,6 +670,11 @@ impl App {
             && !row.missing
         {
             let browsing_click = click.is_some() && row.kind.is_dir();
+            if !browsing_click && !row.pickable {
+                // Navigable but not confirmable: a directory under a
+                // file-shaped filter (task 027).
+                return NavEffect::Message(format!("{} does not match the filter", row.name));
+            }
             if !browsing_click {
                 if click.is_some() {
                     // A picking click also moves the selection there.
@@ -777,6 +787,14 @@ impl App {
             return;
         };
         let mut matches = search(&index, &query);
+        if let Some(filter) = &self.filter {
+            // The filter defines the corpus, the query ranks what is left
+            // (ADR 0023). Directories are never judged by the filter, so a
+            // query can still reach them; a filtered-out file can never
+            // surface. Filtering the results, not the index, keeps this from
+            // forcing a rebuild.
+            matches.retain(|m| m.entry.is_dir || filter.matches(&m.entry.rel, &m.entry.name));
+        }
         search::sort_tree_order(&mut matches);
         let matched_set = matches
             .iter()
@@ -939,6 +957,7 @@ impl App {
                 matched,
                 home: self.home.as_deref(),
                 split: Some(&self.view.split),
+                filter: self.filter.as_ref(),
             },
         )
     }
@@ -1274,6 +1293,7 @@ mod tests {
             git_cmds: git_tx,
             repo_root: None,
             socket: None,
+            filter: None,
             git_state: None,
             git_answered: false,
             watched: HashSet::new(),
@@ -1778,6 +1798,154 @@ mod tests {
         );
         h.app.activate(&rows, None);
         assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/src/main.rs")));
+    }
+
+    /// Applies a glob filter to a harness, as `--filter`/`--filter-mode` do.
+    fn with_filter(app: &mut App, patterns: &[&str], mode: birch_core::FilterMode) {
+        let owned: Vec<String> = patterns.iter().map(|p| (*p).to_string()).collect();
+        app.filter = Filter::parse(&owned, mode).expect("patterns compile");
+    }
+
+    #[test]
+    fn filter_skip_dims_files_but_keeps_folders_navigable() {
+        use birch_core::FilterMode;
+        let mut h = harness(Mode::Pick);
+        with_filter(&mut h.app, &["*.md"], FilterMode::Skip);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("src", NodeKind::Dir),
+                ("notes.md", NodeKind::File),
+                ("build.rs", NodeKind::File),
+            ],
+        );
+        let rows = h.app.rows();
+        let by_name = |name: &str| {
+            rows.iter()
+                .find(|r| r.name == name)
+                .unwrap_or_else(|| panic!("{name} is present"))
+        };
+
+        // A matching file: live and pickable.
+        assert!(by_name("notes.md").live && by_name("notes.md").pickable);
+        // A non-matching file: shown, dimmed, inert.
+        assert!(!by_name("build.rs").live);
+        assert!(!by_name("build.rs").pickable);
+        // A directory: never dimmed by a file-shaped filter, so the tree stays
+        // navigable — but it cannot be picked, since it does not match.
+        assert!(by_name("src").live, "folders stay navigable");
+        assert!(!by_name("src").pickable, "but only match-able folders pick");
+
+        // Enter on the folder reports instead of picking.
+        h.app.view.focus("/r/src".into());
+        let effect = h.app.activate(&rows, None);
+        assert_eq!(
+            effect,
+            NavEffect::Message("src does not match the filter".into())
+        );
+        assert!(h.app.picked.is_none());
+
+        // Enter on the matching file picks it.
+        h.app.view.focus("/r/notes.md".into());
+        h.app.activate(&rows, None);
+        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/notes.md")));
+    }
+
+    #[test]
+    fn filter_hide_omits_non_matches_and_dead_end_folders() {
+        use birch_core::FilterMode;
+        let mut h = harness(Mode::Tree);
+        with_filter(&mut h.app, &["*.md"], FilterMode::Hide);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("docs", NodeKind::Dir),
+                ("dead", NodeKind::Dir),
+                ("notes.md", NodeKind::File),
+                ("build.rs", NodeKind::File),
+            ],
+        );
+        // Both directories are loaded, so their contents are known: docs holds
+        // a match, dead holds none.
+        feed(&mut h.app, "/r/docs", &[("guide.md", NodeKind::File)]);
+        feed(&mut h.app, "/r/dead", &[("main.rs", NodeKind::File)]);
+
+        let names: Vec<String> = h.app.rows().iter().map(|r| r.name.clone()).collect();
+        assert!(names.iter().any(|n| n == "notes.md"));
+        assert!(
+            !names.iter().any(|n| n == "build.rs"),
+            "a non-matching file is omitted in hide mode"
+        );
+        assert!(
+            names.iter().any(|n| n.starts_with("docs")),
+            "a folder holding a match stays: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.starts_with("dead")),
+            "a folder known to hold nothing is a dead end: {names:?}"
+        );
+    }
+
+    #[test]
+    fn an_unloaded_folder_survives_hide_mode() {
+        use birch_core::FilterMode;
+        let mut h = harness(Mode::Tree);
+        with_filter(&mut h.app, &["*.md"], FilterMode::Hide);
+        // `maybe` is never fed, so its listing is unknown — hiding it could
+        // hide the very thing being looked for.
+        feed(&mut h.app, "/r", &[("maybe", NodeKind::Dir)]);
+        let names: Vec<String> = h.app.rows().iter().map(|r| r.name.clone()).collect();
+        assert!(names.iter().any(|n| n.starts_with("maybe")), "{names:?}");
+    }
+
+    #[test]
+    fn search_cannot_surface_a_filtered_out_file() {
+        use birch_core::FilterMode;
+        let mut h = harness(Mode::Pick);
+        with_filter(&mut h.app, &["*.md"], FilterMode::Skip);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("notes.md", NodeKind::File), ("notes.rs", NodeKind::File)],
+        );
+        h.app.index = Some(index_of(&[("notes.md", false), ("notes.rs", false)]));
+        h.app.search_push('n');
+
+        let matched: Vec<String> = h
+            .app
+            .search
+            .as_ref()
+            .unwrap()
+            .matches
+            .iter()
+            .map(|m| m.entry.rel.clone())
+            .collect();
+        assert_eq!(
+            matched,
+            ["notes.md"],
+            "the filter is the corpus; the query ranks what is left"
+        );
+    }
+
+    #[test]
+    fn path_patterns_match_below_the_root() {
+        use birch_core::FilterMode;
+        let mut h = harness(Mode::Tree);
+        with_filter(&mut h.app, &["src/*.rs"], FilterMode::Skip);
+        feed(&mut h.app, "/r", &[("src", NodeKind::Dir)]);
+        feed(
+            &mut h.app,
+            "/r/src",
+            &[("main.rs", NodeKind::File), ("notes.md", NodeKind::File)],
+        );
+        h.app.tree.set_expanded(Path::new("/r/src"), true);
+
+        let rows = h.app.rows();
+        let live = |name: &str| rows.iter().find(|r| r.name == name).unwrap().live;
+        assert!(live("main.rs"), "src/main.rs matches src/*.rs");
+        assert!(!live("notes.md"));
     }
 
     #[test]

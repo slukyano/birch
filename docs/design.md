@@ -30,6 +30,7 @@ birch [<options>] [<dir>]
 
 ```
 birch --pick [<dir>]      # picker mode: Enter prints the selection and exits
+birch --filter '*.md'     # glob filter (repeatable); --filter-mode hide|skip
 birch ctl <verb> [...]    # control a running instance (see Control socket)
 ```
 
@@ -251,6 +252,14 @@ A running birch instance exposes a Unix domain socket; `birch ctl` (a subcommand
 non-matches dim and go inert, `↑`/`↓` step the matches. Enter prints the selected path —
 file or dir — to stdout and exits. Arrows browse; a mouse click selects, only double-click
 picks (chevrons browse dirs), so exploratory clicks never confirm by accident.
+
+**The glob filter** (`--filter '*.md'`, repeatable) narrows what the tree offers, in either
+mode. It judges **files only**: a non-matching file is dimmed and inert (`--filter-mode skip`,
+the default) or omitted (`hide`, which also drops directories known to hold nothing that
+matches — a directory whose listing has not been read yet is always kept). Directories are
+never dimmed by it, so the tree stays navigable, but a directory is **pickable** only when it
+matches the patterns. A pattern without `/` matches the name, one with `/` the root-relative
+path — the same corpus rule as search, which then runs inside the filtered set.
 
 ```
 nvim "$(birch --pick)"

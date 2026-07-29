@@ -7,8 +7,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use birch_core::filter::FilterMode;
 use birch_core::git::GitState;
-use birch_core::{FileStatus, NodeId, NodeKind, Settings, Tree, settings};
+use birch_core::{FileStatus, Filter, NodeId, NodeKind, Settings, Tree, settings};
 
 #[derive(Clone, Debug)]
 pub struct Row {
@@ -36,6 +37,10 @@ pub struct Row {
     /// they diverge under a glob filter, where a directory is live (navigable)
     /// without matching the patterns.
     pub matched: bool,
+    /// Whether a picker may confirm this row (ADR 0023). Stricter than `live`:
+    /// a directory that is navigable under a glob filter is not pickable
+    /// unless it matches the patterns itself.
+    pub pickable: bool,
     /// Char positions inside `name` to light up (empty for whole-row
     /// highlight — e.g. path-mode matches whose characters are off-screen).
     pub match_indices: Vec<u32>,
@@ -80,6 +85,8 @@ pub struct Decor<'a> {
     /// Chains split on demand (ADR 0014): a dir in this set neither starts
     /// nor extends a compact chain. Owned by `FlatView`.
     pub split: Option<&'a HashSet<PathBuf>>,
+    /// The active glob filter (task 027), judging files only.
+    pub filter: Option<&'a Filter>,
 }
 
 struct Ctx<'a> {
@@ -88,6 +95,8 @@ struct Ctx<'a> {
     git: Option<&'a GitState>,
     matched: Option<&'a HashMap<PathBuf, Vec<u32>>>,
     split: Option<&'a HashSet<PathBuf>>,
+    filter: Option<&'a Filter>,
+    root: PathBuf,
 }
 
 impl Ctx<'_> {
@@ -102,6 +111,79 @@ impl Ctx<'_> {
     /// highlights, as distinct from what the selection may land on.
     fn matched_flag(&self, hit: bool) -> bool {
         self.matched.is_some() && hit
+    }
+
+    /// Whether the glob filter accepts this entry. Directories are never
+    /// judged for *visibility* — file-shaped patterns match no directory, and
+    /// judging them would make the tree unnavigable — so this answers the
+    /// question the filter actually asks of a path, and callers decide whether
+    /// a directory has to satisfy it (pickability) or not (liveness).
+    fn passes_filter(&self, path: &std::path::Path, name: &str) -> bool {
+        let Some(filter) = self.filter else {
+            return true;
+        };
+        let rel = path
+            .strip_prefix(&self.root)
+            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        filter.matches(&rel, name)
+    }
+
+    /// Liveness including the filter: a file must pass it, a directory need not.
+    fn live_entry(&self, hit: bool, is_dir: bool, path: &std::path::Path, name: &str) -> bool {
+        self.live(hit) && (is_dir || self.passes_filter(path, name))
+    }
+
+    /// Pickability (ADR 0023): everything liveness asks, plus the filter — this
+    /// time for directories too, which is the rule `027` asks for.
+    fn pickable(&self, hit: bool, is_dir: bool, path: &std::path::Path, name: &str) -> bool {
+        self.live_entry(hit, is_dir, path, name) && self.passes_filter(path, name)
+    }
+
+    /// `hide` mode drops a non-matching file outright, and a directory once its
+    /// whole subtree is known to hold nothing that matches. A directory that is
+    /// not fully loaded is always kept: an unread listing may hold a match, and
+    /// hiding a path that might contain what you are looking for is worse than
+    /// showing a branch that turns out empty.
+    fn hidden_by_filter(&self, id: NodeId) -> bool {
+        let Some(filter) = self.filter else {
+            return false;
+        };
+        if filter.mode() != FilterMode::Hide {
+            return false;
+        }
+        let node = self.tree.get(id);
+        if !node.kind.is_dir() {
+            return !self.passes_filter(&node.path, &node.name);
+        }
+        if self.passes_filter(&node.path, &node.name) {
+            return false; // a directory that matches is worth showing
+        }
+        !self.subtree_has_match(id)
+    }
+
+    /// Whether anything under `id` matches, over the *loaded* tree. An unloaded
+    /// directory counts as a match: its contents are unknown.
+    fn subtree_has_match(&self, id: NodeId) -> bool {
+        let node = self.tree.get(id);
+        if !node.is_loaded() {
+            return true;
+        }
+        node.children().iter().any(|&child| {
+            let child_node = self.tree.get(child);
+            if !self.name_visible(&child_node.name) {
+                return false;
+            }
+            if !self.s.show_ignored && self.is_ignored(&child_node.path) {
+                return false;
+            }
+            if child_node.kind.is_dir() {
+                self.passes_filter(&child_node.path, &child_node.name)
+                    || self.subtree_has_match(child)
+            } else {
+                self.passes_filter(&child_node.path, &child_node.name)
+            }
+        })
     }
 
     fn is_hit(&self, path: &std::path::Path) -> bool {
@@ -153,6 +235,9 @@ fn visible_children(ctx: &Ctx, dir_id: NodeId) -> Vec<Child> {
         if !ctx.s.show_ignored && ctx.is_ignored(&node.path) {
             continue;
         }
+        if ctx.hidden_by_filter(child) {
+            continue; // `--filter-mode hide` (task 027)
+        }
         items.push((
             node.kind.is_dir(),
             node.name.to_lowercase(),
@@ -190,6 +275,8 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
         git: decor.git,
         matched: decor.matched,
         split: decor.split,
+        filter: decor.filter,
+        root: tree.get(tree.root()).path.clone(),
     };
     let mut rows = Vec::new();
     let root = tree.get(tree.root());
@@ -206,6 +293,7 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
         missing: false,
         live: ctx.live(ctx.is_hit(&root.path)),
         matched: ctx.matched_flag(ctx.is_hit(&root.path)),
+        pickable: ctx.pickable(ctx.is_hit(&root.path), true, &root.path, &root.name),
         match_indices: ctx.hit_indices(&root.path),
         annotation: Some(abbreviate_home(&root.path, std::env::home_dir().as_deref())),
         guides: Vec::new(),
@@ -232,8 +320,9 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], ro
             Child::Missing(name) => {
                 let path = dir_path.join(&name);
                 let hit = ctx.is_hit(&path);
-                let live = ctx.live(hit);
+                let live = ctx.live_entry(hit, false, &path, &name);
                 let matched = ctx.matched_flag(hit);
+                let pickable = ctx.pickable(hit, false, &path, &name);
                 let match_indices = ctx.hit_indices(&path);
                 rows.push(Row {
                     path,
@@ -248,6 +337,7 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], ro
                     missing: true,
                     live,
                     matched,
+                    pickable,
                     match_indices,
                     annotation: None,
                     guides: ancestors.to_vec(),
@@ -349,8 +439,19 @@ fn push_node(
         status,
         ignored: ctx.is_ignored(&node.path),
         missing: false,
-        live: ctx.live(hit),
+        live: ctx.live_entry(
+            hit,
+            tail_node.kind.is_dir(),
+            &tail_node.path,
+            &tail_node.name,
+        ),
         matched: ctx.matched_flag(hit),
+        pickable: ctx.pickable(
+            hit,
+            tail_node.kind.is_dir(),
+            &tail_node.path,
+            &tail_node.name,
+        ),
         match_indices,
         annotation: None,
         guides: ancestors.to_vec(),
