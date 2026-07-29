@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use birch_core::git::{self, GitCmd, GitEvent, GitState};
 use birch_core::protocol::{PathForm, Request, Response, SettingKey, SettingValue, Verb};
-use birch_core::search::{IndexCmd, IndexEvent, Match, SearchIndex, search};
+use birch_core::search::{self, IndexCmd, IndexEvent, Match, SearchIndex, search};
 use birch_core::watcher::{WatchCmd, WatchEvent};
 use birch_core::{
     NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree, TreeDelta,
@@ -204,7 +204,7 @@ impl App {
             AppEvent::Fs(WatchEvent::Dirty(dirs)) => self.handle_dirty(dirs),
             AppEvent::Index(IndexEvent::Index(index)) => {
                 self.index = Some(index);
-                self.rematch(true);
+                self.rematch();
             }
             AppEvent::Ctl(ctl) => return self.handle_ctl(terminal, events, ctl),
             AppEvent::Shutdown => return true,
@@ -716,7 +716,7 @@ impl App {
         if let Some(state) = &mut self.search {
             state.query.push(c);
         }
-        self.rematch(false);
+        self.rematch();
     }
 
     fn search_pop(&mut self) {
@@ -731,7 +731,7 @@ impl App {
             self.pending_reveal = None;
             return;
         }
-        self.rematch(false);
+        self.rematch();
     }
 
     /// Esc backs out one layer (ADR 0012): an active search clears (tree
@@ -754,20 +754,27 @@ impl App {
         }
     }
 
-    /// Recomputes matches for the current query. `keep_position` preserves
-    /// the current match pointer (used when a fresh index arrives).
-    fn rematch(&mut self, keep_position: bool) {
-        let Some(state) = &mut self.search else {
+    /// Recomputes matches for the current query. Matches are held in tree
+    /// order (ADR 0023 / task 063), and the selection anchors *forward*: it
+    /// lands on the first match at or after the current selection, wrapping to
+    /// the first match when none follows. A selected row that still matches
+    /// therefore never moves, and narrowing a query never drags the pane
+    /// backwards.
+    fn rematch(&mut self) {
+        let Some(query) = self.search.as_ref().map(|s| s.query.clone()) else {
             return;
         };
-        let Some(index) = &self.index else {
-            state.matches = Vec::new();
-            state.matched_set = HashMap::new();
+        let Some(index) = self.index.clone() else {
+            if let Some(state) = &mut self.search {
+                state.matches = Vec::new();
+                state.matched_set = HashMap::new();
+                state.current = 0;
+            }
             return;
         };
-        state.matches = search(index, &state.query);
-        state.matched_set = state
-            .matches
+        let mut matches = search(&index, &query);
+        search::sort_tree_order(&mut matches);
+        let matched_set = matches
             .iter()
             .map(|m| {
                 let indices = if m.by_path {
@@ -778,27 +785,47 @@ impl App {
                 (m.entry.abs.clone(), indices)
             })
             .collect();
-        if !keep_position {
-            state.current = 0;
+        let current = self.anchor_index(&matches);
+        let target = matches.get(current).map(|m| m.entry.abs.clone());
+        if let Some(state) = &mut self.search {
+            state.matches = matches;
+            state.matched_set = matched_set;
+            state.current = current;
         }
-        state.current = state.current.min(state.matches.len().saturating_sub(1));
-        if self.mode == Mode::Tree {
-            // Reveal the current match — after an index rebuild that is the
-            // match the user cycled to, not necessarily the best one.
-            let target = self
-                .search
-                .as_ref()
-                .and_then(|s| s.matches.get(s.current))
-                .map(|m| m.entry.abs.clone());
-            if let Some(target) = target {
-                self.reveal(target);
-            }
-        } else if let Some(state) = &self.search
-            && let Some(first) = state.matches.first()
-        {
-            // Filter list: selection snaps to the top match.
-            self.view.focus(first.entry.abs.clone());
-            self.view.scroll = 0;
+        // Reveal the anchored match in both modes: the picker renders the same
+        // tree the pane does (ADR 0023), so there is no list to snap to.
+        if let Some(target) = target {
+            self.reveal(target);
+        }
+    }
+
+    /// The forward anchor: the index of the first match at or after the current
+    /// selection in tree order, wrapping to the first match when none follows.
+    /// Falls back to the first match when there is no selection to anchor on.
+    fn anchor_index(&self, matches: &[Match]) -> usize {
+        if matches.is_empty() {
+            return 0;
+        }
+        let Some(selection) = &self.view.selection else {
+            return 0;
+        };
+        let Ok(rel) = selection.strip_prefix(&self.root) else {
+            return 0;
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if rel.is_empty() {
+            return 0; // the root row precedes every match
+        }
+        let is_dir = self
+            .tree
+            .node_at(selection)
+            .is_some_and(|node| node.kind.is_dir());
+        let position = search::tree_order_position(matches, &rel, is_dir);
+        // Past the last match, the anchor wraps to the first.
+        if position == matches.len() {
+            0
+        } else {
+            position
         }
     }
 
@@ -1404,16 +1431,122 @@ mod tests {
         h.app.cycle_match(false);
         assert_eq!(h.app.search.as_ref().unwrap().current, 1);
 
-        // A fresh index (watcher churn) keeps the cycled position and reveals
-        // the match at that position, not the best one.
+        // A fresh index (watcher churn) leaves the cycled position alone: the
+        // selection still matches, so the forward anchor keeps it there.
         let current_target = h.app.search.as_ref().unwrap().matches[1].entry.abs.clone();
         h.app.index = Some(index_of(&[("a.txt", false), ("ab.txt", false)]));
-        h.app.rematch(true);
+        h.app.rematch();
         assert_eq!(h.app.search.as_ref().unwrap().current, 1);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(current_target.as_path())
         );
+    }
+
+    #[test]
+    fn stepping_and_anchoring_follow_tree_order() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("src", NodeKind::Dir),
+                ("mid.md", NodeKind::File),
+                ("zed.md", NodeKind::File),
+            ],
+        );
+        feed(&mut h.app, "/r/src", &[("deep.md", NodeKind::File)]);
+        // Index order is deliberately not tree order — cycling must follow the
+        // rows, not the index (and not the fuzzy score).
+        h.app.index = Some(index_of(&[
+            ("zed.md", false),
+            ("src/deep.md", false),
+            ("mid.md", false),
+        ]));
+
+        // Anchor from the root row: the first match in tree order.
+        h.app.view.focus("/r".into());
+        h.app.search_push('d');
+        let tree_order: Vec<PathBuf> = h
+            .app
+            .search
+            .as_ref()
+            .unwrap()
+            .matches
+            .iter()
+            .map(|m| m.entry.abs.clone())
+            .collect();
+        assert_eq!(
+            tree_order,
+            [
+                PathBuf::from("/r/src/deep.md"),
+                PathBuf::from("/r/mid.md"),
+                PathBuf::from("/r/zed.md"),
+            ],
+            "directories sort first, then files by name"
+        );
+        assert_eq!(h.app.search.as_ref().unwrap().current, 0);
+
+        // Stepping walks down the tree, then wraps.
+        h.app.cycle_match(true);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/mid.md"))
+        );
+        h.app.cycle_match(true);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/zed.md"))
+        );
+        h.app.cycle_match(true);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/src/deep.md"))
+        );
+    }
+
+    #[test]
+    fn search_anchors_forward_from_the_selection() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("ad.md", NodeKind::File),
+                ("bd.md", NodeKind::File),
+                ("cd.md", NodeKind::File),
+            ],
+        );
+        h.app.index = Some(index_of(&[
+            ("ad.md", false),
+            ("bd.md", false),
+            ("cd.md", false),
+        ]));
+
+        // Sitting on a row between matches: the search moves forward, never back.
+        h.app.view.focus("/r/bd.md".into());
+        h.app.search_push('d');
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/bd.md")),
+            "the selected row matches, so it stays"
+        );
+
+        // Narrowing to a query the selection fails moves to the next match.
+        h.app.search_push('c'); // "dc" matches nothing
+        h.app.search_pop();
+        h.app.index = Some(index_of(&[("ad.md", false), ("cd.md", false)]));
+        h.app.rematch();
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/cd.md")),
+            "the anchor moves forward to the next match, not back to the first"
+        );
+
+        // Past the last match, the anchor wraps to the first.
+        h.app.view.focus("/r/zz.md".into());
+        h.app.rematch();
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/ad.md")));
     }
 
     #[test]
