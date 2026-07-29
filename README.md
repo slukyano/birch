@@ -107,14 +107,20 @@ tree alike. It is repeatable, and an entry passes if it matches any pattern:
 ```sh
 birch --pick --filter '*.md'                     # only markdown is pickable
 birch --pick --filter '*.{md,txt}'               # brace expansion works
+birch --pick --filter '*/'                       # directories only
 birch --filter 'src/**/*.rs' --filter-mode hide  # a Rust-only view of src/
 ```
 
-A pattern without `/` matches the file name; one with `/` matches the path below the root.
-Non-matching **files** are greyed out and cannot be selected (`--filter-mode skip`, the default)
-or left out entirely (`hide`). **Folders are never greyed out** — the tree stays navigable — but
-in `--pick` a folder can only be confirmed when it matches the patterns. Typing a search query
-then narrows further, always inside the filter.
+Patterns read as they do in a shell or a `.gitignore`: without `/` a pattern matches the file
+**name**, with `/` inside it the **path** below the root, and with a **trailing** `/` it names
+**directories** — so `*/` is "any directory".
+
+Non-matching **files** are greyed out and cannot be selected (`--filter-mode skip`, the default) or
+left out entirely (`hide`). **Folders are never greyed out and never hidden** — the tree has to stay
+walkable to reach what does match, and since it loads lazily, "this folder holds nothing" is a fact
+that would arrive mid-browse and make rows vanish under the cursor. In `--pick`, a folder can only
+be confirmed when a pattern names it. Typing a search query narrows further, always inside the
+filter.
 
 ## Themes
 

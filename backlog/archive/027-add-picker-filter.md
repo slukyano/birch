@@ -75,9 +75,16 @@ directory at all, and judging directories by them would make the tree unnavigabl
 **pickable** only when it matches the patterns itself. This is the task's folders rule, and ADR 0023
 records it as the filter's declared policy (the search, by contrast, judges every row).
 
-**`hide` hides dead ends too.** In `hide` mode a non-matching *file* is omitted, and so is a
-directory with no live descendant: keeping empty branches would fill the pane with paths that lead
-nowhere. Directories that do hold matches stay, which is what "folders stay navigable" is for.
+**`hide` hides files only** (revised after live use). The design first dropped directories with no
+live descendant as well, on the reasoning that empty branches are noise. In practice the tree loads
+lazily, so "this branch holds nothing" became known *while browsing* and rows disappeared under the
+cursor — far worse than a branch that turns out empty. Directories therefore always stay.
+
+**Directory patterns come from glob itself.** `globset` matches strings and knows nothing of file
+kinds, so a directory is presented to it with a trailing `/`. Standard semantics then apply with no
+special case: `*/` names any directory, `*.md` names no directory. A *trailing* slash also does not
+make a pattern a path rule — `*/` is a name rule ("any directory, at any depth"), `src/*/` a path
+rule — which is how a `.gitignore` reads them.
 
 **Search composes by intersection.** The filter defines the corpus; a query runs inside it. The
 index itself stays unfiltered — filtering the *results* keeps a runtime filter change from forcing
