@@ -54,25 +54,26 @@ four behaviours they gated:
 `Esc` also gains the picker-mode restore that only tree mode had (`app.rs:743`): clearing a search
 returns the pre-search selection and scroll.
 
-**Liveness replaces the hit flag.** `Row.search: Option<bool>` today means "a search is active, and
-this row is/isn't a hit". It becomes the liveness of ADR 0023, computed in `visible_rows`:
+**Selectability replaces the hit flag.** `Row.search: Option<bool>` today means "a search is active,
+and this row is/isn't a hit". Under ADR 0023 the search judges **every** row, files and directories
+alike, so the flag becomes `Row.live: bool` with a simpler definition than a subtree test: a row is
+live iff it is a match. Ancestors of matches still render — dimmed — so a match is always shown in
+its place in the tree. With no narrowing active every row is live and nothing dims.
 
-- a **file** row is live iff it is a match;
-- a **directory** row is live iff it is a match **or** any descendant is — resolved during the same
-  post-order walk that already builds the rows, so no extra tree traversal;
-- with no narrowing active, every row is live and nothing dims (today's idle rendering).
+`match_indices` stays as it is: the lit characters are about *display*, not reachability. The
+renderer dims `!live`; `hit_test` returns the row exactly as before, and the *app* refuses to select
+it — so mouse geometry stays untouched.
 
-`Row` therefore carries `live: bool` (and keeps `match_indices` for the lit characters, which are
-about *display*, not reachability). The renderer dims `!live`; `hit_test` returns the row as before,
-and the *app* refuses to select it — so mouse geometry stays untouched.
-
-**Selection can only rest on a live row.** `FlatView` gains liveness awareness in one place: the
+**Selection can only rest on a live row.** `FlatView` gains this awareness in one place: the
 `select`/`sync`/`move_by` path skips non-live rows, and `sync` re-homes a selection that just went
-dim (to the next live row after it, else the previous one, else nothing). With zero live rows the
-selection is `None`, the cursor is not drawn, and `Enter` reports `no matches`.
+dim. With zero live rows the selection is `None`, the cursor is not drawn, and `Enter` reports
+`no matches`.
 
-**Match stepping is unchanged from `063`.** `↑`/`↓` step *matches* in tree order in **both** modes
-now (the `mode == Tree` guard at `app.rs:325` goes), while `→`/`←` walk live rows.
+**Under a search, `→`/`←` fall back to match stepping.** They keep their structural jobs on a
+matching row — `→` expands or splits, `←` collapses — but a non-matching parent or sibling cannot be
+selected, so otherwise they move to the next/previous match. `↑`/`↓` step matches in tree order in
+**both** modes now (the `mode == Tree` guard at `app.rs:325` goes). `Esc` is how free navigation
+comes back.
 
 **Bottom line.** The picker keeps its `>` prompt and gains the match counter:
 `> {query} ({i}/{n})`, and `> {query} (no matches)` when nothing matches — so a picker session says
@@ -87,8 +88,10 @@ of picking — see ADR 0023's amendment to `016-unify-picker`.
 **Tests.**
 
 - Picker mode with a query renders tree rows (ancestors present, depth preserved), not a flat list.
-- `→`/`←` work under a query in picker mode; a chevron click toggles rather than picks.
+- `→` on a matching collapsed directory expands it in picker mode; a chevron click toggles rather
+  than picks.
 - Navigation skips dimmed rows in both modes; a click on a dimmed row leaves the selection alone.
-- A selection that goes dim on the next keystroke re-homes to a live row.
+- A non-matching ancestor directory is visible and dimmed, and cannot be selected or picked.
+- A selection that goes dim on the next keystroke re-homes to the next match (`063`'s anchor rule).
 - Zero matches: no selection, `Enter` picks nothing and reports `no matches`.
 - `Esc` restores the pre-search selection and scroll in picker mode.

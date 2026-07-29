@@ -38,7 +38,6 @@ okf_version: "0.1"
 * [Make git badge placement configurable](tasks/064-configurable-badge-placement.md) - Theme axis + setting: right / left / none, with a fitting default per built-in theme.
 * [Add a "random" theme](tasks/065-random-theme.md) - --theme random resolves to a randomly chosen built-in theme at launch.
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
-* [Make the view filter settable at runtime](tasks/067-runtime-filter-control.md) - Config default + `ctl set filter` for the glob filter that 016 ships as launch flags.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
 * [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob pattern(s) + hide/skip mode; folders navigable but only pickable when they match.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.

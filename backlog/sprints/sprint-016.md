@@ -89,11 +89,9 @@ resolution shapes `027`.
 
 # Open questions
 
-- **`027` runtime reach** — the filter ships as launch flags only this sprint; a config key and a
-  `ctl set filter` key are held in `067-runtime-filter-control`. Confirm that is the right cut.
-- **`059` reproduction** — the harness measures a `Mono` Nerd Font as pixel-exact, but the report is
-  from a `Mono` font. The exact terminal, font family, and size are needed to reproduce the
-  maintainer's case; the chevron change is expected to fix it regardless.
+_(none — the design-phase questions were answered in chat: the flat picker list is deleted; a
+directory that fails the search is not selectable; the filter gets no config key and no `ctl` key;
+the chevron shape is not chosen around a font defect.)_
 
 # Session log
 
@@ -104,5 +102,12 @@ resolution shapes `027`.
   — which became **ADR 0023** and the shared basis for `062` and `027`. `060` settled on
   two-press folder entry with chain splitting keeping `→`. `059` investigated with a new vhs +
   pixel-measurement harness: the ⅓-cell offset is reproduced in the non-`Mono` font and traced to
-  **PUA chevron glyphs**, which base-font `▸`/`▾` avoid entirely. Seeded `067`. The chat protocol
-  gained a mandatory closing TLDR block (`workflow.md`).
+  **PUA chevron glyphs**, which base-font `▸`/`▾` avoid entirely. The chat protocol gained a
+  mandatory closing TLDR block (`workflow.md`).
+- Design review round: a directory that fails the search is **not selectable** either, so ADR 0023's
+  rule became per-narrowing (the search judges every row; the filter judges files only). The
+  selection now **anchors forward** on every rematch — the first match at or after the current
+  selection, wrapping — which removed the score-ordered initial selection from `063`. The filter
+  gets no config key and no `ctl` key (`067` deleted). `059` dropped the glyph change: the
+  maintainer's screenshot measures as the non-`Mono` case (+0.30 cell, 1.37-cell icons), so the
+  outcome is documentation plus a terminal-side `fontFamily` fix, verified live in cmux.

@@ -62,49 +62,57 @@ compared like for like instead of by eye.
 This reproduces the reported ⅓-cell offset exactly, and confirms the geometry is not birch's: the
 guide sits dead-centre in its cell in both variants, and only the chevron moves.
 
-**The finding that changes the outcome: the offset follows the *glyph*, not only the font.** The
-`plain` theme uses base-font geometric chevrons (`▸` U+25B8 / `▾` U+25BE) instead of private-use-area
-icons. Rendered in the **same non-`Mono` font** that shifts the octicon chevron by ⅓ cell, `plain`'s
-chevrons stay centred and align with the guides. Every other theme uses PUA chevrons — `birch`,
-`mocha`, `tokyonight`, `gruvbox`, `nord`, `rosepine` use octicons `\u{f460}`/`\u{f47c}`;
-`vscode`, `jetbrains`, `xcode` use codicons `\u{eab6}`/`\u{eab4}` — and those are the glyphs whose
-advance width the Nerd Font variants disagree about.
+**The reported render measures as the non-`Mono` case.** The maintainer's own screenshot (cmux, no
+font configured, so the terminal's defaults apply) was measured with the same method — the cell grid
+recovered from the glyph pitch rather than assumed:
 
-So birch **can** fix the default case from its own side, by drawing the chevron with a glyph the
-base monospace font provides.
+| quantity | measured | reference |
+|---|---|---|
+| cell width | 16.75 px | — |
+| indent guide stem | centre 19.5 px | — |
+| parent chevron ink | centre 24.5 px | **+5.0 px = +0.30 cell** from the guide |
+| folder icon ink | 23 px wide | **1.37 cells** |
+
+Both numbers are the non-`Mono` signature (measured above: +0.31 cell, 1.43 cells) and neither is
+close to the `Mono` one (0.00 cell, 1.00 cell). So the reported configuration draws the
+private-use-area glyphs with non-`Mono` metrics whatever the configured family is — the expected
+cause is **symbol fallback**: when the primary family has no glyph for a PUA codepoint, the terminal
+substitutes another font, and that fallback is not a `Mono` variant.
+
+**A glyph change was considered and rejected.** The `plain` theme's base-font chevrons (`▸` U+25B8 /
+`▾` U+25BE) stay centred in the very font that shifts the octicon by ⅓ cell, so moving every theme
+to them would hide the symptom. Maintainer decision: **the chevron shape is a design choice and must
+not be picked to work around a font defect.** Sprint 015 chose these shapes deliberately, and they
+stay: octicons `\u{f460}`/`\u{f47c}` for `birch` and the scheme themes, codicons
+`\u{eab6}`/`\u{eab4}` for the measured mimics.
 
 **Decision.**
 
-1. **The `birch` theme's chevrons become base-font geometric glyphs** (`▸`/`▾`, matching `plain`).
-   The default experience is then aligned in every Nerd Font variant, at no cost in surface, and the
-   folder *icon* keeps its Nerd Font glyph — icons are not in a guide column, so their width does not
-   produce a misalignment.
-2. **The measured mimic themes keep their PUA chevrons.** `vscode`, `jetbrains`, and `xcode` exist
-   to reproduce a specific editor's look, which is the codicon chevron; changing it would defeat the
-   theme. Their behaviour under a non-`Mono` font is a documented caveat.
-3. **The scheme themes** (`mocha`, `tokyonight`, `gruvbox`, `nord`, `rosepine`) follow `birch` — they
-   are palettes, not shape mimics, so they have nothing to lose.
-4. **Document the font recommendation** in the README install notes: a `Mono` Nerd Font variant, which
-   additionally keeps folder and file icons inside one cell (the 1.43-cell icon is a font property no
-   theme choice can fix).
-5. **No new theme axis.** A per-theme guide glyph was considered and rejected: it trades one
-   misalignment for another and adds a permanent field to fix a font problem.
+1. **No render change, no theme change, no new theme axis.** birch's geometry is correct at every
+   depth in every variant measured; the guide is centred in its cell and only the substituted glyph
+   moves. A per-theme guide glyph would trade one misalignment for another.
+2. **Document the font requirement** where it is actionable: the README install notes state that
+   the icon set needs a **`Mono`** Nerd Font variant, which also keeps folder and file icons inside
+   one cell — the 1.37-cell icon is a font property no birch-side change can correct.
+3. **Give the concrete fix for the reported setup**: name the terminal-side setting that pins the
+   family to a `Mono` variant, so the fallback never runs. In cmux that is `fontFamily` in
+   `~/.config/cmux/cmux.json`, which is currently unset.
+4. **Keep the measurement harness** under `docs/research/` — the tape, the measuring script, and the
+   measured table — so any future report is answered with numbers instead of impressions.
 
-**Open at design time.** The maintainer reports the offset while using a `Mono` font, which this
-harness measures as pixel-exact — so their configuration differs from the one measured here (a
-likely cause is symbol *fallback*: when the primary family lacks the PUA codepoint, the terminal
-substitutes another font, which may be a non-`Mono` Nerd Font, regardless of the configured family).
-Their terminal, exact font family, and size are needed to reproduce; the chevron change above is
-expected to resolve it either way, because it removes the PUA chevron from the guide column
-entirely.
+**To verify during implementation.** The harness renders through `vhs`, which is not the reported
+terminal, so it cannot confirm point 3 by itself: with a non-Nerd primary family `vhs` substitutes a
+correctly-centred glyph, i.e. it does not reproduce the fallback that the screenshot shows. The
+check therefore runs in a **separate cmux instance** (per `AGENTS.md`: `open -na cmux`, targeted by
+`CMUX_SOCKET_PATH`, never the maintainer's own), before and after setting `fontFamily`, with the
+screenshot measured both times.
 
 **Public surface.** None — no flags, config keys, protocol fields, environment variables, on-disk
-paths, or public APIs. Two theme glyph constants change and the README gains a font note.
+paths, public APIs, or theme values. Documentation only, plus research artifacts.
 
 **Tests.**
 
-- Theme assertions pin the `birch` and scheme themes to the base-font chevrons and the mimic themes
-  to their codicon/octicon glyphs (the existing chevron assertions in `theme.rs` are updated, so a
-  future change cannot silently reintroduce a PUA chevron in the default theme).
-- The capture harness (tape + measurement script) is preserved under `docs/research/` with the
-  measured table, so the check is repeatable rather than a one-off.
+- No behaviour changes, so no new unit tests. The existing chevron assertions in `theme.rs` already
+  pin every theme's glyphs and keep this decision from being undone by accident.
+- The verification is the live cmux check described above, with the measured before/after numbers
+  recorded in the task and in `docs/research/`.

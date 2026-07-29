@@ -69,10 +69,11 @@ rule and `src/**/*.rs` is a path rule, with no extra flag to explain the differe
 startup into a `GlobSet`; a malformed pattern is a startup error naming the pattern, before the TUI
 takes the terminal.
 
-**What the filter classifies.** Only **files** are matched against the patterns. A **directory** is
-live when it holds a live descendant, per ADR 0023 — so directories stay navigable — and is
-**pickable** only when it matches the patterns itself. That is the task's folders rule, expressed by
-the shared liveness/pickability split rather than a filter-specific branch.
+**What the filter judges.** Only **files**. A **directory** is never judged by the filter, so it
+never dims and stays selectable and navigable — file-shaped patterns such as `*.md` match no
+directory at all, and judging directories by them would make the tree unnavigable. A directory is
+**pickable** only when it matches the patterns itself. This is the task's folders rule, and ADR 0023
+records it as the filter's declared policy (the search, by contrast, judges every row).
 
 **`hide` hides dead ends too.** In `hide` mode a non-matching *file* is omitted, and so is a
 directory with no live descendant: keeping empty branches would fill the pane with paths that lead
@@ -90,9 +91,10 @@ filter`), reusing the existing `NavEffect::Message` channel that already reports
 
 - **CLI**: `--filter <GLOB>` (repeatable) and `--filter-mode <hide|skip>` (default `skip`), both
   valid with and without `--pick`.
-- **Config**: none this sprint — the filter is a per-invocation narrowing, not a personal default.
-- **Protocol / `ctl set`**: none this sprint (see `067-runtime-filter-control` if runtime control is
-  wanted later).
+- **Config**: **none, by decision** — a filter is chosen for a task, not kept as a personal default;
+  a default filter would silently hide files in every future session.
+- **Protocol / `ctl set`**: **none, by decision** — narrowing a pane that a host adapter shares is
+  not a use that exists, and a repeatable glob list has no natural single-value spelling.
 - **Environment variables, on-disk paths, public APIs**: unchanged.
 
 **Tests.**
