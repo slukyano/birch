@@ -89,9 +89,20 @@ resolution shapes `027`.
 
 # Open questions
 
-_(none yet)_
+- **`027` runtime reach** — the filter ships as launch flags only this sprint; a config key and a
+  `ctl set filter` key are held in `067-runtime-filter-control`. Confirm that is the right cut.
+- **`059` reproduction** — the harness measures a `Mono` Nerd Font as pixel-exact, but the report is
+  from a `Mono` font. The exact terminal, font family, and size are needed to reproduce the
+  maintainer's case; the chevron change is expected to fix it regardless.
 
 # Session log
 
 - Scoped and cut: `063`, `062`, `027`, `060`, plus `059` added at scope approval. Branch
   `sprint/016` cut from `main`.
+- Design phase: `063` designed (tree-order permutation). Maintainer reframed the narrowing model —
+  dimming disables selection, navigation skips dimmed rows, and the filter applies in tree mode too
+  — which became **ADR 0023** and the shared basis for `062` and `027`. `060` settled on
+  two-press folder entry with chain splitting keeping `→`. `059` investigated with a new vhs +
+  pixel-measurement harness: the ⅓-cell offset is reproduced in the non-`Mono` font and traced to
+  **PUA chevron glyphs**, which base-font `▸`/`▾` avoid entirely. Seeded `067`. The chat protocol
+  gained a mandatory closing TLDR block (`workflow.md`).
