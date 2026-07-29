@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Navigation & search feel
-status: Implementing
+status: Done
 branch: sprint/016
 tasks:
 - 063-search-cycles-in-tree-order
@@ -125,9 +125,10 @@ navigable and are gated on *pick* alone.
   font, sits at +0.00. Setting the primary family to a `Mono` build fixes it; documented in the
   README and `docs/research/nerd-font-glyphs.md`, with the upstream Ghostty reports.
 
-Six commits, 21 files, +1348/−258. Tests went from 144 on `main` to **161** (18 added, 1 removed
-with the flat picker list); `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`
-clean.
+Nine commits, 26 files, +1665/−265. Tests went from 144 on `main` to **165**; `cargo clippy
+--all-targets -- -D warnings` and `cargo fmt --check` clean. Every scenario the sprint touched was
+also run and read back — the CLI surface by driving the binary, the rendering by capturing frames
+with `vhs` — per the verification gate this sprint added to `workflow.md`.
 
 **Bugs found and fixed** (both surfaced by rendering the change and looking at it, neither caught by
 a unit test):
@@ -183,3 +184,9 @@ a unit test):
   the offset to the embedded Symbols Nerd Font), `062` (one search model; the flat picker list
   deleted), `060` (the three-case right arrow), `027` (the glob filter, both modes). Two rendering
   bugs found on screen and fixed. Closed out; gates green.
+- Live-use round after close-out: four more defects fixed — a dim folder's chevron was dead,
+  `--filter '*/'` matched nothing, `--filter-mode hide` made rows vanish mid-browse, and an index
+  refresh snapped a scrolled viewport back to the match. Reports that were new work rather than
+  defects became `067` (select on release), `068` (scrollbar), `069` (wheel-scroll feel), and `070`
+  (filter match counts). `workflow.md` gained the hands-on verification gate and the one-sentence
+  task-description format. Re-closed.

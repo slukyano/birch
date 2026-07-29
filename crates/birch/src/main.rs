@@ -110,14 +110,17 @@ struct Cli {
     pick: bool,
 
     /// Only show (and, in --pick, only confirm) entries matching this glob.
-    /// Repeatable; an entry matching any pattern passes. A pattern without
-    /// `/` matches the file name, one with `/` the path below the root:
-    /// --filter '*.md' --filter 'src/**/*.rs'
+    /// Repeatable; an entry matching any pattern passes. Patterns read as in a
+    /// shell or .gitignore: no `/` matches the file name, an interior `/` the
+    /// path below the root, a trailing `/` names directories — so `*/` is any
+    /// directory. Folders are never hidden or greyed out, only gated for
+    /// picking: --filter '*.md' --filter 'src/**/*.rs' --filter '*/'
     #[arg(long, value_name = "glob")]
     filter: Vec<String>,
 
     /// How non-matching files are shown: greyed out and unselectable (skip,
-    /// the default) or omitted entirely (hide).
+    /// the default) or omitted entirely (hide). Folders are unaffected either
+    /// way.
     #[arg(long, value_name = "hide|skip", requires = "filter")]
     filter_mode: Option<FilterMode>,
 
