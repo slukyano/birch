@@ -23,27 +23,30 @@ okf_version: "0.1"
 * [Sprint 013 — Installable & CI-guarded](sprints/sprint-013.md) - Done.
 * [Sprint 014 — Docs & publication polish](sprints/sprint-014.md) - Done.
 * [Sprint 015 — Visual design: earn "beautiful"](sprints/sprint-015.md) - Done.
-* [Sprint 016 — Navigation & search feel](sprints/sprint-016.md) - Designing.
+* [Sprint 016 — Navigation & search feel](sprints/sprint-016.md) - Done.
 
 # Tasks
 
 * [Encapsulate visual styles entirely in birch-tui](tasks/055-encapsulate-themes-in-tui.md) - Tech debt: remove ThemeId from core; DI seam so the render layer owns theme identities.
 * [Support user-authored themes](tasks/056-add-user-themes.md) - Future: load custom themes from disk (~/.config/birch/themes/*.toml) beyond the built-in catalog.
 * [Adapt themes to the terminal color scheme](tasks/058-adapt-themes-to-terminal-palette.md) - Themes assume black bg; make them respect the terminal palette (light/dark, base16).
-* [Indent guides look misaligned under wide Nerd Font glyphs](tasks/059-fix-guide-chevron-alignment.md) - Guides are cell-centered but oversized PUA chevrons/icons render right-of-center (~1/3 cell).
-* [→ should always advance — never a silent no-op](tasks/060-right-arrow-always-advances.md) - Right-arrow does nothing on files and expanded plain dirs; should descend or move to the next row.
 * [Highlight the active folder's indent guide](tasks/061-active-path-indent-guide.md) - Opt-in theme axis: dim all guides except the current folder's column, which brightens; indent lines and connectors.
-* [Picker mode changes what search does](tasks/062-unify-search-in-pick-mode.md) - A query replaces the tree with a flat list and disables →/←; should match tree-mode search.
-* [Search match cycling jumps around](tasks/063-search-cycles-in-tree-order.md) - ↑/↓ step matches in fuzzy-score order; should walk them in tree order.
 * [Make git badge placement configurable](tasks/064-configurable-badge-placement.md) - Theme axis + setting: right / left / none, with a fitting default per built-in theme.
 * [Add a "random" theme](tasks/065-random-theme.md) - --theme random resolves to a randomly chosen built-in theme at launch.
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
+* [Select on mouse release, not on press](tasks/067-select-on-mouse-up.md) - Clicks act on button-down; herdr acts on release and feels more deliberate (touches ADR 0015).
+* [Add a scrollbar](tasks/068-add-scrollbar.md) - Scroll indicator on the pane edge, hidden when everything fits, with a way to turn it off.
+* [Mouse-wheel scrolling feels broken](tasks/069-fix-wheel-scrolling.md) - Runs away, freezes on heavy overscroll; viewport-driven peek-loading is the leading suspect.
+* [Show how much a filter actually matches](tasks/070-show-filter-match-counts.md) - Per-folder or total match counts, so a filtered browse knows where to go.
+* [Add the context menu](tasks/071-add-context-menu.md) - The right-click action surface, split out of the 0.5 bundle so it can land before the ops it hosts.
+* [Move files and folders by dragging](tasks/072-drag-to-move.md) - Drag a row onto a directory to move it; blocked on a scope-fence amendment, since drag-and-drop move is on the permanent out-of-scope list.
+* [Show a hotkey reference](tasks/073-hotkey-reference.md) - In-app discoverability: always-on footer vs. summoned overlay, with `?` unavailable (printables are search).
+* [Support multi-selection](tasks/074-add-multi-selection.md) - Shift/Ctrl range and toggle, mouse and keyboard; blocked on a scope-fence amendment, since multi-select is on the permanent out-of-scope list.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
-* [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob pattern(s) + hide/skip mode; folders navigable but only pickable when they match.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
 
 
-* [Add file operations, context menu, and copy paths](tasks/029-add-file-operations.md) - Rename/delete/new inline ops, right-click context menu, hover highlight, copy name/paths over OSC 52.
+* [Add file operations](tasks/029-add-file-operations.md) - Rename/delete/new inline ops with git-aware delete; context menu split to 071, copy paths to 028.
 * [Add the content search source](tasks/030-add-content-search.md) - Ctrl-F swaps the pane's source to files-with-matches, built on the ripgrep crates.
 * [Add the Git Changes source](tasks/032-add-git-changes-source.md) - A third source listing changed files, reusing the source-as-delta-stream interface.
 * [Add the Project View source](tasks/033-add-project-view-source.md) - A curated/virtual tree source, reusing the source-as-delta-stream interface.
@@ -105,5 +108,10 @@ so outside the `docs/design.md` scope fence.
 * [Add the config file](archive/031-add-config-file.md) - ~/.config/birch/birch.toml (ADR 0022): theme + toggles + open-cmd; bidirectional flags; config < flags < ctl set.
 * [Canonicalize symlinks before the reveal root-containment check](archive/052-fix-reveal-symlink-canonicalization.md) - reveal matches as-given, canonicalizes as fallback; /tmp works on macOS.
 * [Remove the files-first setting](archive/057-remove-files-first.md) - Setting, flag, and protocol key dropped; directories always sort first.
+* [Search match cycling walks the tree](archive/063-search-cycles-in-tree-order.md) - Matches held in tree order; the selection anchors forward on every keystroke.
+* [One search model — the picker keeps the tree](archive/062-unify-search-in-pick-mode.md) - Flat hit list deleted; dimmed rows are inert (ADR 0023).
+* [Add the glob view filter](archive/027-add-picker-filter.md) - `--filter`/`--filter-mode` in both modes; files judged, folders navigable but gated on pick.
+* [→ always moves or reveals](archive/060-right-arrow-always-advances.md) - Expand, split, or advance; inert only when no live row follows.
+* [Indent guides vs. chevrons: a fallback-font hazard](archive/059-fix-guide-chevron-alignment.md) - Measured to the font files; documented, no render change.
 
 # Dropped

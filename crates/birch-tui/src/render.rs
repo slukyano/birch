@@ -85,16 +85,22 @@ pub fn draw(
     );
 
     // The selection wash runs edge to edge (badge gutter included), so the
-    // accent bar and the wash read as one gesture, not a floating chip.
+    // accent bar and the wash read as one gesture, not a floating chip. Cells
+    // that carry a deliberate background of their own — the lit characters of
+    // a search match — keep it: washing over them would leave their dark
+    // foreground on a dark row, i.e. invisible text on the very row the
+    // selection sits on.
     if let Some(i) = selected_visible {
-        let row_rect = Rect {
-            y: tree_area.y + i,
-            height: 1,
-            ..area
-        };
-        frame
-            .buffer_mut()
-            .set_style(row_rect, Style::default().bg(theme.palette.selection_bg));
+        let y = tree_area.y + i;
+        let wash = theme.palette.selection_bg;
+        let buffer = frame.buffer_mut();
+        for x in area.left()..area.right() {
+            let cell = &mut buffer[(x, y)];
+            let painted = cell.bg != Color::Reset && Some(cell.bg) != theme.palette.app_bg;
+            if !painted {
+                cell.set_bg(wash);
+            }
+        }
     }
 }
 
@@ -340,12 +346,19 @@ fn label_spans(theme: &Theme, row: &Row, base: Style) -> Vec<Span<'static>> {
     spans
 }
 
+/// A match is emphasized, a dim row is muted, and a row that is live without
+/// matching (a directory under a glob filter) renders as usual (ADR 0023).
+/// A dim row also loses `bold_dirs`: a bold-and-dim directory still reads as
+/// prominent, which is the opposite of what "inert" should look like.
 fn name_style(theme: &Theme, row: &Row) -> Style {
     let base = base_name_style(theme, row);
-    match row.search {
-        Some(true) => base.add_modifier(Modifier::BOLD),
-        Some(false) => base.add_modifier(Modifier::DIM),
-        None => base,
+    if row.matched {
+        base.add_modifier(Modifier::BOLD)
+    } else if !row.live {
+        base.remove_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::DIM)
+    } else {
+        base
     }
 }
 
@@ -430,7 +443,9 @@ mod tests {
             status: None,
             ignored: false,
             missing: false,
-            search: None,
+            live: true,
+            matched: false,
+            pickable: true,
             match_indices: Vec::new(),
             annotation: None,
             guides: Vec::new(),
@@ -498,6 +513,41 @@ mod tests {
         assert_eq!(spans[4].style.bg, Some(theme.palette.match_bg));
         assert_eq!(spans[4].style.fg, Some(theme.palette.match_fg));
         assert!(spans[4].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn the_selection_wash_does_not_swallow_the_match_highlight() {
+        // The wash is painted over the whole row after the text, so it must
+        // skip cells that carry a background of their own. Otherwise the lit
+        // characters keep their dark foreground on a dark row and vanish —
+        // and the selected row is exactly where the current match sits.
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let theme = theme();
+        let mut r = row("main.rs", NodeKind::File, 1);
+        r.match_indices = vec![0, 1]; // "ma"
+        r.matched = true;
+        let rows = vec![r];
+        let mut view = FlatView::default();
+        view.selection = Some(PathBuf::from("/r").join("main.rs"));
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 3)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &rows, &view, &Settings::default(), &theme, ""))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let lit = (0..40)
+            .map(|x| buffer[(x, 0)].clone())
+            .find(|cell| cell.symbol() == "m")
+            .expect("the label is painted");
+        assert_eq!(
+            lit.bg, theme.palette.match_bg,
+            "a matched character keeps its highlight under the selection wash"
+        );
+        // And the rest of the row still washes, edge to edge.
+        assert_eq!(buffer[(39, 0)].bg, theme.palette.selection_bg);
     }
 
     #[test]

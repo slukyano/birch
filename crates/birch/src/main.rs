@@ -19,7 +19,7 @@ use birch_core::files_source::FilesSource;
 use birch_core::git::{self, GitWorker};
 use birch_core::search::IndexWorker;
 use birch_core::watcher::FsWatcher;
-use birch_core::{Config, OpenCmd, OpenMode, Settings, SourceCmd};
+use birch_core::{Config, Filter, FilterMode, OpenCmd, OpenMode, Settings, SourceCmd};
 use clap::Parser;
 
 use crate::app::Mode;
@@ -104,10 +104,25 @@ struct Cli {
     #[arg(long, value_name = "path")]
     socket: Option<PathBuf>,
 
-    /// Picker mode: search filters, Enter prints the selection (file or
-    /// dir) to stdout and exits.
+    /// Picker mode: Enter prints the selection (file or dir) to stdout and
+    /// exits. Search behaves exactly as in the tree.
     #[arg(long)]
     pick: bool,
+
+    /// Only show (and, in --pick, only confirm) entries matching this glob.
+    /// Repeatable; an entry matching any pattern passes. Patterns read as in a
+    /// shell or .gitignore: no `/` matches the file name, an interior `/` the
+    /// path below the root, a trailing `/` names directories — so `*/` is any
+    /// directory. Folders are never hidden or greyed out, only gated for
+    /// picking: --filter '*.md' --filter 'src/**/*.rs' --filter '*/'
+    #[arg(long, value_name = "glob")]
+    filter: Vec<String>,
+
+    /// How non-matching files are shown: greyed out and unselectable (skip,
+    /// the default) or omitted entirely (hide). Folders are unaffected either
+    /// way.
+    #[arg(long, value_name = "hide|skip", requires = "filter")]
+    filter_mode: Option<FilterMode>,
 
     /// Do not bind the control socket.
     #[arg(long, conflicts_with = "socket")]
@@ -336,6 +351,16 @@ fn main() -> ExitCode {
     let mode = if cli.pick { Mode::Pick } else { Mode::Tree };
     let picker = mode != Mode::Tree;
 
+    // Compiled before the terminal is taken over, so a bad pattern is a plain
+    // message on stderr rather than an error behind a TUI.
+    let filter = match Filter::parse(&cli.filter, cli.filter_mode.unwrap_or_default()) {
+        Ok(filter) => filter,
+        Err(message) => {
+            eprintln!("birch: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     // Control socket (never in picker mode). An explicit --socket that fails
     // is fatal — the host chose the path and expects it bound; default
     // addressing degrades to a socketless instance with a warning.
@@ -403,6 +428,7 @@ fn main() -> ExitCode {
             git_cmds: git_cmd_tx,
             repo_root,
             socket,
+            filter,
             input_paused,
         },
     );

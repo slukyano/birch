@@ -150,7 +150,21 @@ subagents where appropriate. Rules of the phase:
 ## 5. Gates (must pass before presenting)
 
 - **Validation** — the full suite passes: `cargo test`, `cargo clippy --all-targets`, and
-  `cargo fmt --check`. New behavior is covered by tests.
+  `cargo fmt --check`. **Every new code path carries a test**: a branch that no test exercises is
+  not delivered.
+- **Hands-on verification** — every new, changed, or fixed scenario, mode, flag, and feature is
+  **run and observed**, not merely unit-tested. Automated tests prove the logic; this gate proves
+  the thing works when used. Pick the cheaper adequate instrument:
+  - **Drive the binary and read its output** for anything decidable from text — flags, modes,
+    error messages, exit codes, protocol replies. A TUI's own drawing can be captured by
+    redirecting the render stream to a file (`--pick` renders on stderr; tree mode on stdout) and
+    decoding the escape sequences, which is faster and more precise than a picture.
+  - **Record with `vhs`** for anything *visual* — always, for any change to colours, glyphs,
+    layout, dimming, or highlighting. Look at the frame; a screenshot that was never opened is
+    not verification.
+
+  Scenarios that cannot be driven this way (a live host integration, a real install) are named as
+  such in the presentation, never quietly skipped.
 - **Independent review** — a fresh subagent with no implementation context reviews the full
   sprint diff; findings are fixed (or explicitly presented as known issues).
 - **Publication hygiene** — everything committed must be publishable as-is, since the repo
@@ -200,8 +214,15 @@ Present in the chat protocol below. The summary MUST include:
 - **A task ledger listing *every* task involved** — Done, Dropped, created-this-sprint, and
   planned-but-descoped. For each: its **relative weight** (`major` / `mid` / `minor` — size AND
   importance AND future impact; e.g. a package rename is a small diff but major impact), and a
-  **⚠️ mark if it transformed significantly** during design or implementation.
-- **Per change: what changed and why, and how the task transformed** from its original framing.
+  **brief description — one sentence, shorter where possible**, covering three things:
+  1. **what the change is**;
+  2. **what the plan was**;
+  3. **how the plan changed**.
+
+  Points 2 and 3 are omitted when the delivered change *is* the approved design with no
+  transformation — most tasks. Saying so in the sentence is the whole signal: no warning glyph, no
+  separate "transformed" marker, since a mark beside a description that already states the change
+  is redundant, and a mark on nearly every row means nothing at all.
 - **Explicitly what was NOT done** — deliberately or by omission — each item paired with its
   disposition (done, or the **named** `Draft` task that now holds it).
 - **Breaking changes.**

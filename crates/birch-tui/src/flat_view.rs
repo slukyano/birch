@@ -7,9 +7,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use birch_core::filter::FilterMode;
 use birch_core::git::GitState;
-use birch_core::search::Match;
-use birch_core::{FileStatus, NodeId, NodeKind, Settings, Tree, settings};
+use birch_core::{FileStatus, Filter, NodeId, NodeKind, Settings, Tree, settings};
 
 #[derive(Clone, Debug)]
 pub struct Row {
@@ -27,8 +27,20 @@ pub struct Row {
     pub ignored: bool,
     /// Deleted-but-tracked: rendered from git state, absent on disk.
     pub missing: bool,
-    /// Active search: `Some(true)` = match (highlight), `Some(false)` = dim.
-    pub search: Option<bool>,
+    /// Whether the row survives the active narrowing (ADR 0023). A live row can
+    /// hold the selection; a dim one is inert — navigation steps over it, a
+    /// click on it does nothing, and `Enter` never acts on it. Every row is live
+    /// when no search or filter is active.
+    pub live: bool,
+    /// Whether the row is a *match* of the active narrowing, which is what the
+    /// label highlights. Equal to `live` under a search, which judges every row;
+    /// they diverge under a glob filter, where a directory is live (navigable)
+    /// without matching the patterns.
+    pub matched: bool,
+    /// Whether a picker may confirm this row (ADR 0023). Stricter than `live`:
+    /// a directory that is navigable under a glob filter is not pickable
+    /// unless it matches the patterns itself.
+    pub pickable: bool,
     /// Char positions inside `name` to light up (empty for whole-row
     /// highlight — e.g. path-mode matches whose characters are off-screen).
     pub match_indices: Vec<u32>,
@@ -73,6 +85,8 @@ pub struct Decor<'a> {
     /// Chains split on demand (ADR 0014): a dir in this set neither starts
     /// nor extends a compact chain. Owned by `FlatView`.
     pub split: Option<&'a HashSet<PathBuf>>,
+    /// The active glob filter (task 027), judging files only.
+    pub filter: Option<&'a Filter>,
 }
 
 struct Ctx<'a> {
@@ -81,11 +95,22 @@ struct Ctx<'a> {
     git: Option<&'a GitState>,
     matched: Option<&'a HashMap<PathBuf, Vec<u32>>>,
     split: Option<&'a HashSet<PathBuf>>,
+    filter: Option<&'a Filter>,
+    root: PathBuf,
 }
 
 impl Ctx<'_> {
-    fn search_flag(&self, hit: bool) -> Option<bool> {
-        self.matched.map(|_| hit)
+    /// Liveness under the active narrowing (ADR 0023): with no narrowing every
+    /// row is live; under a search only a match is, files and directories
+    /// alike — a directory that fails the query is dim like any other row.
+    fn live(&self, hit: bool) -> bool {
+        self.matched.is_none_or(|_| hit)
+    }
+
+    /// Whether the row matches the active narrowing — what the label
+    /// highlights, as distinct from what the selection may land on.
+    fn matched_flag(&self, hit: bool) -> bool {
+        self.matched.is_some() && hit
     }
 
     fn is_hit(&self, path: &std::path::Path) -> bool {
@@ -105,6 +130,55 @@ impl Ctx<'_> {
 
     fn is_split(&self, path: &std::path::Path) -> bool {
         self.split.is_some_and(|s| s.contains(path))
+    }
+
+    /// Whether the glob filter accepts this entry, asked with the entry's kind
+    /// so that standard glob semantics apply: `*/` names directories, `*.md`
+    /// names files. Callers decide who has to satisfy it — files for liveness,
+    /// everything for pickability.
+    fn passes_filter(&self, path: &std::path::Path, name: &str, is_dir: bool) -> bool {
+        let Some(filter) = self.filter else {
+            return true;
+        };
+        let rel = path
+            .strip_prefix(&self.root)
+            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        filter.matches(&rel, name, is_dir)
+    }
+
+    /// Liveness and pickability together, from **one** filter evaluation —
+    /// rows are rebuilt on every event, and the glob test allocates, so asking
+    /// the same question three times per row per frame was pure waste.
+    ///
+    /// A file must pass the filter to be live; a directory need not, because
+    /// the tree has to stay walkable to reach what does match. Pickability adds
+    /// the filter for directories too, which is the rule `027` asks for.
+    fn row_flags(
+        &self,
+        hit: bool,
+        is_dir: bool,
+        path: &std::path::Path,
+        name: &str,
+    ) -> (bool, bool) {
+        let passes = self.passes_filter(path, name, is_dir);
+        let live = self.live(hit) && (is_dir || passes);
+        (live, live && passes)
+    }
+
+    /// `hide` mode drops non-matching **files**. Directories always stay: the
+    /// tree is lazily loaded, so "this branch holds nothing" is only ever
+    /// provisional, and hiding directories as their listings arrived made rows
+    /// vanish under the cursor mid-browse. A branch that turns out empty is a
+    /// smaller cost than a tree that rearranges itself while being read.
+    fn hidden_by_filter(&self, id: NodeId) -> bool {
+        let Some(filter) = self.filter else {
+            return false;
+        };
+        let node = self.tree.get(id);
+        filter.mode() == FilterMode::Hide
+            && !node.kind.is_dir()
+            && !self.passes_filter(&node.path, &node.name, false)
     }
 
     fn name_visible(&self, name: &str) -> bool {
@@ -136,6 +210,9 @@ fn visible_children(ctx: &Ctx, dir_id: NodeId) -> Vec<Child> {
         }
         if !ctx.s.show_ignored && ctx.is_ignored(&node.path) {
             continue;
+        }
+        if ctx.hidden_by_filter(child) {
+            continue; // `--filter-mode hide` (task 027)
         }
         items.push((
             node.kind.is_dir(),
@@ -174,9 +251,13 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
         git: decor.git,
         matched: decor.matched,
         split: decor.split,
+        filter: decor.filter,
+        root: tree.get(tree.root()).path.clone(),
     };
     let mut rows = Vec::new();
     let root = tree.get(tree.root());
+    let root_hit = ctx.is_hit(&root.path);
+    let (root_live, root_pickable) = ctx.row_flags(root_hit, true, &root.path, &root.name);
     rows.push(Row {
         path: root.path.clone(),
         name: root.name.clone(),
@@ -188,7 +269,9 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
         status: ctx.git.and_then(|git| git.dir_status(&root.path)),
         ignored: false,
         missing: false,
-        search: ctx.search_flag(ctx.is_hit(&root.path)),
+        live: root_live,
+        matched: ctx.matched_flag(root_hit),
+        pickable: root_pickable,
         match_indices: ctx.hit_indices(&root.path),
         annotation: Some(abbreviate_home(&root.path, std::env::home_dir().as_deref())),
         guides: Vec::new(),
@@ -214,7 +297,9 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], ro
         match child {
             Child::Missing(name) => {
                 let path = dir_path.join(&name);
-                let search = ctx.search_flag(ctx.is_hit(&path));
+                let hit = ctx.is_hit(&path);
+                let matched = ctx.matched_flag(hit);
+                let (live, pickable) = ctx.row_flags(hit, false, &path, &name);
                 let match_indices = ctx.hit_indices(&path);
                 rows.push(Row {
                     path,
@@ -227,7 +312,9 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], ro
                     status: Some(FileStatus::Deleted),
                     ignored: false,
                     missing: true,
-                    search,
+                    live,
+                    matched,
+                    pickable,
                     match_indices,
                     annotation: None,
                     guides: ancestors.to_vec(),
@@ -311,6 +398,12 @@ fn push_node(
     }
     match_indices.sort_unstable();
     match_indices.dedup();
+    let (live, pickable) = ctx.row_flags(
+        hit,
+        tail_node.kind.is_dir(),
+        &tail_node.path,
+        &tail_node.name,
+    );
     rows.push(Row {
         path: tail_node.path.clone(),
         name: label,
@@ -329,7 +422,9 @@ fn push_node(
         status,
         ignored: ctx.is_ignored(&node.path),
         missing: false,
-        search: ctx.search_flag(hit),
+        live,
+        matched: ctx.matched_flag(hit),
+        pickable,
         match_indices,
         annotation: None,
         guides: ancestors.to_vec(),
@@ -343,51 +438,6 @@ fn push_node(
         child_ancestors.push(!last_sibling);
         push_children(ctx, tail, depth + 1, &child_ancestors, rows);
     }
-}
-
-/// The picker's filter render policy (ADR 0009): matches as a dense flat
-/// list, best first, decorated from git state. The displayed string is the
-/// relative path, so name-mode match indices shift by the dir-prefix length;
-/// path-mode indices apply directly (ADR 0013).
-pub fn match_rows(matches: &[Match], git: Option<&GitState>) -> Vec<Row> {
-    matches
-        .iter()
-        .map(|m| {
-            let entry = &m.entry;
-            let kind = if entry.is_dir {
-                NodeKind::Dir
-            } else {
-                NodeKind::File
-            };
-            let status = match git {
-                Some(git) if entry.is_dir => git.dir_status(&entry.abs),
-                Some(git) => git.status_of(&entry.abs),
-                None => None,
-            };
-            let match_indices = if m.by_path {
-                m.indices.clone()
-            } else {
-                m.indices.iter().map(|i| i + entry.name_offset).collect()
-            };
-            Row {
-                path: entry.abs.clone(),
-                name: entry.rel.clone(),
-                kind,
-                depth: 0,
-                expanded: false,
-                loaded: true,
-                chain: Vec::new(),
-                status,
-                ignored: false,
-                missing: false,
-                search: None,
-                match_indices,
-                annotation: None,
-                guides: Vec::new(),
-                last_sibling: true,
-            }
-        })
-        .collect()
 }
 
 /// `$HOME`-abbreviated display form of a path (IDEA-style root annotation).
@@ -419,29 +469,73 @@ pub struct FlatView {
     follow: bool,
 }
 
+/// The first live row at or after `from`, else the last live row before it.
+/// `None` when the narrowing leaves nothing selectable at all.
+fn nearest_live(rows: &[Row], from: usize) -> Option<usize> {
+    rows[from..]
+        .iter()
+        .position(|r| r.live)
+        .map(|offset| from + offset)
+        .or_else(|| rows[..from].iter().rposition(|r| r.live))
+}
+
+/// The next live row after `from` in the given direction, if any.
+fn step_live(rows: &[Row], from: usize, forward: bool) -> Option<usize> {
+    if forward {
+        rows[from + 1..]
+            .iter()
+            .position(|r| r.live)
+            .map(|offset| from + 1 + offset)
+    } else {
+        rows[..from].iter().rposition(|r| r.live)
+    }
+}
+
 impl FlatView {
     /// Reconciles selection with the current rows: keeps it if the path is
-    /// still visible, otherwise falls back near the remembered position.
-    /// Returns the selected index, if any rows exist.
+    /// still visible **and live**, otherwise re-homes it to the nearest live
+    /// row at or after the remembered position. Returns the selected index.
+    /// `None` means nothing can hold the selection — no rows, or every row
+    /// dimmed by the active narrowing (ADR 0023), in which case no cursor is
+    /// drawn and `Enter` has nothing to act on.
     pub fn sync(&mut self, rows: &[Row]) -> Option<usize> {
         if rows.is_empty() {
             self.selection = None;
             return None;
         }
+        // Where to re-home from if the selection cannot be kept: its own row
+        // when it is still on screen (merely dimmed), else the remembered spot.
+        let mut origin = None;
         if let Some(path) = &self.selection {
             if let Some(idx) = rows.iter().position(|r| &r.path == path) {
-                self.last_index = idx;
-                return Some(idx);
-            }
-            // A path that is an interior member of a compacted chain resolves
-            // to the chain row (and normalizes the selection to its tail).
-            if let Some(idx) = rows.iter().position(|r| r.chain.iter().any(|m| m == path)) {
-                self.select(rows, idx);
-                return Some(idx);
+                if rows[idx].live {
+                    self.last_index = idx;
+                    return Some(idx);
+                }
+                origin = Some(idx);
+            } else if let Some(idx) = rows.iter().position(|r| r.chain.iter().any(|m| m == path)) {
+                // A path that is an interior member of a compacted chain
+                // resolves to the chain row (and normalizes the selection to
+                // its tail).
+                if rows[idx].live {
+                    self.select_resolved(rows, idx);
+                    return Some(idx);
+                }
+                origin = Some(idx);
             }
         }
-        let idx = self.last_index.min(rows.len() - 1);
-        self.select(rows, idx);
+        // Either the selection vanished or it just went dim: re-home forward
+        // from where it sat, so a narrowing moves the cursor the shortest way.
+        let from = origin.unwrap_or(self.last_index).min(rows.len() - 1);
+        let Some(idx) = nearest_live(rows, from) else {
+            // Nothing can hold the selection, so nothing *is* selected: the
+            // field must be cleared, not merely reported empty, or the painter
+            // keeps drawing a cursor on a dim row that answers to no key
+            // (ADR 0023).
+            self.selection = None;
+            return None;
+        };
+        self.select_resolved(rows, idx);
         Some(idx)
     }
 
@@ -458,15 +552,43 @@ impl FlatView {
         self.follow = true;
     }
 
-    pub fn move_by(&mut self, rows: &[Row], delta: isize) {
-        let Some(idx) = self.sync(rows) else { return };
-        let new = idx.saturating_add_signed(delta).min(rows.len() - 1);
-        self.select(rows, new);
+    /// Re-points the selection **without** asking the viewport to follow it.
+    /// Re-resolving a selection is bookkeeping, not movement: rows reshuffle
+    /// constantly as listings arrive and chains form, and treating that as
+    /// movement snaps a freely scrolled viewport back to the selection.
+    fn select_resolved(&mut self, rows: &[Row], idx: usize) {
+        let follow = self.follow;
+        self.select(rows, idx);
+        self.follow = follow;
     }
 
-    /// `→`: expand a dir (design doc keyboard table; collapse is `←`'s job).
-    /// A chain expands at its tail; on an already-expanded chain, `→` splits
-    /// it into its member rows (ADR 0014).
+    /// Moves the selection by `delta` **live** rows: dim rows are stepped over
+    /// rather than landed on (ADR 0023), so `delta` counts targets, not screen
+    /// lines. Stops at the first or last live row.
+    pub fn move_by(&mut self, rows: &[Row], delta: isize) {
+        let Some(idx) = self.sync(rows) else { return };
+        let mut current = idx;
+        for _ in 0..delta.unsigned_abs() {
+            match step_live(rows, current, delta > 0) {
+                Some(next) => current = next,
+                None => break,
+            }
+        }
+        if current != idx {
+            self.select(rows, current);
+        } else {
+            // Nowhere to go, but the keystroke still means "show me where I
+            // am": scroll the selection back into view.
+            self.follow = true;
+        }
+    }
+
+    /// `→` always does something (task 060), in three cases, first match wins:
+    /// a collapsed directory **expands** (the selection stays); an expanded
+    /// compact chain **splits** into its member rows (ADR 0014); anything else
+    /// **advances** to the next live row. It is a no-op only when no live row
+    /// follows — the last row of the tree, or the last match under a
+    /// narrowing.
     pub fn on_right(&mut self, tree: &mut Tree, rows: &[Row]) -> NavEffect {
         let Some(idx) = self.sync(rows) else {
             return NavEffect::None;
@@ -483,12 +605,21 @@ impl FlatView {
                 tree.set_expanded(member, true);
                 self.split.insert(member.clone());
             }
+            return NavEffect::None;
+        }
+        // Nothing left to reveal, so advance (task 060). Because directories
+        // sort before files, the next live row *is* "the next sibling file,
+        // else the parent's next sibling" — no separate walk is needed.
+        if let Some(next) = step_live(rows, idx, true) {
+            self.select(rows, next);
         }
         NavEffect::None
     }
 
     /// `←`: collapse an expanded dir (a chain collapses back to one row);
-    /// otherwise jump to the parent.
+    /// otherwise jump to the parent. Under a narrowing the parent may be dim
+    /// and so unselectable (ADR 0023); the selection then falls back to the
+    /// previous live row, which keeps the key from going dead mid-search.
     pub fn on_left(&mut self, tree: &mut Tree, rows: &[Row]) {
         let Some(idx) = self.sync(rows) else { return };
         let row = &rows[idx];
@@ -496,8 +627,14 @@ impl FlatView {
             self.collapse(tree, row);
             return;
         }
-        if let Some(parent_idx) = rows[..idx].iter().rposition(|r| r.depth + 1 == row.depth) {
-            self.select(rows, parent_idx);
+        let parent = rows[..idx].iter().rposition(|r| r.depth + 1 == row.depth);
+        match parent {
+            Some(parent_idx) if rows[parent_idx].live => self.select(rows, parent_idx),
+            _ => {
+                if let Some(previous) = step_live(rows, idx, false) {
+                    self.select(rows, previous);
+                }
+            }
         }
     }
 
@@ -511,9 +648,10 @@ impl FlatView {
     }
 
     /// A single click on a row's name: selection only — activation is the
-    /// double-click's job (ADR 0015).
+    /// double-click's job (ADR 0015). A click on a dim row does nothing, like
+    /// every other way of reaching one (ADR 0023).
     pub fn on_single_click(&mut self, rows: &[Row], idx: usize) {
-        if idx < rows.len() {
+        if rows.get(idx).is_some_and(|row| row.live) {
             self.select(rows, idx);
         }
     }
@@ -531,8 +669,14 @@ impl FlatView {
         let Some(row) = rows.get(idx) else {
             return NavEffect::None;
         };
+        // A chevron is structure, not selection: it toggles even on a dim row,
+        // so a narrowing never locks a directory shut. Everything else about a
+        // dim row stays inert (ADR 0023).
         if row.kind.is_dir() && on_chevron && !row.missing {
             return self.toggle(tree, row);
+        }
+        if !row.live {
+            return NavEffect::None;
         }
         self.select(rows, idx);
         if row.kind.is_dir() && !row.missing {
@@ -999,16 +1143,117 @@ mod tests {
         assert_eq!(view.selection.as_deref(), Some(Path::new("/r/a/b/c")));
     }
 
+    /// Rows with a chosen liveness pattern, for the narrowing-aware paths.
+    fn live_rows(pattern: &[bool]) -> Vec<Row> {
+        pattern
+            .iter()
+            .enumerate()
+            .map(|(i, &live)| Row {
+                path: PathBuf::from(format!("/r/{i}")),
+                name: format!("{i}"),
+                kind: NodeKind::File,
+                depth: 1,
+                expanded: false,
+                loaded: true,
+                chain: Vec::new(),
+                status: None,
+                ignored: false,
+                missing: false,
+                live,
+                matched: live,
+                pickable: live,
+                match_indices: Vec::new(),
+                annotation: None,
+                guides: Vec::new(),
+                last_sibling: false,
+            })
+            .collect()
+    }
+
     #[test]
-    fn right_on_expanded_plain_dir_still_does_nothing() {
+    fn move_by_steps_over_several_dim_rows_at_once() {
+        // A multi-row jump counts live rows, not screen lines.
+        let rows = live_rows(&[true, false, false, true, false, true]);
+        let mut view = FlatView::default();
+        view.focus(PathBuf::from("/r/0"));
+        view.move_by(&rows, 2);
+        assert_eq!(view.selection.as_deref(), Some(rows[5].path.as_path()));
+        view.move_by(&rows, -2);
+        assert_eq!(view.selection.as_deref(), Some(rows[0].path.as_path()));
+    }
+
+    #[test]
+    fn a_selection_below_the_last_live_row_re_homes_backwards() {
+        // `nearest_live`'s backward arm: nothing live at or after the remembered
+        // spot, so the nearest live row above it takes the selection.
+        let rows = live_rows(&[true, false, false]);
+        let mut view = FlatView::default();
+        view.focus(PathBuf::from("/r/2")); // a dim row
+        assert_eq!(view.sync(&rows), Some(0));
+        assert_eq!(view.selection.as_deref(), Some(rows[0].path.as_path()));
+    }
+
+    #[test]
+    fn nothing_live_leaves_no_selection() {
+        let rows = live_rows(&[false, false]);
+        let mut view = FlatView::default();
+        view.focus(PathBuf::from("/r/0"));
+        assert_eq!(view.sync(&rows), None);
+        assert!(view.selection.is_none(), "no cursor may be left behind");
+    }
+
+    #[test]
+    fn left_falls_back_when_the_parent_is_dim() {
+        // Under a narrowing the parent may be unselectable; `←` then steps to
+        // the previous live row instead of going dead.
+        let mut rows = live_rows(&[true, false, true]);
+        rows[1].depth = 1; // the dim parent
+        rows[2].depth = 2; // its child, selected
+        let mut tree = Tree::new(PathBuf::from("/r"));
+        let mut view = FlatView::default();
+        view.focus(rows[2].path.clone());
+        view.on_left(&mut tree, &rows);
+        assert_eq!(
+            view.selection.as_deref(),
+            Some(rows[0].path.as_path()),
+            "the dim parent is skipped, not selected"
+        );
+    }
+
+    #[test]
+    fn right_advances_when_there_is_nothing_left_to_reveal() {
+        // An expanded plain directory has no structure left to reveal, so `→`
+        // moves into it — which is the next visible row, because directories
+        // sort before files (task 060).
         let mut tree = fixture();
         tree.set_expanded(Path::new("/r/src"), true);
         let mut view = FlatView::default();
         view.focus(PathBuf::from("/r/src"));
         let rows = rows_plain(&tree);
+        let src = rows.iter().position(|r| r.path.ends_with("src")).unwrap();
         view.on_right(&mut tree, &rows);
-        assert!(view.split.is_empty());
-        assert_eq!(row_names(&rows_plain(&tree)), row_names(&rows));
+        assert!(view.split.is_empty(), "a plain dir never splits");
+        assert_eq!(
+            row_names(&rows_plain(&tree)),
+            row_names(&rows),
+            "no expansion changed"
+        );
+        assert_eq!(
+            view.selection.as_deref(),
+            Some(rows[src + 1].path.as_path()),
+            "the selection advanced to the next row"
+        );
+
+        // A file advances to its following sibling.
+        let last = rows.len() - 1;
+        view.focus(rows[last - 1].path.clone());
+        view.on_right(&mut tree, &rows);
+        assert_eq!(view.selection.as_deref(), Some(rows[last].path.as_path()));
+
+        // The last row of the tree is the one place `→` may do nothing.
+        view.focus(rows[last].path.clone());
+        view.on_right(&mut tree, &rows);
+        assert_eq!(view.selection.as_deref(), Some(rows[last].path.as_path()));
     }
 
     #[test]
@@ -1090,29 +1335,9 @@ mod tests {
             },
         );
         let chain = rows.iter().find(|r| r.name == "a/b/c").unwrap();
-        assert_eq!(chain.search, Some(true));
+        assert!(chain.live);
         // Label chars: a(0) /(1) b(2) /(3) c(4).
         assert_eq!(chain.match_indices, [0, 4]);
-    }
-
-    #[test]
-    fn picker_rows_shift_name_indices_onto_the_rel_path() {
-        use birch_core::search::{IndexEntry, Match};
-        let name_hit = Match {
-            entry: IndexEntry::new("src/main.rs".into(), "/r/src/main.rs".into(), false),
-            indices: vec![0, 1],
-            by_path: false,
-        };
-        let path_hit = Match {
-            entry: IndexEntry::new("src/lib.rs".into(), "/r/src/lib.rs".into(), false),
-            indices: vec![0, 4],
-            by_path: true,
-        };
-        let rows = match_rows(&[name_hit, path_hit], None);
-        // "src/" is 4 chars: name indices 0,1 land at 4,5 of the rel path.
-        assert_eq!(rows[0].match_indices, [4, 5]);
-        // Path-mode indices already address the displayed rel path.
-        assert_eq!(rows[1].match_indices, [0, 4]);
     }
 
     #[test]

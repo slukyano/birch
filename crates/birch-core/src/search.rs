@@ -1,8 +1,8 @@
 //! Fuzzy filename search (ADRs 0009/0013): an index worker walks the root
 //! with the `ignore` crate; `search` scores the query against simple names —
 //! or full relative paths when the query contains `/` — with nucleo, and
-//! reports the matched character positions. One engine — the main pane jumps
-//! over the matches, the picker filters to them.
+//! reports the matched character positions. One engine, one behaviour: the
+//! pane keeps its tree and steps over the matches, in the picker too (ADR 0023).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -79,7 +79,13 @@ pub fn build_index(root: &Path, show_hidden: bool) -> SearchIndex {
             continue;
         };
         let rel = rel_path.to_string_lossy().replace('\\', "/");
-        let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+        // The walker does not follow links, so a symlinked directory reports
+        // as a symlink here while the tree calls it a directory. Resolve it, or
+        // tree ordering, the forward anchor, and the filter each disagree with
+        // the row on screen.
+        let file_type = entry.file_type();
+        let is_dir = file_type.is_some_and(|t| t.is_dir())
+            || (file_type.is_some_and(|t| t.is_symlink()) && abs.is_dir());
         entries.push(IndexEntry::new(rel, abs.to_path_buf(), is_dir));
     }
     SearchIndex { entries }
@@ -127,6 +133,34 @@ pub fn search(index: &SearchIndex, query: &str) -> Vec<Match> {
         .collect();
     scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score)); // stable: ties keep index order
     scored.into_iter().map(|(_, m)| m).collect()
+}
+
+/// Sorts matches into tree display order — the order `visible_rows` draws them
+/// in, so stepping over them always travels visually down or up (task 063).
+/// Ranking stays `search`'s job; this is the order the *pane* has.
+pub fn sort_tree_order(matches: &mut [Match]) {
+    matches.sort_by_cached_key(|m| tree_key(&m.entry.rel, m.entry.is_dir));
+}
+
+/// Index of the first match at or after `(rel, is_dir)` in tree order — the
+/// insertion point, so it is `matches.len()` when every match precedes it.
+pub fn tree_order_position(matches: &[Match], rel: &str, is_dir: bool) -> usize {
+    let key = tree_key(rel, is_dir);
+    matches.partition_point(|m| tree_key(&m.entry.rel, m.entry.is_dir) < key)
+}
+
+/// The sort key that reproduces the pane's row order for a root-relative path:
+/// one entry per component, each `(is_file, lowercased name)`. Every component
+/// but the last names a directory, and the last takes the entry's own kind — so
+/// `false < true` puts directories ahead of files at the level where two paths
+/// diverge, exactly as `visible_children` sorts them. A shorter key sorts first,
+/// which is where the tree draws an ancestor.
+fn tree_key(rel: &str, is_dir: bool) -> Vec<(bool, String)> {
+    let count = rel.split('/').count();
+    rel.split('/')
+        .enumerate()
+        .map(|(i, part)| (i + 1 == count && !is_dir, part.to_lowercase()))
+        .collect()
 }
 
 /// Maps nucleo match positions onto char indices of the original string.
@@ -281,6 +315,74 @@ mod tests {
                 IndexEntry::new("lib/FooBar.ts".into(), "/r/lib/FooBar.ts".into(), false),
             ],
         }
+    }
+
+    /// Builds matches for arbitrary `(rel, is_dir)` pairs — the ordering
+    /// helpers only read the entry, never the score or the match positions.
+    fn matches_of(entries: &[(&str, bool)]) -> Vec<Match> {
+        entries
+            .iter()
+            .map(|(rel, is_dir)| Match {
+                entry: IndexEntry::new((*rel).into(), PathBuf::from("/r").join(rel), *is_dir),
+                indices: Vec::new(),
+                by_path: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tree_order_matches_how_rows_are_drawn() {
+        // Deliberately scrambled: score order bears no relation to row order.
+        let mut hits = matches_of(&[
+            ("src/main.rs", false),
+            ("Zeta.md", false),
+            ("src", true),
+            ("docs/api.md", false),
+            ("src/cli", true),
+            ("alpha.md", false),
+            ("src/cli/args.rs", false),
+            ("docs", true),
+        ]);
+        sort_tree_order(&mut hits);
+        let order: Vec<&str> = hits.iter().map(|m| m.entry.rel.as_str()).collect();
+        assert_eq!(
+            order,
+            [
+                // Directories precede files at each level, names compare
+                // case-insensitively, and a directory precedes its contents.
+                "docs",
+                "docs/api.md",
+                "src",
+                "src/cli",
+                "src/cli/args.rs",
+                "src/main.rs",
+                "alpha.md",
+                "Zeta.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn tree_order_position_is_the_forward_anchor() {
+        let mut hits = matches_of(&[
+            ("docs/api.md", false),
+            ("src", true),
+            ("src/main.rs", false),
+            ("zeta.md", false),
+        ]);
+        sort_tree_order(&mut hits);
+
+        // Before every match.
+        assert_eq!(tree_order_position(&hits, "aaa", true), 0);
+        // Exactly on a match: the anchor is that match, so it does not move.
+        assert_eq!(tree_order_position(&hits, "src", true), 1);
+        // Between two matches: the following one.
+        assert_eq!(tree_order_position(&hits, "src/lib.rs", false), 2);
+        // A top-level file anchors after every top-level directory subtree,
+        // because directories sort first at each level, then by name.
+        assert_eq!(tree_order_position(&hits, "alpha.md", false), 3);
+        // Past the last match: the caller wraps this to the first.
+        assert_eq!(tree_order_position(&hits, "zzz.txt", false), hits.len());
     }
 
     #[test]

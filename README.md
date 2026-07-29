@@ -32,7 +32,8 @@ birch ~/code                        # ...or at a given directory
 nvim "$(birch --pick)"              # pick a file and open it
 ```
 
-Arrows navigate, `→`/`←` expand and collapse, `Enter` opens a file (or toggles a directory).
+Arrows navigate: `→` expands a folder, splits a compacted chain, or else moves down; `←` collapses
+or jumps to the parent. `Enter` opens a file (or toggles a directory).
 Type anything for a fuzzy search. `Esc` or `Ctrl-C` quit.
 
 ## Install
@@ -59,6 +60,15 @@ A terminal with a Nerd Font gives the icons; `--no-icons` works everywhere. Git 
 on PATH and degrade to a plain tree without it. Installed via Homebrew, the contrib adapters land in
 `$(brew --prefix)/share/birch/` (not on PATH).
 
+**Set a `Mono` Nerd Font as the terminal's primary font** — `JetBrainsMono NFM`, `Hack Nerd Font
+Mono`, and so on. It is not enough for *some* installed font to have the icons: when the primary
+font lacks them, the terminal substitutes a symbols-only font whose glyphs are 1.1–1.7 cells wide
+and sit off-centre, so chevrons drift right of the indent guides and icons overflow their column.
+Ghostty (and cmux, which embeds it) ships exactly such a fallback by default, so the family must be
+set explicitly. Note that Nerd Fonts abbreviates its family names — `NFM` is the `Mono` build, `NF`
+is not — and a name the terminal cannot resolve fails silently back to the substitute. Details and
+measurements: [Nerd Font glyph reference](docs/research/nerd-font-glyphs.md).
+
 ## Opening files
 
 `Enter` (or a double-click) runs the open command on the selected file. By default that is
@@ -79,14 +89,38 @@ birch --open-cmd 'code -r {}'
 
 ## Picker
 
-`birch --pick` turns birch into a chooser: search and navigate as usual, and `Enter` prints the
-selection (a file **or** a directory) to stdout and exits. The UI stays on stderr, so stdout
-carries only the picked path.
+`birch --pick` turns birch into a chooser: search and navigate exactly as in the pane — the tree
+stays put, non-matching rows dim and cannot be selected, `↑`/`↓` step between matches — and `Enter`
+prints the selection (a file **or** a directory) to stdout and exits. The UI stays on stderr, so
+stdout carries only the picked path.
 
 ```sh
 nvim "$(birch --pick)"        # pick a file to open
 cd "$(birch --pick)"          # pick a directory to cd into
 ```
+
+### Filtering
+
+`--filter <glob>` narrows the tree to what you care about — in the picker and in the everyday
+tree alike. It is repeatable, and an entry passes if it matches any pattern:
+
+```sh
+birch --pick --filter '*.md'                     # only markdown is pickable
+birch --pick --filter '*.{md,txt}'               # brace expansion works
+birch --pick --filter '*/'                       # directories only
+birch --filter 'src/**/*.rs' --filter-mode hide  # a Rust-only view of src/
+```
+
+Patterns read as they do in a shell or a `.gitignore`: without `/` a pattern matches the file
+**name**, with `/` inside it the **path** below the root, and with a **trailing** `/` it names
+**directories** — so `*/` is "any directory".
+
+Non-matching **files** are greyed out and cannot be selected (`--filter-mode skip`, the default) or
+left out entirely (`hide`). **Folders are never greyed out and never hidden** — the tree has to stay
+walkable to reach what does match, and since it loads lazily, "this folder holds nothing" is a fact
+that would arrive mid-browse and make rows vanish under the cursor. In `--pick`, a folder can only
+be confirmed when a pattern names it. Typing a search query narrows further, always inside the
+filter.
 
 ## Themes
 

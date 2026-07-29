@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Navigation & search feel
-status: Implementing
+status: Done
 branch: sprint/016
 tasks:
 - 063-search-cycles-in-tree-order
@@ -81,17 +81,103 @@ resolution shapes `027`.
 
 # Checklist
 
-- [ ] 063-search-cycles-in-tree-order
-- [ ] 062-unify-search-in-pick-mode
-- [ ] 027-add-picker-filter
-- [ ] 060-right-arrow-always-advances
-- [ ] 059-fix-guide-chevron-alignment
+- [x] 063-search-cycles-in-tree-order (the "no matches means no selection" half lands with 062)
+- [x] 062-unify-search-in-pick-mode
+- [x] 027-add-picker-filter
+- [x] 060-right-arrow-always-advances
+- [x] 059-fix-guide-chevron-alignment
 
 # Open questions
 
 _(none — the design-phase questions were answered in chat: the flat picker list is deleted; a
 directory that fails the search is not selectable; the filter gets no config key and no `ctl` key;
 the chevron shape is not chosen around a font defect.)_
+
+# Sprint summary
+
+Search and the picker became one thing. **[ADR 0023](../../docs/adr/0023-narrowing-dims-and-dimmed-is-inert.md)**
+replaced two narrowing behaviours with one rule: a search or a filter **dims** rows instead of
+replacing them, and **a dimmed row is inert** — it cannot hold the selection, a click does nothing,
+`Enter` never acts on it. Each narrowing declares what it judges: a search judges every row, so a
+directory that fails the query is dim too; the glob filter judges files only, so directories stay
+navigable and are gated on *pick* alone.
+
+- **`063`** — matches are held in tree order (`sort_tree_order`, keyed on path components as
+  `(is_file, lowercased)`, which reproduces how a level is drawn), so `↑`/`↓` travel down and up the
+  pane. The selection **anchors forward** on every rematch: the first match at or after the current
+  row, wrapping at the end, staying put while the row still matches. Score order lost its last
+  consumer; `search()` keeps it anyway, and `rematch` lost its `keep_position` parameter.
+- **`062`** — `filter_list_active` and `flat_view::match_rows` are gone, and with them flat rows,
+  dead arrows, chevron-clicks-as-name-clicks, and the snap-to-top-match. `Row.search: Option<bool>`
+  became `Row.live` + `Row.matched` + `Row.pickable`. `Esc` restores the pre-search view in both
+  modes; with nothing live there is no selection and `Enter` reports `no matches`.
+- **`027`** — `--filter <glob>` (repeatable) and `--filter-mode hide|skip`, in **both** modes. A
+  pattern without `/` matches the name, one with `/` the root-relative path — search's corpus rule.
+  `globset` was already in the tree under `ignore`, so brace expansion came free with no new
+  transitive crate, and patterns compile before the terminal is taken over. `hide` omits files only
+  — never directories (see bug 4 below).
+- **`060`** — `→` expands a collapsed directory, splits an expanded chain (ADR 0014 intact), or
+  advances to the next live row. Inert only where the task allows: no live row follows.
+- **`059`** — no code change, by decision. The reported misalignment was traced to font metrics with
+  a new measurement harness and then to the font files themselves: cmux embeds an unpatched
+  JetBrains Mono (no icon codepoints at all) plus **Symbols Nerd Font**, in which birch's chevrons
+  advance 1.67 cells and sit +0.42 cell off centre while the indent guide, drawn by the primary
+  font, sits at +0.00. Setting the primary family to a `Mono` build fixes it; documented in the
+  README and `docs/research/nerd-font-glyphs.md`, with the upstream Ghostty reports.
+
+Ten commits, 27 files. Tests went from 144 on `main` to **171**; `cargo clippy
+--all-targets -- -D warnings` and `cargo fmt --check` clean. Every scenario the sprint touched was
+also run and read back — the CLI surface by driving the binary, the rendering by capturing frames
+with `vhs` — per the verification gate this sprint added to `workflow.md`.
+
+**Bugs found and fixed** (both surfaced by rendering the change and looking at it, neither caught by
+a unit test):
+
+1. The **selection wash swallowed the match highlight**. `draw` painted the edge-to-edge wash with
+   `set_style` over the whole row rect, overwriting the background of every cell — including the
+   gold `match_bg` of lit characters, whose near-black foreground then sat on a dark row and became
+   invisible. It struck exactly where the eye goes: the row the selection is on, which under the
+   anchor rule is the current match. Predates this sprint (the wash arrived in 015); the wash now
+   skips cells that already carry a background, with a `TestBackend` regression test.
+2. A **dim row kept `bold_dirs`**, so a non-matching directory rendered bold-and-dim and still read
+   as prominent while being inert. Dim rows now drop the bold.
+3. **A dim folder's chevron stopped working.** ADR 0023 made dim rows inert, and the click path took
+   that literally, so a narrowing froze the tree's shape — a folder that did not match could not be
+   opened or closed. A chevron is structure, not selection: it now toggles on a dim row too, without
+   moving the selection. Everything else about a dim row stays inert.
+4. **`--filter '*/'` matched nothing and `hide` made rows vanish while browsing.** Two causes.
+   `globset` matches strings and has no notion of directories, so a directory was offered to it as
+   `src` and standard trailing-slash semantics could not apply; directories are now presented as
+   `src/`, which makes `*/` mean "any directory" exactly as a shell or `.gitignore` reads it, and a
+   trailing slash no longer misclassifies a pattern as a path rule. Separately, `hide` dropped
+   directories "known" to hold no match — but the tree loads lazily, so that knowledge arrived
+   mid-browse and rows disappeared under the cursor. `hide` now drops files only.
+5. **A search snapped a scrolled viewport back.** `rematch` runs on every index refresh, and it
+   revealed the current match unconditionally, so any filesystem churn during a search yanked the
+   pane back to the selection. It now reveals only when the anchor actually moves. A second, milder
+   case was fixed alongside: `sync` re-pointing a selection through a compacted chain counted as
+   movement, so bookkeeping could drag the viewport too.
+
+# Independent review
+
+A fresh reviewer with no implementation context read the full `main..sprint/016` diff against the
+sprint's own claims. It found no reachable panic, overflow, or aliasing bug, and confirmed the
+crate boundary, the deletion of the flat list, and the dim-row contract including the chevron
+exception. Seven findings were fixed:
+
+| finding | resolution |
+|---|---|
+| **major** — the match pointer desynced: `→`, `←`, and clicks move the selection without going through `cycle_match`, so `↓` could swallow a keystroke or jump backwards, and the counter lied | The pointer is **gone**. Stepping and the counter derive their position from the selection, which is the only thing the user can see and the only thing that cannot go stale. |
+| **major** — with zero matches, `sync` reported "no selection" but left the field set, so a cursor stayed painted on a dim, inert row | `sync` clears the selection, matching what ADR 0023 promised. |
+| **minor** — a symlinked directory was a file to the index and a directory to the tree, so ordering, anchoring, and filtering disagreed with the row on screen | `build_index` resolves a symlink that points at a directory. |
+| **minor** — an index refresh arriving mid-reveal overwrote a reveal a keystroke had started | `rematch` never clobbers a reveal already in flight. |
+| **minor** — the Accepted ADR and two records still described the withdrawn dead-end hiding | ADR 0023 §7, this summary, and `027`'s test list now state what the code does. |
+| **minor** — several new branches had no test | Added: multi-row stepping over dim rows, the backward re-home arm, nothing-live clearing, `←`'s dim-parent fallback, and filter rows inert to keyboard and mouse. |
+| **minor (perf)** — the glob filter ran three or four times per row per frame, allocating each time | One evaluation per row, via `Ctx::row_flags`. |
+
+Two nits were also taken: a move that cannot move now scrolls the selection back into view, and
+`filter.rs` documents the two glob shapes that silently match nothing (`src/*` names files only;
+a leading `/` does not anchor).
 
 # Session log
 
@@ -115,3 +201,16 @@ the chevron shape is not chosen around a font defect.)_
   outcome is documentation plus a `Mono` primary family, verified live in cmux.
 - Design approved: ADR 0023 `Proposed → Accepted`; the five tasks `Draft → Designed`; the sprint
   `Designing → Implementing`. Design merge to `main`.
+- Implementation: `063` (tree-order stepping + forward anchor), `059` (documentation, after tracing
+  the offset to the embedded Symbols Nerd Font), `062` (one search model; the flat picker list
+  deleted), `060` (the three-case right arrow), `027` (the glob filter, both modes). Two rendering
+  bugs found on screen and fixed. Closed out; gates green.
+- Independent review round: seven findings fixed, two majors among them — a match pointer that went
+  stale whenever an arrow or a click moved the selection, and a cursor left painted on a dim row
+  when nothing matched. Both now carry regression tests verified to fail without their fix.
+- Live-use round after close-out: four more defects fixed — a dim folder's chevron was dead,
+  `--filter '*/'` matched nothing, `--filter-mode hide` made rows vanish mid-browse, and an index
+  refresh snapped a scrolled viewport back to the match. Reports that were new work rather than
+  defects became `067` (select on release), `068` (scrollbar), `069` (wheel-scroll feel), and `070`
+  (filter match counts). `workflow.md` gained the hands-on verification gate and the one-sentence
+  task-description format. Re-closed.
