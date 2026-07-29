@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: Narrowing dims instead of replacing rows, and a dimmed row is inert
-status: Proposed
+status: Accepted
 sprint: sprint-016
 ---
 

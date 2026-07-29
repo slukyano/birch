@@ -2,7 +2,7 @@
 type: Task
 title: → should always advance — never a silent no-op
 description: Right-arrow does nothing on files and on already-expanded plain dirs; it should descend into a folder or move to the next row, doing nothing only on the tree's last file.
-status: Draft
+status: Designed
 priority: medium
 ---
 

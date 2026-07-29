@@ -2,7 +2,7 @@
 type: Task
 title: Picker mode changes what search does
 description: In pick mode a query replaces the tree with a flat match list and disables →/←; tree mode keeps the tree and jumps between matches. The two should feel the same.
-status: Draft
+status: Designed
 priority: high
 ---
 

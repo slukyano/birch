@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Navigation & search feel
-status: Designing
+status: Implementing
 branch: sprint/016
 tasks:
 - 063-search-cycles-in-tree-order
@@ -108,6 +108,10 @@ the chevron shape is not chosen around a font defect.)_
   rule became per-narrowing (the search judges every row; the filter judges files only). The
   selection now **anchors forward** on every rematch — the first match at or after the current
   selection, wrapping — which removed the score-ordered initial selection from `063`. The filter
-  gets no config key and no `ctl` key (`067` deleted). `059` dropped the glyph change: the
-  maintainer's screenshot measures as the non-`Mono` case (+0.30 cell, 1.37-cell icons), so the
-  outcome is documentation plus a terminal-side `fontFamily` fix, verified live in cmux.
+  gets no config key and no `ctl` key (`067` deleted). `059` dropped the glyph change and was
+  re-grounded on the **font files themselves**: cmux embeds unpatched JetBrains Mono plus
+  **Symbols Nerd Font**, the primary carries no Nerd Font codepoint, and in the fallback the octicon
+  chevron sits +0.42 cell off centre while the guide (drawn by the primary) sits at +0.00. The
+  outcome is documentation plus a `Mono` primary family, verified live in cmux.
+- Design approved: ADR 0023 `Proposed → Accepted`; the five tasks `Draft → Designed`; the sprint
+  `Designing → Implementing`. Design merge to `main`.

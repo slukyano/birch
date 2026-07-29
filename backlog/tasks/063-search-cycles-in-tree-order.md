@@ -2,7 +2,7 @@
 type: Task
 title: Search match cycling jumps around instead of moving down the tree
 description: ↑/↓ during a search step through matches in fuzzy-score order, so the selection teleports; they should walk matches in tree order.
-status: Draft
+status: Designed
 priority: high
 ---
 

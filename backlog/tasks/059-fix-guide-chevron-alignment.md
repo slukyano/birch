@@ -2,7 +2,7 @@
 type: Task
 title: Indent guides look misaligned under wide Nerd Font glyphs
 description: The guide stem is cell-centered, but oversized PUA chevron/icon glyphs render right-of-center, so guides appear ~1/3 cell to the left of the chevron.
-status: Draft
+status: Designed
 priority: medium
 ---
 
@@ -73,11 +73,33 @@ recovered from the glyph pitch rather than assumed:
 | parent chevron ink | centre 24.5 px | **+5.0 px = +0.30 cell** from the guide |
 | folder icon ink | 23 px wide | **1.37 cells** |
 
-Both numbers are the non-`Mono` signature (measured above: +0.31 cell, 1.43 cells) and neither is
-close to the `Mono` one (0.00 cell, 1.00 cell). So the reported configuration draws the
-private-use-area glyphs with non-`Mono` metrics whatever the configured family is — the expected
-cause is **symbol fallback**: when the primary family has no glyph for a PUA codepoint, the terminal
-substitutes another font, and that fallback is not a `Mono` variant.
+**The font files themselves confirm the cause** (measured with `fontTools` on the actual files on the
+reporting machine, not inferred). cmux embeds two fonts: **JetBrains Mono Regular**, unpatched, as
+the text font, and **Symbols Nerd Font** (not the `Mono` variant) for symbols. The primary font
+contains **no** Nerd Font codepoint at all, so every birch icon and chevron is drawn by the fallback.
+
+Per glyph, with the cell defined by the text font's own advance (0.6 em):
+
+| glyph | font that draws it | advance | ink width | ink centre vs cell centre |
+|---|---|---|---|---|
+| guide `│` U+2502 | JetBrains Mono (primary) | 1.00 cell | 0.17 cell | **+0.00 cell** |
+| `▸` U+25B8 | JetBrains Mono (primary) | 1.00 cell | 0.52 cell | **+0.01 cell** |
+| octicon chevron U+F460 | Symbols Nerd Font | 1.67 cells | 0.60 cell | **+0.42 cell** |
+| codicon chevron U+EAB6 | Symbols Nerd Font | 1.67 cells | 0.55 cell | **+0.37 cell** |
+| folder U+E5FF | Symbols Nerd Font | 1.46 cells | 1.46 cells | +0.23 cell |
+| rust icon U+E7A8 | Symbols Nerd Font | 1.33 cells | 1.33 cells | +0.17 cell |
+
+Every Nerd Font codepoint birch uses is 1.08–1.67 cells wide in that fallback. The guide is centred
+because a different font draws it. The rendered offset (+0.30 cell) is smaller than the font's
++0.42 because the terminal constrains oversized icon glyphs toward the cell; it reduces the offset
+without removing it.
+
+**A correction to the earlier reading.** The `Mono` / non-`Mono` distinction is *not* about advance
+width: both installed JetBrainsMono Nerd Font variants advance exactly 1.00 cell for every glyph
+here. The difference is the **ink outline** — non-`Mono` draws the octicon chevron 0.60 cell wide
+centred at **+0.42**, while `Mono` draws it 0.36 cell wide at **+0.06**, and shrinks the folder icon
+from 1.46 cells to exactly 1.00. And neither installed variant is in use on the reporting machine,
+because cmux uses its own embedded pair.
 
 **A glyph change was considered and rejected.** The `plain` theme's base-font chevrons (`▸` U+25B8 /
 `▾` U+25BE) stay centred in the very font that shifts the octicon by ⅓ cell, so moving every theme
@@ -91,21 +113,23 @@ stay: octicons `\u{f460}`/`\u{f47c}` for `birch` and the scheme themes, codicons
 1. **No render change, no theme change, no new theme axis.** birch's geometry is correct at every
    depth in every variant measured; the guide is centred in its cell and only the substituted glyph
    moves. A per-theme guide glyph would trade one misalignment for another.
-2. **Document the font requirement** where it is actionable: the README install notes state that
-   the icon set needs a **`Mono`** Nerd Font variant, which also keeps folder and file icons inside
-   one cell — the 1.37-cell icon is a font property no birch-side change can correct.
-3. **Give the concrete fix for the reported setup**: name the terminal-side setting that pins the
-   family to a `Mono` variant, so the fallback never runs. In cmux that is `fontFamily` in
-   `~/.config/cmux/cmux.json`, which is currently unset.
+2. **Document the font requirement** where it is actionable: the README install notes state that the
+   icon set needs a Nerd Font **that the terminal's primary family provides**, in a **`Mono`**
+   variant. A terminal whose primary font carries no icon codepoints falls back to a symbols-only
+   font whose glyphs are 1.1–1.7 cells wide, and no birch-side change can correct that.
+3. **Give the concrete fix for the reported setup**: set the primary family to a `Mono` Nerd Font so
+   the fallback never runs. On the reporting machine `JetBrainsMono Nerd Font Mono` is already
+   installed and measures +0.06 cell for the chevron and 1.00 cell for icons; the setting is
+   `fontFamily` in `~/.config/cmux/cmux.json`, which is currently unset. The plain non-`Mono`
+   variant is *not* a fix — it keeps the +0.42 cell chevron ink.
 4. **Keep the measurement harness** under `docs/research/` — the tape, the measuring script, and the
    measured table — so any future report is answered with numbers instead of impressions.
 
-**To verify during implementation.** The harness renders through `vhs`, which is not the reported
-terminal, so it cannot confirm point 3 by itself: with a non-Nerd primary family `vhs` substitutes a
-correctly-centred glyph, i.e. it does not reproduce the fallback that the screenshot shows. The
-check therefore runs in a **separate cmux instance** (per `AGENTS.md`: `open -na cmux`, targeted by
-`CMUX_SOCKET_PATH`, never the maintainer's own), before and after setting `fontFamily`, with the
-screenshot measured both times.
+**To verify during implementation.** The font-file measurements predict the fix; a live check
+confirms it. The harness renders through `vhs`, which is not the reporting terminal and substitutes
+a different fallback, so the check runs in a **separate cmux instance** (per `AGENTS.md`:
+`open -na cmux`, targeted by `CMUX_SOCKET_PATH`, never the maintainer's own), with and without a
+`Mono` primary family, and the screenshot measured both times.
 
 **Public surface.** None — no flags, config keys, protocol fields, environment variables, on-disk
 paths, public APIs, or theme values. Documentation only, plus research artifacts.
