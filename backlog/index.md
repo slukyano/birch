@@ -23,23 +23,18 @@ okf_version: "0.1"
 * [Sprint 013 — Installable & CI-guarded](sprints/sprint-013.md) - Done.
 * [Sprint 014 — Docs & publication polish](sprints/sprint-014.md) - Done.
 * [Sprint 015 — Visual design: earn "beautiful"](sprints/sprint-015.md) - Done.
-* [Sprint 016 — Navigation & search feel](sprints/sprint-016.md) - Designing.
+* [Sprint 016 — Navigation & search feel](sprints/sprint-016.md) - Done.
 
 # Tasks
 
 * [Encapsulate visual styles entirely in birch-tui](tasks/055-encapsulate-themes-in-tui.md) - Tech debt: remove ThemeId from core; DI seam so the render layer owns theme identities.
 * [Support user-authored themes](tasks/056-add-user-themes.md) - Future: load custom themes from disk (~/.config/birch/themes/*.toml) beyond the built-in catalog.
 * [Adapt themes to the terminal color scheme](tasks/058-adapt-themes-to-terminal-palette.md) - Themes assume black bg; make them respect the terminal palette (light/dark, base16).
-* [Indent guides look misaligned under wide Nerd Font glyphs](tasks/059-fix-guide-chevron-alignment.md) - Guides are cell-centered but oversized PUA chevrons/icons render right-of-center (~1/3 cell).
-* [→ should always advance — never a silent no-op](tasks/060-right-arrow-always-advances.md) - Right-arrow does nothing on files and expanded plain dirs; should descend or move to the next row.
 * [Highlight the active folder's indent guide](tasks/061-active-path-indent-guide.md) - Opt-in theme axis: dim all guides except the current folder's column, which brightens; indent lines and connectors.
-* [Picker mode changes what search does](tasks/062-unify-search-in-pick-mode.md) - A query replaces the tree with a flat list and disables →/←; should match tree-mode search.
-* [Search match cycling jumps around](tasks/063-search-cycles-in-tree-order.md) - ↑/↓ step matches in fuzzy-score order; should walk them in tree order.
 * [Make git badge placement configurable](tasks/064-configurable-badge-placement.md) - Theme axis + setting: right / left / none, with a fitting default per built-in theme.
 * [Add a "random" theme](tasks/065-random-theme.md) - --theme random resolves to a randomly chosen built-in theme at launch.
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
-* [Add a picker file filter](tasks/027-add-picker-filter.md) - Glob pattern(s) + hide/skip mode; folders navigable but only pickable when they match.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
 
 
@@ -105,5 +100,10 @@ so outside the `docs/design.md` scope fence.
 * [Add the config file](archive/031-add-config-file.md) - ~/.config/birch/birch.toml (ADR 0022): theme + toggles + open-cmd; bidirectional flags; config < flags < ctl set.
 * [Canonicalize symlinks before the reveal root-containment check](archive/052-fix-reveal-symlink-canonicalization.md) - reveal matches as-given, canonicalizes as fallback; /tmp works on macOS.
 * [Remove the files-first setting](archive/057-remove-files-first.md) - Setting, flag, and protocol key dropped; directories always sort first.
+* [Search match cycling walks the tree](archive/063-search-cycles-in-tree-order.md) - Matches held in tree order; the selection anchors forward on every keystroke.
+* [One search model — the picker keeps the tree](archive/062-unify-search-in-pick-mode.md) - Flat hit list deleted; dimmed rows are inert (ADR 0023).
+* [Add the glob view filter](archive/027-add-picker-filter.md) - `--filter`/`--filter-mode` in both modes; files judged, folders navigable but gated on pick.
+* [→ always moves or reveals](archive/060-right-arrow-always-advances.md) - Expand, split, or advance; inert only when no live row follows.
+* [Indent guides vs. chevrons: a fallback-font hazard](archive/059-fix-guide-chevron-alignment.md) - Measured to the font files; documented, no render change.
 
 # Dropped

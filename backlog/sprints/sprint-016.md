@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Navigation & search feel
-status: Implementing
+status: Done
 branch: sprint/016
 tasks:
 - 063-search-cycles-in-tree-order
@@ -93,6 +93,54 @@ _(none — the design-phase questions were answered in chat: the flat picker lis
 directory that fails the search is not selectable; the filter gets no config key and no `ctl` key;
 the chevron shape is not chosen around a font defect.)_
 
+# Sprint summary
+
+Search and the picker became one thing. **[ADR 0023](../../docs/adr/0023-narrowing-dims-and-dimmed-is-inert.md)**
+replaced two narrowing behaviours with one rule: a search or a filter **dims** rows instead of
+replacing them, and **a dimmed row is inert** — it cannot hold the selection, a click does nothing,
+`Enter` never acts on it. Each narrowing declares what it judges: a search judges every row, so a
+directory that fails the query is dim too; the glob filter judges files only, so directories stay
+navigable and are gated on *pick* alone.
+
+- **`063`** — matches are held in tree order (`sort_tree_order`, keyed on path components as
+  `(is_file, lowercased)`, which reproduces how a level is drawn), so `↑`/`↓` travel down and up the
+  pane. The selection **anchors forward** on every rematch: the first match at or after the current
+  row, wrapping at the end, staying put while the row still matches. Score order lost its last
+  consumer; `search()` keeps it anyway, and `rematch` lost its `keep_position` parameter.
+- **`062`** — `filter_list_active` and `flat_view::match_rows` are gone, and with them flat rows,
+  dead arrows, chevron-clicks-as-name-clicks, and the snap-to-top-match. `Row.search: Option<bool>`
+  became `Row.live` + `Row.matched` + `Row.pickable`. `Esc` restores the pre-search view in both
+  modes; with nothing live there is no selection and `Enter` reports `no matches`.
+- **`027`** — `--filter <glob>` (repeatable) and `--filter-mode hide|skip`, in **both** modes. A
+  pattern without `/` matches the name, one with `/` the root-relative path — search's corpus rule.
+  `globset` was already in the tree under `ignore`, so brace expansion came free with no new
+  transitive crate, and patterns compile before the terminal is taken over. `hide` also drops
+  directories *known* to hold nothing; a directory whose listing has not been read is always kept.
+- **`060`** — `→` expands a collapsed directory, splits an expanded chain (ADR 0014 intact), or
+  advances to the next live row. Inert only where the task allows: no live row follows.
+- **`059`** — no code change, by decision. The reported misalignment was traced to font metrics with
+  a new measurement harness and then to the font files themselves: cmux embeds an unpatched
+  JetBrains Mono (no icon codepoints at all) plus **Symbols Nerd Font**, in which birch's chevrons
+  advance 1.67 cells and sit +0.42 cell off centre while the indent guide, drawn by the primary
+  font, sits at +0.00. Setting the primary family to a `Mono` build fixes it; documented in the
+  README and `docs/research/nerd-font-glyphs.md`, with the upstream Ghostty reports.
+
+Six commits, 21 files, +1348/−258. Tests went from 144 on `main` to **161** (18 added, 1 removed
+with the flat picker list); `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`
+clean.
+
+**Bugs found and fixed** (both surfaced by rendering the change and looking at it, neither caught by
+a unit test):
+
+1. The **selection wash swallowed the match highlight**. `draw` painted the edge-to-edge wash with
+   `set_style` over the whole row rect, overwriting the background of every cell — including the
+   gold `match_bg` of lit characters, whose near-black foreground then sat on a dark row and became
+   invisible. It struck exactly where the eye goes: the row the selection is on, which under the
+   anchor rule is the current match. Predates this sprint (the wash arrived in 015); the wash now
+   skips cells that already carry a background, with a `TestBackend` regression test.
+2. A **dim row kept `bold_dirs`**, so a non-matching directory rendered bold-and-dim and still read
+   as prominent while being inert. Dim rows now drop the bold.
+
 # Session log
 
 - Scoped and cut: `063`, `062`, `027`, `060`, plus `059` added at scope approval. Branch
@@ -115,3 +163,7 @@ the chevron shape is not chosen around a font defect.)_
   outcome is documentation plus a `Mono` primary family, verified live in cmux.
 - Design approved: ADR 0023 `Proposed → Accepted`; the five tasks `Draft → Designed`; the sprint
   `Designing → Implementing`. Design merge to `main`.
+- Implementation: `063` (tree-order stepping + forward anchor), `059` (documentation, after tracing
+  the offset to the embedded Symbols Nerd Font), `062` (one search model; the flat picker list
+  deleted), `060` (the three-case right arrow), `027` (the glob filter, both modes). Two rendering
+  bugs found on screen and fixed. Closed out; gates green.

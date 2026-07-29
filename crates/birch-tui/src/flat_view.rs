@@ -4,6 +4,7 @@
 //! real path, so rows appearing or disappearing above it cannot move it.
 //! Pure logic — no ratatui types.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -97,6 +98,10 @@ struct Ctx<'a> {
     split: Option<&'a HashSet<PathBuf>>,
     filter: Option<&'a Filter>,
     root: PathBuf,
+    /// Memo for `subtree_has_match`: `hide` mode asks it once per candidate
+    /// row, and without this a fully-loaded tree that matches nothing walks
+    /// its own subtree for every directory in it.
+    subtree_memo: RefCell<HashMap<NodeId, bool>>,
 }
 
 impl Ctx<'_> {
@@ -165,6 +170,15 @@ impl Ctx<'_> {
     /// Whether anything under `id` matches, over the *loaded* tree. An unloaded
     /// directory counts as a match: its contents are unknown.
     fn subtree_has_match(&self, id: NodeId) -> bool {
+        if let Some(&known) = self.subtree_memo.borrow().get(&id) {
+            return known;
+        }
+        let answer = self.compute_subtree_has_match(id);
+        self.subtree_memo.borrow_mut().insert(id, answer);
+        answer
+    }
+
+    fn compute_subtree_has_match(&self, id: NodeId) -> bool {
         let node = self.tree.get(id);
         if !node.is_loaded() {
             return true;
@@ -277,6 +291,7 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
         split: decor.split,
         filter: decor.filter,
         root: tree.get(tree.root()).path.clone(),
+        subtree_memo: RefCell::new(HashMap::new()),
     };
     let mut rows = Vec::new();
     let root = tree.get(tree.root());
@@ -530,12 +545,16 @@ impl FlatView {
             self.selection = None;
             return None;
         }
+        // Where to re-home from if the selection cannot be kept: its own row
+        // when it is still on screen (merely dimmed), else the remembered spot.
+        let mut origin = None;
         if let Some(path) = &self.selection {
             if let Some(idx) = rows.iter().position(|r| &r.path == path) {
                 if rows[idx].live {
                     self.last_index = idx;
                     return Some(idx);
                 }
+                origin = Some(idx);
             } else if let Some(idx) = rows.iter().position(|r| r.chain.iter().any(|m| m == path)) {
                 // A path that is an interior member of a compacted chain
                 // resolves to the chain row (and normalizes the selection to
@@ -544,10 +563,12 @@ impl FlatView {
                     self.select(rows, idx);
                     return Some(idx);
                 }
+                origin = Some(idx);
             }
         }
-        // Either the selection vanished or it just went dim: re-home forward.
-        let from = self.last_index.min(rows.len() - 1);
+        // Either the selection vanished or it just went dim: re-home forward
+        // from where it sat, so a narrowing moves the cursor the shortest way.
+        let from = origin.unwrap_or(self.last_index).min(rows.len() - 1);
         let idx = nearest_live(rows, from)?;
         self.select(rows, idx);
         Some(idx)

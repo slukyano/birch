@@ -166,3 +166,30 @@
   `066` (animated gradient colours — blocked less by colour maths than by birch having no frame
   clock; needs an opt-in tick and focus-aware pausing). `027` (picker filter) was expanded with the
   repeatable-glob spelling, `hide`/`skip` modes, and the folders-navigable-but-not-pickable rule.
+
+## 2026-07-28 (sprint 016)
+
+* **Sprint 016 done — one search model, and dimming that means something**:
+  [ADR 0023](../docs/adr/0023-narrowing-dims-and-dimmed-is-inert.md) replaced two narrowing
+  behaviours with one rule — a search or a filter **dims** rows instead of replacing them, and a
+  **dimmed row is inert**: it cannot hold the selection, a click does nothing, `Enter` never acts on
+  it. Each narrowing declares what it judges: a search judges every row, so a directory failing the
+  query dims too; the glob filter judges files only, so directories stay navigable and are gated on
+  *pick* alone. The picker's flat hit list is deleted (`062`), so `--pick` and the pane are the same
+  tree, the same search, the same keys. Search matches are held in **tree order** and the selection
+  **anchors forward** on every keystroke — the first match at or after the current row, wrapping,
+  staying put while the row still matches (`063`). `→` gained a three-case rule: expand, split, or
+  advance, inert only when no live row follows (`060`). A **glob filter** landed as `--filter`
+  (repeatable) and `--filter-mode hide|skip`, in both modes, with search's corpus rule — name
+  without `/`, root-relative path with one (`027`).
+* **Two rendering bugs found by looking at the screen**: the edge-to-edge selection wash overwrote
+  every background in its row, including the gold match highlight, so the lit characters of the
+  current match rendered dark-on-dark and vanished — on precisely the row the selection sits on; and
+  a dim row kept `bold_dirs`, so an inert directory still read as prominent. Both fixed, the first
+  with a `TestBackend` regression test.
+* **The indent-guide report was measured, not guessed** (`059`): a `vhs` capture harness plus
+  `fontTools` on the actual font files showed cmux embeds an unpatched JetBrains Mono — which
+  carries **no** Nerd Font codepoint — beside **Symbols Nerd Font**, where birch's chevrons advance
+  1.67 cells and sit +0.42 cell off centre while the indent guide, drawn by the primary font, sits
+  at +0.00. No birch change: the fix is a `Mono` primary family, now documented in the README and
+  [the glyph reference](../docs/research/nerd-font-glyphs.md) with the upstream Ghostty reports.

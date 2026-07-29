@@ -2,7 +2,7 @@
 type: Task
 title: Add a picker file filter
 description: Glob pattern(s) restricting what the picker can pick, with hide or skip presentation; folders stay navigable but are only pickable when they match.
-status: Designed
+status: Done
 priority: medium
 blocked_by:
 - 016-unify-picker

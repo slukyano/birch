@@ -2,7 +2,7 @@
 type: Task
 title: Indent guides look misaligned under wide Nerd Font glyphs
 description: The guide stem is cell-centered, but oversized PUA chevron/icon glyphs render right-of-center, so guides appear ~1/3 cell to the left of the chevron.
-status: Designed
+status: Done
 priority: medium
 ---
 
