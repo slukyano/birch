@@ -4,7 +4,6 @@
 //! real path, so rows appearing or disappearing above it cannot move it.
 //! Pure logic — no ratatui types.
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -98,10 +97,6 @@ struct Ctx<'a> {
     split: Option<&'a HashSet<PathBuf>>,
     filter: Option<&'a Filter>,
     root: PathBuf,
-    /// Memo for `subtree_has_match`: `hide` mode asks it once per candidate
-    /// row, and without this a fully-loaded tree that matches nothing walks
-    /// its own subtree for every directory in it.
-    subtree_memo: RefCell<HashMap<NodeId, bool>>,
 }
 
 impl Ctx<'_> {
@@ -116,88 +111,6 @@ impl Ctx<'_> {
     /// highlights, as distinct from what the selection may land on.
     fn matched_flag(&self, hit: bool) -> bool {
         self.matched.is_some() && hit
-    }
-
-    /// Whether the glob filter accepts this entry. Directories are never
-    /// judged for *visibility* — file-shaped patterns match no directory, and
-    /// judging them would make the tree unnavigable — so this answers the
-    /// question the filter actually asks of a path, and callers decide whether
-    /// a directory has to satisfy it (pickability) or not (liveness).
-    fn passes_filter(&self, path: &std::path::Path, name: &str) -> bool {
-        let Some(filter) = self.filter else {
-            return true;
-        };
-        let rel = path
-            .strip_prefix(&self.root)
-            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_default();
-        filter.matches(&rel, name)
-    }
-
-    /// Liveness including the filter: a file must pass it, a directory need not.
-    fn live_entry(&self, hit: bool, is_dir: bool, path: &std::path::Path, name: &str) -> bool {
-        self.live(hit) && (is_dir || self.passes_filter(path, name))
-    }
-
-    /// Pickability (ADR 0023): everything liveness asks, plus the filter — this
-    /// time for directories too, which is the rule `027` asks for.
-    fn pickable(&self, hit: bool, is_dir: bool, path: &std::path::Path, name: &str) -> bool {
-        self.live_entry(hit, is_dir, path, name) && self.passes_filter(path, name)
-    }
-
-    /// `hide` mode drops a non-matching file outright, and a directory once its
-    /// whole subtree is known to hold nothing that matches. A directory that is
-    /// not fully loaded is always kept: an unread listing may hold a match, and
-    /// hiding a path that might contain what you are looking for is worse than
-    /// showing a branch that turns out empty.
-    fn hidden_by_filter(&self, id: NodeId) -> bool {
-        let Some(filter) = self.filter else {
-            return false;
-        };
-        if filter.mode() != FilterMode::Hide {
-            return false;
-        }
-        let node = self.tree.get(id);
-        if !node.kind.is_dir() {
-            return !self.passes_filter(&node.path, &node.name);
-        }
-        if self.passes_filter(&node.path, &node.name) {
-            return false; // a directory that matches is worth showing
-        }
-        !self.subtree_has_match(id)
-    }
-
-    /// Whether anything under `id` matches, over the *loaded* tree. An unloaded
-    /// directory counts as a match: its contents are unknown.
-    fn subtree_has_match(&self, id: NodeId) -> bool {
-        if let Some(&known) = self.subtree_memo.borrow().get(&id) {
-            return known;
-        }
-        let answer = self.compute_subtree_has_match(id);
-        self.subtree_memo.borrow_mut().insert(id, answer);
-        answer
-    }
-
-    fn compute_subtree_has_match(&self, id: NodeId) -> bool {
-        let node = self.tree.get(id);
-        if !node.is_loaded() {
-            return true;
-        }
-        node.children().iter().any(|&child| {
-            let child_node = self.tree.get(child);
-            if !self.name_visible(&child_node.name) {
-                return false;
-            }
-            if !self.s.show_ignored && self.is_ignored(&child_node.path) {
-                return false;
-            }
-            if child_node.kind.is_dir() {
-                self.passes_filter(&child_node.path, &child_node.name)
-                    || self.subtree_has_match(child)
-            } else {
-                self.passes_filter(&child_node.path, &child_node.name)
-            }
-        })
     }
 
     fn is_hit(&self, path: &std::path::Path) -> bool {
@@ -217,6 +130,49 @@ impl Ctx<'_> {
 
     fn is_split(&self, path: &std::path::Path) -> bool {
         self.split.is_some_and(|s| s.contains(path))
+    }
+
+    /// Whether the glob filter accepts this entry, asked with the entry's kind
+    /// so that standard glob semantics apply: `*/` names directories, `*.md`
+    /// names files. Callers decide who has to satisfy it — files for liveness,
+    /// everything for pickability.
+    fn passes_filter(&self, path: &std::path::Path, name: &str, is_dir: bool) -> bool {
+        let Some(filter) = self.filter else {
+            return true;
+        };
+        let rel = path
+            .strip_prefix(&self.root)
+            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        filter.matches(&rel, name, is_dir)
+    }
+
+    /// Liveness including the filter: a file must pass it, a directory need not
+    /// — directories are never dimmed by a filter, whatever its patterns say,
+    /// because the tree has to stay walkable to reach what does match.
+    fn live_entry(&self, hit: bool, is_dir: bool, path: &std::path::Path, name: &str) -> bool {
+        self.live(hit) && (is_dir || self.passes_filter(path, name, false))
+    }
+
+    /// Pickability (ADR 0023): everything liveness asks, plus the filter — this
+    /// time for directories too, which is the rule `027` asks for.
+    fn pickable(&self, hit: bool, is_dir: bool, path: &std::path::Path, name: &str) -> bool {
+        self.live_entry(hit, is_dir, path, name) && self.passes_filter(path, name, is_dir)
+    }
+
+    /// `hide` mode drops non-matching **files**. Directories always stay: the
+    /// tree is lazily loaded, so "this branch holds nothing" is only ever
+    /// provisional, and hiding directories as their listings arrived made rows
+    /// vanish under the cursor mid-browse. A branch that turns out empty is a
+    /// smaller cost than a tree that rearranges itself while being read.
+    fn hidden_by_filter(&self, id: NodeId) -> bool {
+        let Some(filter) = self.filter else {
+            return false;
+        };
+        let node = self.tree.get(id);
+        filter.mode() == FilterMode::Hide
+            && !node.kind.is_dir()
+            && !self.passes_filter(&node.path, &node.name, false)
     }
 
     fn name_visible(&self, name: &str) -> bool {
@@ -291,7 +247,6 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
         split: decor.split,
         filter: decor.filter,
         root: tree.get(tree.root()).path.clone(),
-        subtree_memo: RefCell::new(HashMap::new()),
     };
     let mut rows = Vec::new();
     let root = tree.get(tree.root());
@@ -560,7 +515,7 @@ impl FlatView {
                 // resolves to the chain row (and normalizes the selection to
                 // its tail).
                 if rows[idx].live {
-                    self.select(rows, idx);
+                    self.select_resolved(rows, idx);
                     return Some(idx);
                 }
                 origin = Some(idx);
@@ -570,7 +525,7 @@ impl FlatView {
         // from where it sat, so a narrowing moves the cursor the shortest way.
         let from = origin.unwrap_or(self.last_index).min(rows.len() - 1);
         let idx = nearest_live(rows, from)?;
-        self.select(rows, idx);
+        self.select_resolved(rows, idx);
         Some(idx)
     }
 
@@ -585,6 +540,16 @@ impl FlatView {
         self.selection = Some(rows[idx].path.clone());
         self.last_index = idx;
         self.follow = true;
+    }
+
+    /// Re-points the selection **without** asking the viewport to follow it.
+    /// Re-resolving a selection is bookkeeping, not movement: rows reshuffle
+    /// constantly as listings arrive and chains form, and treating that as
+    /// movement snaps a freely scrolled viewport back to the selection.
+    fn select_resolved(&mut self, rows: &[Row], idx: usize) {
+        let follow = self.follow;
+        self.select(rows, idx);
+        self.follow = follow;
     }
 
     /// Moves the selection by `delta` **live** rows: dim rows are stepped over
@@ -690,11 +655,14 @@ impl FlatView {
         let Some(row) = rows.get(idx) else {
             return NavEffect::None;
         };
-        if !row.live {
-            return NavEffect::None; // dim rows are inert (ADR 0023)
-        }
+        // A chevron is structure, not selection: it toggles even on a dim row,
+        // so a narrowing never locks a directory shut. Everything else about a
+        // dim row stays inert (ADR 0023).
         if row.kind.is_dir() && on_chevron && !row.missing {
             return self.toggle(tree, row);
+        }
+        if !row.live {
+            return NavEffect::None;
         }
         self.select(rows, idx);
         if row.kind.is_dir() && !row.missing {

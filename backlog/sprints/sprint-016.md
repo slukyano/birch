@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Navigation & search feel
-status: Done
+status: Implementing
 branch: sprint/016
 tasks:
 - 063-search-cycles-in-tree-order
@@ -140,6 +140,22 @@ a unit test):
    skips cells that already carry a background, with a `TestBackend` regression test.
 2. A **dim row kept `bold_dirs`**, so a non-matching directory rendered bold-and-dim and still read
    as prominent while being inert. Dim rows now drop the bold.
+3. **A dim folder's chevron stopped working.** ADR 0023 made dim rows inert, and the click path took
+   that literally, so a narrowing froze the tree's shape — a folder that did not match could not be
+   opened or closed. A chevron is structure, not selection: it now toggles on a dim row too, without
+   moving the selection. Everything else about a dim row stays inert.
+4. **`--filter '*/'` matched nothing and `hide` made rows vanish while browsing.** Two causes.
+   `globset` matches strings and has no notion of directories, so a directory was offered to it as
+   `src` and standard trailing-slash semantics could not apply; directories are now presented as
+   `src/`, which makes `*/` mean "any directory" exactly as a shell or `.gitignore` reads it, and a
+   trailing slash no longer misclassifies a pattern as a path rule. Separately, `hide` dropped
+   directories "known" to hold no match — but the tree loads lazily, so that knowledge arrived
+   mid-browse and rows disappeared under the cursor. `hide` now drops files only.
+5. **A search snapped a scrolled viewport back.** `rematch` runs on every index refresh, and it
+   revealed the current match unconditionally, so any filesystem churn during a search yanked the
+   pane back to the selection. It now reveals only when the anchor actually moves. A second, milder
+   case was fixed alongside: `sync` re-pointing a selection through a compacted chain counted as
+   movement, so bookkeeping could drag the viewport too.
 
 # Session log
 

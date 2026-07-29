@@ -73,7 +73,11 @@ impl Filter {
                 .literal_separator(true)
                 .build()
                 .map_err(|e| format!("bad filter pattern `{pattern}`: {e}"))?;
-            if pattern.contains('/') {
+            // A *trailing* slash only says "directories"; it does not make the
+            // pattern a path rule. So `*/` is a name rule ("any directory, at
+            // any depth") while `src/*/` is a path rule — the same reading a
+            // `.gitignore` gives them.
+            if pattern.trim_end_matches('/').contains('/') {
                 paths.add(glob);
             } else {
                 names.add(glob);
@@ -91,10 +95,21 @@ impl Filter {
         self.mode
     }
 
-    /// Whether a file matches: its name against the name patterns, its
+    /// Whether an entry matches: its name against the name patterns, its
     /// root-relative path against the path patterns.
-    pub fn matches(&self, rel: &str, name: &str) -> bool {
-        self.names.is_match(name) || self.paths.is_match(rel)
+    ///
+    /// A directory is presented to the matcher with a trailing `/`, which is
+    /// all that standard glob semantics need: `*/` then matches any directory
+    /// and `*.md` matches no directory, exactly as in a shell or a
+    /// `.gitignore`. `globset` itself has no notion of file versus directory —
+    /// it matches strings — so the distinction has to live in the candidate.
+    pub fn matches(&self, rel: &str, name: &str, is_dir: bool) -> bool {
+        if is_dir {
+            let (rel, name) = (format!("{rel}/"), format!("{name}/"));
+            self.names.is_match(&name) || self.paths.is_match(&rel)
+        } else {
+            self.names.is_match(name) || self.paths.is_match(rel)
+        }
     }
 }
 
@@ -127,36 +142,59 @@ mod tests {
     #[test]
     fn plain_patterns_match_the_name_at_any_depth() {
         let f = filter(&["*.md"]);
-        assert!(f.matches("README.md", "README.md"));
-        assert!(f.matches("docs/deep/guide.md", "guide.md"));
-        assert!(!f.matches("src/main.rs", "main.rs"));
+        assert!(f.matches("README.md", "README.md", false));
+        assert!(f.matches("docs/deep/guide.md", "guide.md", false));
+        assert!(!f.matches("src/main.rs", "main.rs", false));
     }
 
     #[test]
     fn patterns_with_a_slash_match_the_relative_path() {
         let f = filter(&["src/*.rs"]);
-        assert!(f.matches("src/main.rs", "main.rs"));
+        assert!(f.matches("src/main.rs", "main.rs", false));
         // `*` stays inside one component, so a deeper file does not match.
-        assert!(!f.matches("src/cli/args.rs", "args.rs"));
+        assert!(!f.matches("src/cli/args.rs", "args.rs", false));
         // And the same name outside src/ does not match either.
-        assert!(!f.matches("tests/main.rs", "main.rs"));
+        assert!(!f.matches("tests/main.rs", "main.rs", false));
 
         let deep = filter(&["src/**/*.rs"]);
-        assert!(deep.matches("src/cli/args.rs", "args.rs"));
+        assert!(deep.matches("src/cli/args.rs", "args.rs", false));
     }
 
     #[test]
     fn any_pattern_matching_is_enough_and_braces_expand() {
         let f = filter(&["*.md", "*.txt"]);
-        assert!(f.matches("a.md", "a.md"));
-        assert!(f.matches("b.txt", "b.txt"));
-        assert!(!f.matches("c.rs", "c.rs"));
+        assert!(f.matches("a.md", "a.md", false));
+        assert!(f.matches("b.txt", "b.txt", false));
+        assert!(!f.matches("c.rs", "c.rs", false));
 
         // Brace expansion comes free with globset, so one flag can carry a set.
         let braces = filter(&["*.{md,txt}"]);
-        assert!(braces.matches("a.md", "a.md"));
-        assert!(braces.matches("b.txt", "b.txt"));
-        assert!(!braces.matches("c.rs", "c.rs"));
+        assert!(braces.matches("a.md", "a.md", false));
+        assert!(braces.matches("b.txt", "b.txt", false));
+        assert!(!braces.matches("c.rs", "c.rs", false));
+    }
+
+    #[test]
+    fn a_trailing_slash_names_directories() {
+        // Standard glob and gitignore semantics, which fall out of presenting
+        // a directory to the matcher with its trailing slash.
+        let dirs = filter(&["*/"]);
+        assert!(dirs.matches("src", "src", true), "any directory");
+        assert!(
+            dirs.matches("src/cli", "cli", true),
+            "at any depth, since the only slash is the trailing one"
+        );
+        assert!(!dirs.matches("main.rs", "main.rs", false), "never a file");
+
+        // A file-shaped pattern therefore names no directory.
+        let files = filter(&["*.md"]);
+        assert!(files.matches("README.md", "README.md", false));
+        assert!(!files.matches("docs.md", "docs.md", true));
+
+        // An interior slash still makes it a path rule.
+        let scoped = filter(&["src/*/"]);
+        assert!(scoped.matches("src/cli", "cli", true));
+        assert!(!scoped.matches("tests/cli", "cli", true));
     }
 
     #[test]

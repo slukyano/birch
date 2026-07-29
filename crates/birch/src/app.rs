@@ -635,8 +635,10 @@ impl App {
         on_chevron: bool,
         now: Instant,
     ) -> NavEffect {
-        if !rows[idx].live {
-            // Dim rows are inert: a click neither selects nor arms a double.
+        // A chevron click on a dim directory still toggles it: collapsing and
+        // expanding is how the tree is read, and a narrowing must not freeze
+        // its shape. Any other click on a dim row is inert (ADR 0023).
+        if !rows[idx].live && !(on_chevron && rows[idx].kind.is_dir() && !rows[idx].missing) {
             self.click_timer.disarm();
             return NavEffect::None;
         }
@@ -793,7 +795,11 @@ impl App {
             // query can still reach them; a filtered-out file can never
             // surface. Filtering the results, not the index, keeps this from
             // forcing a rebuild.
-            matches.retain(|m| m.entry.is_dir || filter.matches(&m.entry.rel, &m.entry.name));
+            matches.retain(|m| {
+                // Directories are never dimmed by a filter, so a query may
+                // still reach them; a filtered-out file can never surface.
+                m.entry.is_dir || filter.matches(&m.entry.rel, &m.entry.name, false)
+            });
         }
         search::sort_tree_order(&mut matches);
         let matched_set = matches
@@ -814,9 +820,13 @@ impl App {
             state.matched_set = matched_set;
             state.current = current;
         }
-        // Reveal the anchored match in both modes: the picker renders the same
-        // tree the pane does (ADR 0023), so there is no list to snap to.
-        if let Some(target) = target {
+        // Reveal the anchored match — but only when it is somewhere new. A
+        // rematch also runs on every index refresh, and revealing a match the
+        // selection already sits on would scroll the pane back to it, undoing
+        // whatever the wheel just did while a search is open.
+        if let Some(target) = target
+            && self.view.selection.as_deref() != Some(target.as_path())
+        {
             self.reveal(target);
         }
     }
@@ -1853,7 +1863,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_hide_omits_non_matches_and_dead_end_folders() {
+    fn filter_hide_omits_files_but_never_folders() {
         use birch_core::FilterMode;
         let mut h = harness(Mode::Tree);
         with_filter(&mut h.app, &["*.md"], FilterMode::Hide);
@@ -1867,8 +1877,6 @@ mod tests {
                 ("build.rs", NodeKind::File),
             ],
         );
-        // Both directories are loaded, so their contents are known: docs holds
-        // a match, dead holds none.
         feed(&mut h.app, "/r/docs", &[("guide.md", NodeKind::File)]);
         feed(&mut h.app, "/r/dead", &[("main.rs", NodeKind::File)]);
 
@@ -1878,26 +1886,34 @@ mod tests {
             !names.iter().any(|n| n == "build.rs"),
             "a non-matching file is omitted in hide mode"
         );
-        assert!(
-            names.iter().any(|n| n.starts_with("docs")),
-            "a folder holding a match stays: {names:?}"
-        );
-        assert!(
-            !names.iter().any(|n| n.starts_with("dead")),
-            "a folder known to hold nothing is a dead end: {names:?}"
-        );
+        // Directories stay even when nothing under them matches: the tree
+        // loads lazily, so hiding them made rows vanish mid-browse as listings
+        // arrived. An empty branch beats a tree that rearranges itself.
+        assert!(names.iter().any(|n| n.starts_with("docs")), "{names:?}");
+        assert!(names.iter().any(|n| n.starts_with("dead")), "{names:?}");
     }
 
     #[test]
-    fn an_unloaded_folder_survives_hide_mode() {
+    fn a_trailing_slash_filters_to_directories() {
         use birch_core::FilterMode;
-        let mut h = harness(Mode::Tree);
-        with_filter(&mut h.app, &["*.md"], FilterMode::Hide);
-        // `maybe` is never fed, so its listing is unknown — hiding it could
-        // hide the very thing being looked for.
-        feed(&mut h.app, "/r", &[("maybe", NodeKind::Dir)]);
-        let names: Vec<String> = h.app.rows().iter().map(|r| r.name.clone()).collect();
-        assert!(names.iter().any(|n| n.starts_with("maybe")), "{names:?}");
+        let mut h = harness(Mode::Pick);
+        with_filter(&mut h.app, &["*/"], FilterMode::Skip);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("src", NodeKind::Dir), ("notes.md", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        let row = |name: &str| rows.iter().find(|r| r.name == name).unwrap();
+
+        // `*/` is any directory, so directories become the pickable set...
+        assert!(row("src").live && row("src").pickable);
+        // ...and every file is dimmed out, since no pattern names a file.
+        assert!(!row("notes.md").live);
+
+        h.app.view.focus("/r/src".into());
+        h.app.activate(&rows, None);
+        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/src")));
     }
 
     #[test]
@@ -1946,6 +1962,117 @@ mod tests {
         let live = |name: &str| rows.iter().find(|r| r.name == name).unwrap().live;
         assert!(live("main.rs"), "src/main.rs matches src/*.rs");
         assert!(!live("notes.md"));
+    }
+
+    #[test]
+    fn scrolling_during_a_search_is_not_snapped_back() {
+        let mut h = harness(Mode::Tree);
+        let entries: Vec<(String, NodeKind)> = (0..40)
+            .map(|i| (format!("f{i:02}.txt"), NodeKind::File))
+            .collect();
+        let refs: Vec<(&str, NodeKind)> = entries.iter().map(|(n, k)| (n.as_str(), *k)).collect();
+        feed(&mut h.app, "/r", &refs);
+        h.app.index = Some(index_of(&[("f00.txt", false)]));
+        h.app.search_push('f');
+        h.app.search_push('0');
+        h.app.search_push('0');
+
+        // The match is at the top; the wheel scrolls well past it.
+        let rows = h.app.rows();
+        let viewport = 10;
+        h.app.view.reconcile(&rows, viewport); // consumes the reveal's follow
+        h.app.view.scroll_by(&rows, 12, viewport);
+        assert_eq!(h.app.view.scroll, 12);
+
+        // Redraws keep coming while the search is live; none of them may drag
+        // the viewport back to the selected match.
+        for _ in 0..3 {
+            h.app.step_reveal();
+            let rows = h.app.rows();
+            h.app.view.reconcile(&rows, viewport);
+        }
+        assert_eq!(
+            h.app.view.scroll, 12,
+            "free scrolling is never snapped back to the selection"
+        );
+    }
+
+    #[test]
+    fn an_index_refresh_does_not_drag_a_scrolled_viewport() {
+        // The reported snap-back: with a search open, every index refresh
+        // re-ran the match and revealed it, pulling the pane back to the
+        // selection however far the wheel had scrolled.
+        let mut h = harness(Mode::Tree);
+        let entries: Vec<(String, NodeKind)> = (0..40)
+            .map(|i| (format!("f{i:02}.txt"), NodeKind::File))
+            .collect();
+        let refs: Vec<(&str, NodeKind)> = entries.iter().map(|(n, k)| (n.as_str(), *k)).collect();
+        feed(&mut h.app, "/r", &refs);
+        h.app.index = Some(index_of(&[("f00.txt", false)]));
+        h.app.search_push('f');
+        h.app.search_push('0');
+        h.app.search_push('0');
+
+        let rows = h.app.rows();
+        let viewport = 10;
+        h.app.view.reconcile(&rows, viewport);
+        h.app.view.scroll_by(&rows, 20, viewport);
+        let scrolled = h.app.view.scroll;
+        assert!(scrolled > 0, "the wheel moved the viewport");
+
+        // A fresh index arrives (watcher churn) while the search is open.
+        h.app.index = Some(index_of(&[("f00.txt", false)]));
+        h.app.rematch();
+        let rows = h.app.rows();
+        h.app.view.reconcile(&rows, viewport);
+        assert_eq!(
+            h.app.view.scroll, scrolled,
+            "a refresh that does not move the match must not move the viewport"
+        );
+
+        // Typing still takes the pane to the match it selects.
+        h.app.view.scroll_by(&rows, 5, viewport);
+        h.app.search_pop();
+        let rows = h.app.rows();
+        h.app.view.reconcile(&rows, viewport);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/f00.txt"))
+        );
+    }
+
+    #[test]
+    fn a_dim_folders_chevron_still_toggles() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("src", NodeKind::Dir), ("keep.md", NodeKind::File)],
+        );
+        h.app.index = Some(index_of(&[("keep.md", false)]));
+        h.app.search_push('k');
+
+        let rows = h.app.rows();
+        let idx = rows.iter().position(|r| r.name == "src").unwrap();
+        assert!(!rows[idx].live, "src does not match the query, so it dims");
+
+        // A chevron click on it expands anyway: structure stays reachable.
+        h.app.resolve_click(&rows, idx, true, Instant::now());
+        assert!(h.app.tree.node_at(Path::new("/r/src")).unwrap().expanded);
+        // ...without stealing the selection, which stays on the match.
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/keep.md"))
+        );
+
+        // A name click on the same dim row still does nothing.
+        let rows = h.app.rows();
+        let idx = rows.iter().position(|r| r.name == "src").unwrap();
+        h.app.resolve_click(&rows, idx, false, Instant::now());
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/keep.md"))
+        );
     }
 
     #[test]
