@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: The event loop draws once per batch, not once per event
-status: Proposed
+status: Accepted
 sprint: sprint-017
 ---
 

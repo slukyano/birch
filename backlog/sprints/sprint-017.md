@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Pointer feel
-status: Designing
+status: Implementing
 branch: sprint/017
 tasks:
 - 069-fix-wheel-scrolling
@@ -123,6 +123,8 @@ event count, and the loop contract is recorded as ADR 0024.)_
 - `067` and `068` designed, completing the design phase: `067` as ADR 0025 (press arms, release
   completes, same row and zone), `068` as an inert one-column indicator at the far right with the
   usual toggle surface.
+- Design approved: ADRs 0024 and 0025 `Proposed → Accepted`; the four tasks `Draft → Designed`;
+  the sprint `Designing → Implementing`. Design merge to `main`.
 - `069` and `075` designs approved. Settled with them: the batch takes a ~8 ms time budget, the
   loop contract becomes **ADR 0024** (`Proposed`), `075` keeps the 1–10 range, and `069` is
   retitled "Input bursts freeze the pane" since the keyboard freezes identically.

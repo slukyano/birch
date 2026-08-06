@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: A click completes on release, on the row it started on
-status: Proposed
+status: Accepted
 sprint: sprint-017
 ---
 
