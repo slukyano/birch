@@ -1,10 +1,11 @@
 ---
 type: Sprint
 title: Pointer feel
-status: Designing
+status: Implementing
 branch: sprint/017
 tasks:
 - 069-fix-wheel-scrolling
+- 075-configurable-scroll-speed
 - 067-select-on-mouse-up
 - 068-add-scrollbar
 ---
@@ -24,37 +25,46 @@ sprint whose whole surface is the pointer, is cheaper than settling it inside th
 `069` is the only unblocked high-priority item in the backlog and the only defect: the wheel runs
 away and heavy overscrolling reads as a freeze. It leads.
 
-No new sources, no new modes, no actions. The only new public surface is whatever toggle `068`
-needs.
+No new sources, no new modes, no actions. New public surface: `075`'s scroll-speed setting and
+`068`'s scrollbar toggle, each a flag, a config key, and a `ctl set` key.
 
 # In-scope task ledger
 
-- **`069-fix-wheel-scrolling`** — *bug, high, design-light but investigation-heavy.* Wheel
-  scrolling "runs away sometimes" and overscrolling "makes it all freeze". `SCROLL_LINES` is
-  already 3 and `scroll_by` already clamps, so the nominal step and the bounds are not the fault.
-  The leading suspect is viewport-driven peek loading (`app::request_peeks` emits a
-  `SourceCmd::Expand` per unloaded directory in view, every frame, and each arriving snapshot
-  rebuilds the rows) — a burst that grows with how far the wheel travels. Reproduction comes first
-  and needs a live terminal or a synthetic event feed; `vhs` cannot send wheel events.
+- **`069-fix-wheel-scrolling`** — *bug, high, design-light but investigation-heavy.* Retitled
+  during design to **"Input bursts freeze the pane"**: measurement moved the diagnosis off the
+  wheel entirely. One event cost a full O(all visible rows) rebuild — twice per input event —
+  behind an unbounded queue, so any burst froze the pane (1 000 `Down` keypresses froze it
+  identically to 1 000 wheel events). Peek-loading, the stated suspect, was ~18 %. Fixed by
+  batching the loop (**ADR 0024**) and serving scrolling from a cached row count: 3 483 ms → 3 ms.
+- **`075-configurable-scroll-speed`** — *minor, medium.* Added to scope during the design phase, at
+  the maintainer's request. Lines per wheel tick stops being `input::SCROLL_LINES = 3` and becomes
+  `Settings::scroll_lines`, bounded 1–10, with the full flag / config / `ctl set` surface. The
+  preference half of `069`, which proved the distance was never the defect.
 - **`067-select-on-mouse-up`** — *mid, design-heavy, medium.* Selection moves from button-down to
   button-up so a click reads as deliberate rather than twitchy. `map_event` maps
   `MouseEventKind::Down(Left)` to `InputAction::Click` and discards `Up` entirely
   (`crates/birch-tui/src/input.rs:89`). Open for design: whether the chevron toggle keeps press
   while the name keeps release, what a press that leaves its row before releasing does (birch does
   not track the press row today), and how `ClickTimer`'s 450 ms window is re-based so a
-  double-click is still two complete clicks. Amends or supersedes
-  [ADR 0015](../../docs/adr/0015-click-selects-double-click-activates.md).
+  double-click is still two complete clicks. Designed as **ADR 0025**: the press arms, the release
+  completes, and only on the same row and the same zone — so a click can be revoked by sliding off.
+  One rule for every affordance; the chevron does not keep button-down. ADR 0015 stands except for
+  its moment.
 - **`068-add-scrollbar`** — *mid, medium.* A scroll indicator down the pane's edge, hidden when
   everything fits, with a way to turn it off. The right two columns are the badge gutter today
   (`render::BADGE_WIDTH`), so the layout must give it a column or share one — and whatever it takes,
   `hit_test` must account for. Pure indicator in this version; dragging the bar needs mouse-drag
-  tracking birch has never had, and belongs with `072`.
+  tracking birch has never had, and belongs with `072`. Designed as one column at the **far right**,
+  pushing the badges left and keeping the gutter, reserved only while shown; the column is inert to
+  clicks, which reserves the drag gesture for later.
 
 # Ordering / dependencies
 
 - **`069` first** — it is the defect, it is high priority, and its likely fix (bounding what one
   frame consumes, or rate-limiting peeks) changes how the viewport moves before `068` draws a bar
   that reports viewport position.
+- **`075` after `069`** — both touch the wheel arms of `handle_input`; `069` fixes the loop, then
+  `075` turns the constant it reads into a settings lookup.
 - **`067` second** — independent of the other two, but its ADR outcome is the thing `071` and `072`
   are waiting on, so it should not be the item that gets dropped if the sprint runs long.
 - **`068` last** — the only one that touches layout, and it inherits whatever `069` settles about
@@ -89,13 +99,32 @@ reproduction precedes design.
 # Checklist
 
 - [ ] 069-fix-wheel-scrolling
+- [ ] 075-configurable-scroll-speed
 - [ ] 067-select-on-mouse-up
 - [ ] 068-add-scrollbar
 
 # Open questions
 
-_(none yet)_
+_(none open — `069`'s two were settled: the batch is bounded by a ~8 ms time budget rather than an
+event count, and the loop contract is recorded as ADR 0024.)_
 
 # Session log
 
 - Scoped and cut: `069`, `067`, `068`. Branch `sprint/017` cut from `main`.
+- `069` reproduced with a new PTY wheel-feed harness (synthetic SGR wheel events, keypress-latency
+  metric). Both symptoms measured: 785 ms frozen on a flick, 3 483 ms after overscrolling a
+  9 156-row tree. The stated leading suspect — peek-loading — accounts for ~18 %; git for none; and
+  a burst of 1 000 `Down` keypresses freezes identically, so the defect is the event loop, not the
+  wheel. Root cause: one full `rows()` rebuild per event (twice per input event) with no
+  coalescing and an unbounded queue. A throwaway spike measured the fix at 3–4 ms.
+- Scope grew by one at the maintainer's request: `075-configurable-scroll-speed`, designed against
+  the existing settings plumbing (range 1–10, default 3, error on the CLI, clamp in the config,
+  error response over the socket).
+- `067` and `068` designed, completing the design phase: `067` as ADR 0025 (press arms, release
+  completes, same row and zone), `068` as an inert one-column indicator at the far right with the
+  usual toggle surface.
+- Design approved: ADRs 0024 and 0025 `Proposed → Accepted`; the four tasks `Draft → Designed`;
+  the sprint `Designing → Implementing`. Design merge to `main`.
+- `069` and `075` designs approved. Settled with them: the batch takes a ~8 ms time budget, the
+  loop contract becomes **ADR 0024** (`Proposed`), `075` keeps the 1–10 range, and `069` is
+  retitled "Input bursts freeze the pane" since the keyboard freezes identically.
