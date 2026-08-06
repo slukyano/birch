@@ -77,6 +77,9 @@ pub struct Settings {
     pub compact: bool,
     /// The active theme (ADR 0021); the render layer resolves it to a `Theme`.
     pub theme: ThemeId,
+    /// Scroll indicator on the pane's right edge, shown only when the rows
+    /// overflow the viewport.
+    pub scrollbar: bool,
     /// Rows a single wheel tick scrolls, clamped to
     /// [`SCROLL_LINES_MIN`]..=[`SCROLL_LINES_MAX`].
     pub scroll_lines: u8,
@@ -110,6 +113,7 @@ impl Default for Settings {
             show_ignored: true,
             compact: true,
             theme: ThemeId::default(),
+            scrollbar: true,
             scroll_lines: SCROLL_LINES_DEFAULT,
         }
     }

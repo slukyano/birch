@@ -99,6 +99,14 @@ struct Cli {
     #[arg(long, value_enum)]
     theme: Option<ThemeArg>,
 
+    /// Show the scroll indicator on the right edge.
+    #[arg(long, overrides_with = "no_scrollbar", hide = true)]
+    scrollbar: bool,
+
+    /// Hide the scroll indicator on the right edge.
+    #[arg(long, overrides_with = "scrollbar")]
+    no_scrollbar: bool,
+
     /// Rows one mouse-wheel tick scrolls (1-10, default 3).
     #[arg(long, value_name = "n", value_parser = clap::value_parser!(u8).range(
         birch_core::settings::SCROLL_LINES_MIN as i64..=birch_core::settings::SCROLL_LINES_MAX as i64))]
@@ -274,6 +282,9 @@ fn main() -> ExitCode {
     }
     if let Some(theme) = cli.theme {
         settings.theme = theme.into();
+    }
+    if let Some(v) = flag(cli.scrollbar, cli.no_scrollbar) {
+        settings.scrollbar = v;
     }
     if let Some(n) = cli.scroll_lines {
         settings.scroll_lines = n;

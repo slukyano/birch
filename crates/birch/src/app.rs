@@ -445,12 +445,26 @@ impl App {
             // The press only arms — nothing is selected, toggled, or opened
             // until the release lands on the same row and zone (ADR 0025).
             InputAction::Press { column, row } => {
-                self.armed_press = render::hit_test(&rows, &self.view, area(terminal), column, row)
-                    .map(|(idx, on_chevron)| (rows[idx].path.clone(), on_chevron));
+                self.armed_press = render::hit_test(
+                    &rows,
+                    &self.view,
+                    &self.settings,
+                    area(terminal),
+                    column,
+                    row,
+                )
+                .map(|(idx, on_chevron)| (rows[idx].path.clone(), on_chevron));
                 NavEffect::None
             }
             InputAction::Release { column, row } => {
-                let hit = render::hit_test(&rows, &self.view, area(terminal), column, row);
+                let hit = render::hit_test(
+                    &rows,
+                    &self.view,
+                    &self.settings,
+                    area(terminal),
+                    column,
+                    row,
+                );
                 self.resolve_release(&rows, hit, Instant::now())
             }
             // Scrolling returned above, from the count-only fast path.
@@ -665,6 +679,9 @@ impl App {
                     self.git_state = None;
                     self.repo_root = None;
                 }
+            }
+            SettingKey::Scrollbar => {
+                self.settings.scrollbar = value.apply(self.settings.scrollbar);
             }
             SettingKey::Theme | SettingKey::ScrollLines => {
                 return Response::err("handled before value parsing");

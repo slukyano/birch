@@ -73,6 +73,7 @@ enum SettingArg {
     Compact,
     Git,
     Theme,
+    Scrollbar,
     ScrollLines,
 }
 
@@ -86,6 +87,7 @@ impl From<SettingArg> for SettingKey {
             SettingArg::Compact => SettingKey::Compact,
             SettingArg::Git => SettingKey::Git,
             SettingArg::Theme => SettingKey::Theme,
+            SettingArg::Scrollbar => SettingKey::Scrollbar,
             SettingArg::ScrollLines => SettingKey::ScrollLines,
         }
     }

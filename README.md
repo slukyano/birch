@@ -161,6 +161,7 @@ noise = false          # show .git, .DS_Store, ...
 compact = true         # compact single-child folder chains
 mouse = true           # mouse support
 scroll-lines = 3       # rows per mouse-wheel tick (1-10)
+scrollbar = true       # scroll indicator on the right edge, when rows overflow
 open-cmd = "nvim {}"   # open command template ({} = path)
 ```
 
