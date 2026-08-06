@@ -37,6 +37,7 @@ okf_version: "0.1"
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
 * [Select on mouse release, not on press](tasks/067-select-on-mouse-up.md) - A click is a press and a release on the same row, acting on the release (ADR 0025).
 * [Add a scrollbar](tasks/068-add-scrollbar.md) - One inert column at the right edge, shown only when rows overflow; flag, config key, and ctl set.
+* [Search is unusable on a large root](tasks/076-search-unusable-on-large-roots.md) - From $HOME the index never lands and the status line claims "no matches"; both modes, not just --pick.
 * [Input bursts freeze the pane](tasks/069-fix-wheel-scrolling.md) - One event cost a full row rebuild behind an unbounded queue; the wheel is where it showed (ADR 0024).
 * [Make scroll speed configurable](tasks/075-configurable-scroll-speed.md) - Lines per wheel tick as a setting (1-10, default 3), with flag, config key, and ctl set.
 * [Show how much a filter actually matches](tasks/070-show-filter-match-counts.md) - Per-folder or total match counts, so a filtered browse knows where to go.
