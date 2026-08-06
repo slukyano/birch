@@ -1,9 +1,9 @@
 ---
 type: Task
-title: Mouse-wheel scrolling feels broken
+title: Input bursts freeze the pane
 status: Draft
 priority: high
-description: The wheel runs away, heavy overscrolling appears to freeze the pane, and the per-tick distance may not match what other terminal apps do.
+description: A burst of input freezes the pane and scrolling runs on after it stops; the wheel is where it shows, but the keyboard freezes identically.
 ---
 
 Maintainer report, from live use: wheel scrolling "generally feels pretty broken — runs away
@@ -29,6 +29,9 @@ other applications appear to move three lines per tick.
 Reproduce first, with a real terminal — `vhs` cannot send wheel events, so this needs a live
 session or a synthetic event feed into `map_event`/the app loop. Then decide between rate-limiting
 the peeks, bounding how much scroll one frame may consume, or both.
+
+The task was retitled during design: the defect is not wheel-specific. A burst of 1 000 `Down`
+keypresses freezes the pane identically, so the wheel is only where it shows.
 
 ## Design
 
@@ -78,11 +81,20 @@ events change nothing on screen — the work becomes invisible while the queue s
 
 ### The fix
 
-Two independent changes; the measured effect of each is on the 9 156-row fixture.
+Recorded as **[ADR 0024](../../docs/adr/0024-the-loop-draws-once-per-batch.md)**: an iteration of
+the loop handles a *batch* of events and draws once. Two independent changes; the measured effect
+of each is on the 9 156-row fixture.
 
 1. **Coalesce the queue.** After handling an event, drain what has already arrived and draw once
    for the batch. Every event is still handled, in order — only the frame is deferred, so no
    semantics change. Flick 785 ms → **90 ms**; overscroll 3 483 ms → **1 075 ms**.
+
+   The batch is bounded by a **time budget of ~8 ms**, not by an event count: once the budget is
+   spent the frame is drawn and the next iteration begins, so a continuous stream keeps repainting
+   rather than starving the screen. A budget degrades with machine speed where a fixed count is an
+   arbitrary number that means different things on different hardware. Quitting, and handing the
+   terminal to a child, close the batch immediately — queued events must not be processed behind
+   them.
 2. **A scroll must not rebuild rows.** `scroll_by` consumes nothing but `rows.len()`, so the scroll
    path can be served from a row count cached by the previous `finish_iteration`, which re-clamps
    through `reconcile` regardless. This removes the residual per-event rebuild that change 1 leaves
@@ -95,7 +107,9 @@ unaffected.
 ### Public-surface delta
 
 **None.** No new or changed CLI flag, config key, socket field, environment variable, or on-disk
-path. `SCROLL_LINES` stays 3.
+path. `SCROLL_LINES` keeps its value and stays a constant here;
+[`075`](075-configurable-scroll-speed.md) turns it into a setting afterwards, and carries that
+public surface itself.
 
 ### Not verified here
 

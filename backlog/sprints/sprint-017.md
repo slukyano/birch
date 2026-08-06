@@ -30,13 +30,12 @@ config key, `ctl set` key) and whatever toggle `068` needs.
 
 # In-scope task ledger
 
-- **`069-fix-wheel-scrolling`** — *bug, high, design-light but investigation-heavy.* Wheel
-  scrolling "runs away sometimes" and overscrolling "makes it all freeze". `SCROLL_LINES` is
-  already 3 and `scroll_by` already clamps, so the nominal step and the bounds are not the fault.
-  The leading suspect is viewport-driven peek loading (`app::request_peeks` emits a
-  `SourceCmd::Expand` per unloaded directory in view, every frame, and each arriving snapshot
-  rebuilds the rows) — a burst that grows with how far the wheel travels. Reproduction comes first
-  and needs a live terminal or a synthetic event feed; `vhs` cannot send wheel events.
+- **`069-fix-wheel-scrolling`** — *bug, high, design-light but investigation-heavy.* Retitled
+  during design to **"Input bursts freeze the pane"**: measurement moved the diagnosis off the
+  wheel entirely. One event cost a full O(all visible rows) rebuild — twice per input event —
+  behind an unbounded queue, so any burst froze the pane (1 000 `Down` keypresses froze it
+  identically to 1 000 wheel events). Peek-loading, the stated suspect, was ~18 %. Fixed by
+  batching the loop (**ADR 0024**) and serving scrolling from a cached row count: 3 483 ms → 3 ms.
 - **`075-configurable-scroll-speed`** — *minor, medium.* Added to scope during the design phase, at
   the maintainer's request. Lines per wheel tick stops being `input::SCROLL_LINES = 3` and becomes
   `Settings::scroll_lines`, bounded 1–10, with the full flag / config / `ctl set` surface. The
@@ -102,13 +101,8 @@ reproduction precedes design.
 
 # Open questions
 
-- **`069` — how the drain is bounded.** An unbounded drain of the queue can starve the screen under
-  a continuous stream (the pane would stop repainting while a long flick is still arriving). A cap
-  — a maximum batch size, or a frame budget after which the batch is drawn regardless — keeps the
-  tree painting during the gesture. Recommendation: a time budget, since it degrades with machine
-  speed rather than with event count.
-- **`069` — whether the loop change warrants an ADR.** "One event, one frame" becoming "one batch,
-  one frame" is a change to the app loop's contract, and every future input path inherits it.
+_(none open — `069`'s two were settled: the batch is bounded by a ~8 ms time budget rather than an
+event count, and the loop contract is recorded as ADR 0024.)_
 
 # Session log
 
@@ -122,3 +116,6 @@ reproduction precedes design.
 - Scope grew by one at the maintainer's request: `075-configurable-scroll-speed`, designed against
   the existing settings plumbing (range 1–10, default 3, error on the CLI, clamp in the config,
   error response over the socket).
+- `069` and `075` designs approved. Settled with them: the batch takes a ~8 ms time budget, the
+  loop contract becomes **ADR 0024** (`Proposed`), `075` keeps the 1–10 range, and `069` is
+  retitled "Input bursts freeze the pane" since the keyboard freezes identically.

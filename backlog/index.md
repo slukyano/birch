@@ -37,7 +37,7 @@ okf_version: "0.1"
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
 * [Select on mouse release, not on press](tasks/067-select-on-mouse-up.md) - Clicks act on button-down; herdr acts on release and feels more deliberate (touches ADR 0015).
 * [Add a scrollbar](tasks/068-add-scrollbar.md) - Scroll indicator on the pane edge, hidden when everything fits, with a way to turn it off.
-* [Mouse-wheel scrolling feels broken](tasks/069-fix-wheel-scrolling.md) - Runs away, freezes on heavy overscroll; viewport-driven peek-loading is the leading suspect.
+* [Input bursts freeze the pane](tasks/069-fix-wheel-scrolling.md) - One event cost a full row rebuild behind an unbounded queue; the wheel is where it showed (ADR 0024).
 * [Make scroll speed configurable](tasks/075-configurable-scroll-speed.md) - Lines per wheel tick as a setting (1-10, default 3), with flag, config key, and ctl set.
 * [Show how much a filter actually matches](tasks/070-show-filter-match-counts.md) - Per-folder or total match counts, so a filtered browse knows where to go.
 * [Add the context menu](tasks/071-add-context-menu.md) - The right-click action surface, split out of the 0.5 bundle so it can land before the ops it hosts.
