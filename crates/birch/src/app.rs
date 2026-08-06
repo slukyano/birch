@@ -1,6 +1,8 @@
-//! The app loop: one `recv()` over the unified event channel; deltas mutate
-//! the tree, input becomes actions, every iteration reconciles watches,
-//! requests peek-loads, persists expansion changes, and redraws.
+//! The app loop: one `recv()` over the unified event channel followed by a
+//! drain of whatever else has queued, so a *batch* of events costs one redraw
+//! (ADR 0024); deltas mutate the tree, input becomes actions, every iteration
+//! reconciles watches, requests peek-loads, persists expansion changes, and
+//! redraws.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -110,9 +112,62 @@ struct App {
     picked: Option<PathBuf>,
     input_paused: Arc<AtomicBool>,
     click_timer: input::ClickTimer,
+    /// Row count from the last draw. A scroll needs the count and nothing
+    /// else, so it is served from here instead of rebuilding every row
+    /// (ADR 0024); `FlatView::reconcile` re-clamps before every draw anyway.
+    rows_len: usize,
+    /// Set when a child process owned the terminal, so the batch ends and the
+    /// screen it left is redrawn at once (ADR 0024).
+    yielded_terminal: bool,
 }
 
 /// Runs the app; in picker mode the returned path is the confirmed pick.
+/// How long one batch may spend consuming already-queued events before the
+/// frame is drawn regardless (ADR 0024). A budget rather than an event count:
+/// it degrades with the machine's speed instead of meaning different things on
+/// different hardware.
+const BATCH_BUDGET: Duration = Duration::from_millis(8);
+
+/// What the batch should do after an event was handled.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BatchStep {
+    Continue,
+    /// End the batch and draw (a child owned the terminal).
+    Stop,
+    /// End the batch and the loop.
+    Quit,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BatchStop {
+    Drained,
+    Budget,
+    Handoff,
+    Quit,
+}
+
+/// Handles every event already queued, in order, until the channel is empty or
+/// `deadline` passes. Never blocks: only what has *already* arrived joins the
+/// batch, so an idle birch still draws one frame per event.
+fn drain_batch<F>(events: &Receiver<AppEvent>, deadline: Instant, mut handle: F) -> BatchStop
+where
+    F: FnMut(AppEvent) -> BatchStep,
+{
+    loop {
+        if Instant::now() >= deadline {
+            return BatchStop::Budget;
+        }
+        let Ok(event) = events.try_recv() else {
+            return BatchStop::Drained;
+        };
+        match handle(event) {
+            BatchStep::Continue => {}
+            BatchStep::Stop => return BatchStop::Handoff,
+            BatchStep::Quit => return BatchStop::Quit,
+        }
+    }
+}
+
 pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<PathBuf>> {
     let AppWiring {
         root,
@@ -161,6 +216,8 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         picked: None,
         input_paused,
         click_timer: input::ClickTimer::default(),
+        rows_len: 0,
+        yielded_terminal: false,
     };
 
     if app.mode == Mode::Tree {
@@ -180,6 +237,23 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         if app.handle(terminal, &events, event) {
             break;
         }
+        // One frame per *batch* (ADR 0024): whatever else has already queued
+        // is handled first, in order, and the whole batch shares one redraw.
+        let stopped = drain_batch(&events, Instant::now() + BATCH_BUDGET, |event| {
+            if app.handle(terminal, &events, event) {
+                BatchStep::Quit
+            } else if app.yielded_terminal {
+                // A child owned the tty; queued events must not run behind it,
+                // and the screen it left needs the redraw now.
+                BatchStep::Stop
+            } else {
+                BatchStep::Continue
+            }
+        });
+        if stopped == BatchStop::Quit {
+            break;
+        }
+        app.yielded_terminal = false;
         loop_result = app.finish_iteration(terminal);
     }
     if app.mode == Mode::Tree {
@@ -324,8 +398,20 @@ impl App {
             _ => {}
         }
 
+        // A scroll reads the row *count* and nothing else, so it never
+        // rebuilds the rows (ADR 0024). This is the hot path under a wheel
+        // burst; everything below it walks the tree.
+        if let Some(delta) = match action {
+            InputAction::ScrollUp => Some(-input::SCROLL_LINES),
+            InputAction::ScrollDown => Some(input::SCROLL_LINES),
+            _ => None,
+        } {
+            let viewport = render::tree_viewport_height(area(terminal));
+            self.scroll_rows(delta, viewport);
+            return false;
+        }
+
         let rows = self.rows();
-        let viewport = render::tree_viewport_height(area(terminal));
         // With a live search, ↑/↓ cycle the matches — in both modes now
         // (ADR 0023): the picker is the same tree, so it steps the same way.
         if let Some(state) = &self.search
@@ -350,14 +436,6 @@ impl App {
                 NavEffect::None
             }
             InputAction::Enter => self.activate(&rows, None),
-            InputAction::ScrollUp => {
-                self.view.scroll_by(&rows, -input::SCROLL_LINES, viewport);
-                NavEffect::None
-            }
-            InputAction::ScrollDown => {
-                self.view.scroll_by(&rows, input::SCROLL_LINES, viewport);
-                NavEffect::None
-            }
             InputAction::Click { column, row } => {
                 match render::hit_test(&rows, &self.view, area(terminal), column, row) {
                     Some((idx, on_chevron)) => {
@@ -370,7 +448,10 @@ impl App {
                     }
                 }
             }
-            InputAction::Redraw
+            // Scrolling returned above, from the count-only fast path.
+            InputAction::ScrollUp
+            | InputAction::ScrollDown
+            | InputAction::Redraw
             | InputAction::Quit
             | InputAction::Char(_)
             | InputAction::Backspace
@@ -988,6 +1069,7 @@ impl App {
         self.process_restores();
         self.step_reveal();
         let rows = self.rows();
+        self.rows_len = rows.len();
         let viewport = render::tree_viewport_height(area(terminal));
         if !self.mode.is_pick() {
             self.reconcile_watches(&rows);
@@ -1151,6 +1233,17 @@ impl App {
         }
     }
 
+    /// Scrolls by `delta` rows against the count from the last draw. Kept
+    /// separate from the rows so a wheel burst costs a clamp, not a tree walk.
+    fn scroll_rows(&mut self, delta: isize, viewport: usize) {
+        let max_scroll = self.rows_len.saturating_sub(viewport);
+        self.view.scroll = self
+            .view
+            .scroll
+            .saturating_add_signed(delta)
+            .min(max_scroll);
+    }
+
     fn refresh_git(&mut self) {
         if self.settings.git
             && let Some(repo) = &self.repo_root
@@ -1192,6 +1285,7 @@ impl App {
         self.input_paused.store(true, Ordering::SeqCst);
         thread::sleep(Duration::from_millis(120));
         term::restore(self.settings.mouse, self.mode.is_pick());
+        self.yielded_terminal = true;
         let result = Command::new(program).args(args).status();
         let reentered = term::reenter(self.settings.mouse, self.mode.is_pick());
         self.input_paused.store(false, Ordering::SeqCst);
@@ -1328,6 +1422,8 @@ mod tests {
             picked: None,
             input_paused: Arc::new(AtomicBool::new(false)),
             click_timer: input::ClickTimer::default(),
+            rows_len: 0,
+            yielded_terminal: false,
         };
         app.tree.set_expanded(Path::new("/r"), true);
         Harness {
@@ -2248,6 +2344,96 @@ mod tests {
             h.app.view.selection.is_none(),
             "no live row means no selection, not a phantom one"
         );
+    }
+
+    // ---- ADR 0024: one frame per batch ----
+
+    #[test]
+    fn drain_batch_takes_everything_already_queued() {
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..5 {
+            tx.send(AppEvent::Shutdown).unwrap();
+        }
+        let mut seen = 0;
+        let stop = drain_batch(&rx, Instant::now() + Duration::from_secs(5), |_| {
+            seen += 1;
+            BatchStep::Continue
+        });
+        assert_eq!(seen, 5);
+        assert_eq!(stop, BatchStop::Drained);
+    }
+
+    #[test]
+    fn drain_batch_never_blocks_on_an_empty_channel() {
+        // An idle birch must still draw one frame per event, so a batch that
+        // finds nothing queued returns at once rather than waiting out its
+        // budget.
+        let (_tx, rx) = mpsc::channel::<AppEvent>();
+        let started = Instant::now();
+        let stop = drain_batch(&rx, started + Duration::from_secs(30), |_| {
+            BatchStep::Continue
+        });
+        assert_eq!(stop, BatchStop::Drained);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn drain_batch_stops_at_the_budget() {
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..500 {
+            tx.send(AppEvent::Shutdown).unwrap();
+        }
+        let mut seen = 0;
+        // A budget already spent draws before consuming anything more.
+        let stop = drain_batch(&rx, Instant::now(), |_| {
+            seen += 1;
+            BatchStep::Continue
+        });
+        assert_eq!(seen, 0);
+        assert_eq!(stop, BatchStop::Budget);
+    }
+
+    #[test]
+    fn drain_batch_ends_on_handoff_and_on_quit() {
+        for (step, expected) in [
+            (BatchStep::Stop, BatchStop::Handoff),
+            (BatchStep::Quit, BatchStop::Quit),
+        ] {
+            let (tx, rx) = mpsc::channel();
+            for _ in 0..4 {
+                tx.send(AppEvent::Shutdown).unwrap();
+            }
+            let mut seen = 0;
+            let stop = drain_batch(&rx, Instant::now() + Duration::from_secs(5), |_| {
+                seen += 1;
+                step
+            });
+            // The event that stopped the batch was handled; the rest were not.
+            assert_eq!(seen, 1);
+            assert_eq!(stop, expected);
+        }
+    }
+
+    #[test]
+    fn scroll_uses_the_cached_row_count_not_a_rebuild() {
+        let mut h = harness(Mode::Tree);
+        h.app.rows_len = 100;
+        h.app.scroll_rows(30, 10);
+        assert_eq!(h.app.view.scroll, 30);
+        // Clamped to rows_len - viewport, so overscrolling stops rather than
+        // running away.
+        h.app.scroll_rows(1000, 10);
+        assert_eq!(h.app.view.scroll, 90);
+        h.app.scroll_rows(-1000, 10);
+        assert_eq!(h.app.view.scroll, 0);
+    }
+
+    #[test]
+    fn scroll_does_nothing_when_the_rows_fit() {
+        let mut h = harness(Mode::Tree);
+        h.app.rows_len = 4;
+        h.app.scroll_rows(30, 10);
+        assert_eq!(h.app.view.scroll, 0);
     }
 }
 
