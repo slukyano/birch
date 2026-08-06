@@ -25,8 +25,8 @@ sprint whose whole surface is the pointer, is cheaper than settling it inside th
 `069` is the only unblocked high-priority item in the backlog and the only defect: the wheel runs
 away and heavy overscrolling reads as a freeze. It leads.
 
-No new sources, no new modes, no actions. New public surface: `075`'s scroll-speed setting (flag,
-config key, `ctl set` key) and whatever toggle `068` needs.
+No new sources, no new modes, no actions. New public surface: `075`'s scroll-speed setting and
+`068`'s scrollbar toggle, each a flag, a config key, and a `ctl set` key.
 
 # In-scope task ledger
 
@@ -46,13 +46,17 @@ config key, `ctl set` key) and whatever toggle `068` needs.
   (`crates/birch-tui/src/input.rs:89`). Open for design: whether the chevron toggle keeps press
   while the name keeps release, what a press that leaves its row before releasing does (birch does
   not track the press row today), and how `ClickTimer`'s 450 ms window is re-based so a
-  double-click is still two complete clicks. Amends or supersedes
-  [ADR 0015](../../docs/adr/0015-click-selects-double-click-activates.md).
+  double-click is still two complete clicks. Designed as **ADR 0025**: the press arms, the release
+  completes, and only on the same row and the same zone — so a click can be revoked by sliding off.
+  One rule for every affordance; the chevron does not keep button-down. ADR 0015 stands except for
+  its moment.
 - **`068-add-scrollbar`** — *mid, medium.* A scroll indicator down the pane's edge, hidden when
   everything fits, with a way to turn it off. The right two columns are the badge gutter today
   (`render::BADGE_WIDTH`), so the layout must give it a column or share one — and whatever it takes,
   `hit_test` must account for. Pure indicator in this version; dragging the bar needs mouse-drag
-  tracking birch has never had, and belongs with `072`.
+  tracking birch has never had, and belongs with `072`. Designed as one column at the **far right**,
+  pushing the badges left and keeping the gutter, reserved only while shown; the column is inert to
+  clicks, which reserves the drag gesture for later.
 
 # Ordering / dependencies
 
@@ -116,6 +120,9 @@ event count, and the loop contract is recorded as ADR 0024.)_
 - Scope grew by one at the maintainer's request: `075-configurable-scroll-speed`, designed against
   the existing settings plumbing (range 1–10, default 3, error on the CLI, clamp in the config,
   error response over the socket).
+- `067` and `068` designed, completing the design phase: `067` as ADR 0025 (press arms, release
+  completes, same row and zone), `068` as an inert one-column indicator at the far right with the
+  usual toggle surface.
 - `069` and `075` designs approved. Settled with them: the batch takes a ~8 ms time budget, the
   loop contract becomes **ADR 0024** (`Proposed`), `075` keeps the 1–10 range, and `069` is
   retitled "Input bursts freeze the pane" since the keyboard freezes identically.
