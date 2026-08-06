@@ -94,8 +94,20 @@ reproduction precedes design.
 
 # Open questions
 
-_(none yet)_
+- **`069` — how the drain is bounded.** An unbounded drain of the queue can starve the screen under
+  a continuous stream (the pane would stop repainting while a long flick is still arriving). A cap
+  — a maximum batch size, or a frame budget after which the batch is drawn regardless — keeps the
+  tree painting during the gesture. Recommendation: a time budget, since it degrades with machine
+  speed rather than with event count.
+- **`069` — whether the loop change warrants an ADR.** "One event, one frame" becoming "one batch,
+  one frame" is a change to the app loop's contract, and every future input path inherits it.
 
 # Session log
 
 - Scoped and cut: `069`, `067`, `068`. Branch `sprint/017` cut from `main`.
+- `069` reproduced with a new PTY wheel-feed harness (synthetic SGR wheel events, keypress-latency
+  metric). Both symptoms measured: 785 ms frozen on a flick, 3 483 ms after overscrolling a
+  9 156-row tree. The stated leading suspect — peek-loading — accounts for ~18 %; git for none; and
+  a burst of 1 000 `Down` keypresses freezes identically, so the defect is the event loop, not the
+  wheel. Root cause: one full `rows()` rebuild per event (twice per input event) with no
+  coalescing and an unbounded queue. A throwaway spike measured the fix at 3–4 ms.
