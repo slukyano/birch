@@ -63,6 +63,7 @@ birch ctl <verb> [...]    # control a running instance (see Control socket)
 | Compact folders | on | `--no-compact` |
 | Mouse | on | `--no-mouse` |
 | Theme | `birch` | `--theme <id>` |
+| Scroll lines per wheel tick | 3 (range 1–10) | `--scroll-lines <n>` |
 
 Directories always sort before files. Defaults persist in the config file
 (`~/.config/birch/birch.toml`, ADR 0022); boolean flags are bidirectional, and the precedence is

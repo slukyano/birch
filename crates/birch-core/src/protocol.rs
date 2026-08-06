@@ -44,6 +44,9 @@ pub enum SettingKey {
     /// The active theme (ADR 0021). Unlike the on/off toggles, its value is a
     /// theme-id string (`birch`, `plain`, …), not a `SettingValue`.
     Theme,
+    /// Rows per wheel tick. Like `Theme`, its value is not a `SettingValue`
+    /// but a number, and out-of-range values are refused.
+    ScrollLines,
 }
 
 /// One request line. Unknown fields are ignored on parse (serde default);

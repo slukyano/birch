@@ -99,6 +99,11 @@ struct Cli {
     #[arg(long, value_enum)]
     theme: Option<ThemeArg>,
 
+    /// Rows one mouse-wheel tick scrolls (1-10, default 3).
+    #[arg(long, value_name = "n", value_parser = clap::value_parser!(u8).range(
+        birch_core::settings::SCROLL_LINES_MIN as i64..=birch_core::settings::SCROLL_LINES_MAX as i64))]
+    scroll_lines: Option<u8>,
+
     /// Bind the control socket exactly here (host rendezvous) instead of
     /// the default per-instance addressing.
     #[arg(long, value_name = "path")]
@@ -269,6 +274,9 @@ fn main() -> ExitCode {
     }
     if let Some(theme) = cli.theme {
         settings.theme = theme.into();
+    }
+    if let Some(n) = cli.scroll_lines {
+        settings.scroll_lines = n;
     }
 
     // Open command: --open-cmd wins, else config `open-cmd`, else the built-in.

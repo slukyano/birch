@@ -20,7 +20,7 @@ use birch_core::search::{self, IndexCmd, IndexEvent, Match, SearchIndex, search}
 use birch_core::watcher::{WatchCmd, WatchEvent};
 use birch_core::{
     Filter, NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree,
-    TreeDelta, persist,
+    TreeDelta, persist, settings,
 };
 use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row};
 use birch_tui::input::{self, InputAction};
@@ -402,8 +402,8 @@ impl App {
         // rebuilds the rows (ADR 0024). This is the hot path under a wheel
         // burst; everything below it walks the tree.
         if let Some(delta) = match action {
-            InputAction::ScrollUp => Some(-input::SCROLL_LINES),
-            InputAction::ScrollDown => Some(input::SCROLL_LINES),
+            InputAction::ScrollUp => Some(-(self.settings.scroll_lines as isize)),
+            InputAction::ScrollDown => Some(self.settings.scroll_lines as isize),
             _ => None,
         } {
             let viewport = render::tree_viewport_height(area(terminal));
@@ -605,6 +605,21 @@ impl App {
         };
         // Theme is a theme-id string, not the on/off SettingValue every other
         // key parses. The redraw at the end of the loop applies it live.
+        // Numeric settings are parsed before SettingValue, as Theme is: their
+        // value is not on/off/toggle.
+        if let SettingKey::ScrollLines = key {
+            return match value.parse::<u8>() {
+                Ok(n) if (settings::SCROLL_LINES_MIN..=settings::SCROLL_LINES_MAX).contains(&n) => {
+                    self.settings.scroll_lines = n;
+                    Response::ok(None)
+                }
+                _ => Response::err(format!(
+                    "scroll-lines must be a whole number from {} to {}",
+                    settings::SCROLL_LINES_MIN,
+                    settings::SCROLL_LINES_MAX
+                )),
+            };
+        }
         if let SettingKey::Theme = key {
             return match value.parse::<ThemeId>() {
                 Ok(id) => {
@@ -643,7 +658,9 @@ impl App {
                     self.repo_root = None;
                 }
             }
-            SettingKey::Theme => return Response::err("theme is handled before value parsing"),
+            SettingKey::Theme | SettingKey::ScrollLines => {
+                return Response::err("handled before value parsing");
+            }
         }
         Response::ok(None)
     }
@@ -2434,6 +2451,38 @@ mod tests {
         h.app.rows_len = 4;
         h.app.scroll_rows(30, 10);
         assert_eq!(h.app.view.scroll, 0);
+    }
+
+    #[test]
+    fn ctl_set_scroll_lines_accepts_the_range_and_refuses_the_rest() {
+        let mut h = harness(Mode::Tree);
+        let mut req = Request::new(Verb::Set);
+        req.setting = Some(SettingKey::ScrollLines);
+
+        req.value = Some("7".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert_eq!(h.app.settings.scroll_lines, 7);
+
+        // Out of range, not a number, and empty are all refused, and none of
+        // them disturbs the value already set.
+        for bad in ["0", "11", "250", "abc", "", "-1", "3.5"] {
+            req.value = Some(bad.into());
+            let reply = h.app.ctl_response(req.clone()).0;
+            assert!(!reply.ok, "{bad} should be refused");
+            assert_eq!(h.app.settings.scroll_lines, 7, "{bad} changed the value");
+        }
+    }
+
+    #[test]
+    fn scroll_distance_follows_the_setting() {
+        let mut h = harness(Mode::Tree);
+        h.app.rows_len = 1000;
+        h.app.settings.scroll_lines = 1;
+        h.app.scroll_rows(h.app.settings.scroll_lines as isize, 10);
+        assert_eq!(h.app.view.scroll, 1);
+        h.app.settings.scroll_lines = 10;
+        h.app.scroll_rows(h.app.settings.scroll_lines as isize, 10);
+        assert_eq!(h.app.view.scroll, 11);
     }
 }
 

@@ -6,9 +6,6 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
-/// Lines per scroll-wheel tick (design doc: 3).
-pub const SCROLL_LINES: isize = 3;
-
 /// Two clicks on the same row within this window activate (ADR 0015).
 pub const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(450);
 
