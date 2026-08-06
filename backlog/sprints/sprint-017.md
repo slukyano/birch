@@ -5,6 +5,7 @@ status: Designing
 branch: sprint/017
 tasks:
 - 069-fix-wheel-scrolling
+- 075-configurable-scroll-speed
 - 067-select-on-mouse-up
 - 068-add-scrollbar
 ---
@@ -24,8 +25,8 @@ sprint whose whole surface is the pointer, is cheaper than settling it inside th
 `069` is the only unblocked high-priority item in the backlog and the only defect: the wheel runs
 away and heavy overscrolling reads as a freeze. It leads.
 
-No new sources, no new modes, no actions. The only new public surface is whatever toggle `068`
-needs.
+No new sources, no new modes, no actions. New public surface: `075`'s scroll-speed setting (flag,
+config key, `ctl set` key) and whatever toggle `068` needs.
 
 # In-scope task ledger
 
@@ -36,6 +37,10 @@ needs.
   `SourceCmd::Expand` per unloaded directory in view, every frame, and each arriving snapshot
   rebuilds the rows) — a burst that grows with how far the wheel travels. Reproduction comes first
   and needs a live terminal or a synthetic event feed; `vhs` cannot send wheel events.
+- **`075-configurable-scroll-speed`** — *minor, medium.* Added to scope during the design phase, at
+  the maintainer's request. Lines per wheel tick stops being `input::SCROLL_LINES = 3` and becomes
+  `Settings::scroll_lines`, bounded 1–10, with the full flag / config / `ctl set` surface. The
+  preference half of `069`, which proved the distance was never the defect.
 - **`067-select-on-mouse-up`** — *mid, design-heavy, medium.* Selection moves from button-down to
   button-up so a click reads as deliberate rather than twitchy. `map_event` maps
   `MouseEventKind::Down(Left)` to `InputAction::Click` and discards `Up` entirely
@@ -55,6 +60,8 @@ needs.
 - **`069` first** — it is the defect, it is high priority, and its likely fix (bounding what one
   frame consumes, or rate-limiting peeks) changes how the viewport moves before `068` draws a bar
   that reports viewport position.
+- **`075` after `069`** — both touch the wheel arms of `handle_input`; `069` fixes the loop, then
+  `075` turns the constant it reads into a settings lookup.
 - **`067` second** — independent of the other two, but its ADR outcome is the thing `071` and `072`
   are waiting on, so it should not be the item that gets dropped if the sprint runs long.
 - **`068` last** — the only one that touches layout, and it inherits whatever `069` settles about
@@ -89,6 +96,7 @@ reproduction precedes design.
 # Checklist
 
 - [ ] 069-fix-wheel-scrolling
+- [ ] 075-configurable-scroll-speed
 - [ ] 067-select-on-mouse-up
 - [ ] 068-add-scrollbar
 
@@ -111,3 +119,6 @@ reproduction precedes design.
   a burst of 1 000 `Down` keypresses freezes identically, so the defect is the event loop, not the
   wheel. Root cause: one full `rows()` rebuild per event (twice per input event) with no
   coalescing and an unbounded queue. A throwaway spike measured the fix at 3–4 ms.
+- Scope grew by one at the maintainer's request: `075-configurable-scroll-speed`, designed against
+  the existing settings plumbing (range 1–10, default 3, error on the CLI, clamp in the config,
+  error response over the socket).
