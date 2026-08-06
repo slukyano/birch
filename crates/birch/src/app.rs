@@ -112,6 +112,11 @@ struct App {
     picked: Option<PathBuf>,
     input_paused: Arc<AtomicBool>,
     click_timer: input::ClickTimer,
+    /// The armed press: which row a left button-down landed on, and whether it
+    /// landed in the chevron zone. A click completes only when the release
+    /// matches both (ADR 0025). Keyed on the real path, so a snapshot arriving
+    /// between press and release cannot redirect the click.
+    armed_press: Option<(PathBuf, bool)>,
     /// Row count from the last draw. A scroll needs the count and nothing
     /// else, so it is served from here instead of rebuilding every row
     /// (ADR 0024); `FlatView::reconcile` re-clamps before every draw anyway.
@@ -216,6 +221,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         picked: None,
         input_paused,
         click_timer: input::ClickTimer::default(),
+        armed_press: None,
         rows_len: 0,
         yielded_terminal: false,
     };
@@ -436,17 +442,16 @@ impl App {
                 NavEffect::None
             }
             InputAction::Enter => self.activate(&rows, None),
-            InputAction::Click { column, row } => {
-                match render::hit_test(&rows, &self.view, area(terminal), column, row) {
-                    Some((idx, on_chevron)) => {
-                        self.resolve_click(&rows, idx, on_chevron, Instant::now())
-                    }
-                    None => {
-                        // Any intervening click resets a pending double.
-                        self.click_timer.disarm();
-                        NavEffect::None
-                    }
-                }
+            // The press only arms — nothing is selected, toggled, or opened
+            // until the release lands on the same row and zone (ADR 0025).
+            InputAction::Press { column, row } => {
+                self.armed_press = render::hit_test(&rows, &self.view, area(terminal), column, row)
+                    .map(|(idx, on_chevron)| (rows[idx].path.clone(), on_chevron));
+                NavEffect::None
+            }
+            InputAction::Release { column, row } => {
+                let hit = render::hit_test(&rows, &self.view, area(terminal), column, row);
+                self.resolve_release(&rows, hit, Instant::now())
             }
             // Scrolling returned above, from the count-only fast path.
             InputAction::ScrollUp
@@ -461,7 +466,10 @@ impl App {
         // and skips no-op writes, so over-marking is cheap.
         if matches!(
             action,
-            InputAction::Right | InputAction::Left | InputAction::Enter | InputAction::Click { .. }
+            InputAction::Right
+                | InputAction::Left
+                | InputAction::Enter
+                | InputAction::Release { .. }
         ) {
             self.expansion_dirty = true;
         }
@@ -725,6 +733,28 @@ impl App {
     /// then-name fast is a select); name clicks select, and only a completed
     /// double-click activates. Tree semantics now apply in both modes, since
     /// the picker renders the same tree (ADR 0023).
+    /// Completes an armed press, or abandons it. A click acts only when the
+    /// release lands on the same row *and* the same zone as the press; every
+    /// other outcome does nothing and clears a pending double-click, which is
+    /// how ADR 0015 already treats an intervening click (ADR 0025).
+    fn resolve_release(
+        &mut self,
+        rows: &[Row],
+        hit: Option<(usize, bool)>,
+        now: Instant,
+    ) -> NavEffect {
+        let armed = self.armed_press.take();
+        let (Some((path, armed_chevron)), Some((idx, on_chevron))) = (armed, hit) else {
+            self.click_timer.disarm();
+            return NavEffect::None;
+        };
+        if on_chevron != armed_chevron || rows.get(idx).map(|r| r.path.as_path()) != Some(&path) {
+            self.click_timer.disarm();
+            return NavEffect::None;
+        }
+        self.resolve_click(rows, idx, on_chevron, now)
+    }
+
     fn resolve_click(
         &mut self,
         rows: &[Row],
@@ -1439,6 +1469,7 @@ mod tests {
             picked: None,
             input_paused: Arc::new(AtomicBool::new(false)),
             click_timer: input::ClickTimer::default(),
+            armed_press: None,
             rows_len: 0,
             yielded_terminal: false,
         };
@@ -2483,6 +2514,169 @@ mod tests {
         h.app.settings.scroll_lines = 10;
         h.app.scroll_rows(h.app.settings.scroll_lines as isize, 10);
         assert_eq!(h.app.view.scroll, 11);
+    }
+
+    // ---- ADR 0025: a click completes on release ----
+
+    /// Arms a press on `idx` and returns the hit tuple a release would carry.
+    fn press(app: &mut App, rows: &[Row], idx: usize, on_chevron: bool) {
+        app.armed_press = Some((rows[idx].path.clone(), on_chevron));
+    }
+
+    #[test]
+    fn press_alone_selects_nothing() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a", NodeKind::File), ("b", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        let before = h.app.view.selection.clone();
+        press(&mut h.app, &rows, 2, false);
+        assert_eq!(h.app.view.selection, before, "a press must not select");
+    }
+
+    #[test]
+    fn release_on_the_pressed_row_selects() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a", NodeKind::File), ("b", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        press(&mut h.app, &rows, 2, false);
+        h.app
+            .resolve_release(&rows, Some((2, false)), Instant::now());
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(rows[2].path.as_path())
+        );
+        assert!(h.app.armed_press.is_none(), "the arm is spent");
+    }
+
+    #[test]
+    fn release_on_a_different_row_does_nothing() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a", NodeKind::File), ("b", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        let before = h.app.view.selection.clone();
+        press(&mut h.app, &rows, 1, false);
+        h.app
+            .resolve_release(&rows, Some((2, false)), Instant::now());
+        assert_eq!(
+            h.app.view.selection, before,
+            "sliding off the pressed row revokes the click"
+        );
+        assert!(h.app.armed_press.is_none());
+    }
+
+    #[test]
+    fn release_outside_the_tree_does_nothing() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
+        let rows = h.app.rows();
+        let before = h.app.view.selection.clone();
+        press(&mut h.app, &rows, 1, false);
+        h.app.resolve_release(&rows, None, Instant::now());
+        assert_eq!(h.app.view.selection, before);
+    }
+
+    #[test]
+    fn a_release_with_no_press_does_nothing() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
+        let rows = h.app.rows();
+        let before = h.app.view.selection.clone();
+        h.app
+            .resolve_release(&rows, Some((1, false)), Instant::now());
+        assert_eq!(h.app.view.selection, before);
+    }
+
+    #[test]
+    fn a_press_on_the_chevron_released_on_the_name_does_not_toggle() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("sub", NodeKind::Dir)]);
+        feed(&mut h.app, "/r/sub", &[("f", NodeKind::File)]);
+        let rows = h.app.rows();
+        let expanded = h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded;
+        press(&mut h.app, &rows, 1, true);
+        h.app
+            .resolve_release(&rows, Some((1, false)), Instant::now());
+        assert_eq!(
+            h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded,
+            expanded,
+            "the zones differ, so the click is abandoned"
+        );
+    }
+
+    #[test]
+    fn two_complete_clicks_activate_but_press_release_press_does_not() {
+        let mut h = harness(Mode::Pick);
+        feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
+        let rows = h.app.rows();
+        let t0 = Instant::now();
+        press(&mut h.app, &rows, 1, false);
+        h.app.resolve_release(&rows, Some((1, false)), t0);
+        assert!(h.app.picked.is_none(), "one click only selects");
+        // A second press without its release must not activate.
+        press(&mut h.app, &rows, 1, false);
+        assert!(h.app.picked.is_none());
+        h.app
+            .resolve_release(&rows, Some((1, false)), t0 + Duration::from_millis(100));
+        assert_eq!(
+            h.app.picked.as_deref(),
+            Some(rows[1].path.as_path()),
+            "two complete clicks activate"
+        );
+    }
+
+    #[test]
+    fn the_double_click_window_is_measured_release_to_release() {
+        let mut h = harness(Mode::Pick);
+        feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
+        let rows = h.app.rows();
+        let t0 = Instant::now();
+        press(&mut h.app, &rows, 1, false);
+        h.app.resolve_release(&rows, Some((1, false)), t0);
+        press(&mut h.app, &rows, 1, false);
+        // Beyond the window: a slow second click is two singles, not a double.
+        h.app.resolve_release(
+            &rows,
+            Some((1, false)),
+            t0 + input::DOUBLE_CLICK_WINDOW + Duration::from_millis(1),
+        );
+        assert!(h.app.picked.is_none());
+    }
+
+    #[test]
+    fn an_abandoned_click_clears_a_pending_double() {
+        let mut h = harness(Mode::Pick);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a", NodeKind::File), ("b", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        let t0 = Instant::now();
+        press(&mut h.app, &rows, 1, false);
+        h.app.resolve_release(&rows, Some((1, false)), t0);
+        // A press released elsewhere is an intervening click: it resets.
+        press(&mut h.app, &rows, 1, false);
+        h.app
+            .resolve_release(&rows, Some((2, false)), t0 + Duration::from_millis(50));
+        press(&mut h.app, &rows, 1, false);
+        h.app
+            .resolve_release(&rows, Some((1, false)), t0 + Duration::from_millis(100));
+        assert!(
+            h.app.picked.is_none(),
+            "the abandoned click reset the double"
+        );
     }
 }
 

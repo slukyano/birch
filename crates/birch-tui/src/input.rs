@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
-/// Two clicks on the same row within this window activate (ADR 0015).
+/// Two complete clicks on the same row within this window activate — measured
+/// release to release (ADR 0015, as amended by ADR 0025).
 pub const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(450);
 
 /// Infers double-clicks from single Down events (terminals never synthesize
@@ -18,9 +19,9 @@ pub struct ClickTimer {
 }
 
 impl ClickTimer {
-    /// Records a click on `path` at `now`; true when it completes a
-    /// double-click. A completed double disarms — a triple-click starts a
-    /// fresh select cycle.
+    /// Records a completed click on `path` at `now` (its *release*); true when
+    /// it completes a double-click. A completed double disarms — a
+    /// triple-click starts a fresh select cycle.
     pub fn observe(&mut self, path: &Path, now: Instant) -> bool {
         let double = self
             .last
@@ -54,7 +55,13 @@ pub enum InputAction {
     Backspace,
     ScrollUp,
     ScrollDown,
-    Click {
+    /// Left button down: arms a click, acts on nothing (ADR 0025).
+    Press {
+        column: u16,
+        row: u16,
+    },
+    /// Left button up: completes the armed click, or abandons it.
+    Release {
         column: u16,
         row: u16,
     },
@@ -83,7 +90,15 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
             _ => None,
         },
         Event::Mouse(mouse) if mouse_enabled => match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => Some(InputAction::Click {
+            MouseEventKind::Down(MouseButton::Left) => Some(InputAction::Press {
+                column: mouse.column,
+                row: mouse.row,
+            }),
+            // Any left-button release completes the armed press. birch enables
+            // SGR encoding, where a release names its button; a terminal that
+            // reports an ambiguous release still resolves correctly, because
+            // at most one press is ever armed (ADR 0025).
+            MouseEventKind::Up(MouseButton::Left) => Some(InputAction::Release {
                 column: mouse.column,
                 row: mouse.row,
             }),
