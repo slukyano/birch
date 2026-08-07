@@ -321,26 +321,28 @@ In this order, **omitting any that is empty**:
    or changed ADR, a decision taken during implementation the approved design did not cover.
    **The ask to merge is always last.**
 
-### Confirming a completed action
+### Message layout
 
-An action that was already approved and has now been carried out is **confirmed, never
-re-approved**. It goes in a short block at the very top of the message, headed
-`<topic> - Confirmation`, followed by a `---` separator, and it does **not** appear in the TLDR: a
-TLDR headed *Approval* carries only what is still being decided. `Done` inside that TLDR is for
-changes belonging to the pending decision — not for work already signed off and finished.
-
-One message often carries both, in this order and visibly separated, so it is never ambiguous
-where the report of the past ends and the next decision begins:
+A message is plain prose, then **sections separated by `---`** — including before the TLDR. Each
+section covers one topic or one workflow operation: an acknowledgement, the context behind one ask,
+the TLDR. Only one section may be a TLDR, and it is always last.
 
 ```
-<topic> - Confirmation
-  what was carried out
+plain chat text — the answer, the finding, whatever is being said
 ---
-<next topic> - Approval
-  the context sections, one per ask
-TLDR - <next topic> - Approval
+<topic> - Confirmation
+  an approved action that has now been carried out
+---
+<topic> - Approval
+  the context behind its ask
+---
+TLDR - <topic> - Approval
   the TLDR
 ```
+
+An action that was already approved and has now been carried out is **confirmed, never
+re-approved**: it appears in a Confirmation section and never in the TLDR, whose `Done` covers only
+changes belonging to the decision still open.
 
 There is no notes section, and no section for commentary. If an item is not one of the above, the
 threshold for mentioning it at all is that a decision changes without it.
