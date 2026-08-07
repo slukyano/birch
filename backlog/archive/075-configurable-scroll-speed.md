@@ -2,7 +2,7 @@
 type: Task
 title: Make scroll speed configurable
 description: Lines per wheel tick becomes a setting with the full flag / config / ctl surface, bounded to a sane range instead of a hard-coded 3.
-status: Designed
+status: Done
 priority: medium
 ---
 

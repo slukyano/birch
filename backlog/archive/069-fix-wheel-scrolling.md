@@ -1,7 +1,7 @@
 ---
 type: Task
 title: Input bursts freeze the pane
-status: Designed
+status: Done
 priority: high
 description: A burst of input freezes the pane and scrolling runs on after it stops; the wheel is where it shows, but the keyboard freezes identically.
 ---

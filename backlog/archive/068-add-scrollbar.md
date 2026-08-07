@@ -1,7 +1,7 @@
 ---
 type: Task
 title: Add a scrollbar
-status: Designed
+status: Done
 priority: medium
 description: A one-column indicator at the pane's right edge, shown only when the rows overflow, with the usual flag/config/ctl toggle.
 ---

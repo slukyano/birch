@@ -207,3 +207,22 @@
   neither is designable until the scope fence is amended, which is a maintainer decision and
   warrants an ADR. `074` sketches the defensible middle stop (read-only plurality: multi-select
   feeds copy-paths and `--pick`, mutations stay single-target).
+
+## 2026-08-06 (sprint 017)
+
+* **The pointer sprint, and the loop underneath it.** `069` was filed as a wheel defect with
+  peek-loading as the suspect; a PTY harness feeding synthetic wheel events and timing how long a
+  keystroke waits behind a burst disproved that — peeks were ~18 %, git none, and 1 000 `Down`
+  keypresses froze the pane identically. The defect was one full row rebuild per event, twice per
+  input event, behind an unbounded queue. The loop now handles a **batch** and draws once
+  ([ADR 0024](../docs/adr/0024-the-loop-draws-once-per-batch.md)); the task was retitled *Input
+  bursts freeze the pane*. A hard flick went from 785 ms unresponsive to single-digit ms.
+* **A click now completes on release** ([ADR 0025](../docs/adr/0025-a-click-completes-on-release.md)),
+  on the row and zone it started on, so sliding off revokes it — settled here rather than inside
+  `071`/`072`, which both build on the answer.
+* **Two new settings**: `--scroll-lines` (`075`, added mid-sprint at the maintainer's request) and
+  the `068` scrollbar toggle, each with a config key and a `ctl set` key.
+* **Two bugs filed, not fixed**: `076` — search is unusable from a home-sized root, and the status
+  line claims "no matches" whenever the index is merely absent; `077` — a quit arriving during a
+  terminal handover is swallowed, found by the independent review in code outside the diff.
+

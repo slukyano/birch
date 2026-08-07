@@ -1,7 +1,7 @@
 ---
 type: Task
 title: Select on mouse release, not on press
-status: Designed
+status: Done
 priority: medium
 description: A click becomes a press and a release on the same row, taking effect on the release, so a click can be revoked by sliding off.
 ---
