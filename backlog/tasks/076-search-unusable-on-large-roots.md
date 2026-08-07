@@ -142,3 +142,42 @@ Three candidates, differing in what the corpus *is*:
 
 These compose: progressive *with* a cap is bounded memory plus immediate usefulness, at the cost of
 being the most involved of the three.
+
+### The design
+
+Recorded as **[ADR 0026](../../docs/adr/0026-the-index-is-a-tree-published-progressively.md)**.
+Three changes, each answering one measurement.
+
+**1. The index becomes a tree.** `IndexEntry`'s three copies of the path collapse into a parent
+index and a slice of a basename slab — roughly 12 bytes per entry over ~16 MB of names, against
+80 bytes plus ~255 B of strings today. A relative path is reconstructed by walking parents, which
+costs O(depth) and is only needed for display and for path-mode queries (ADR 0013's `/` corpus);
+name-mode matching, the default, reads the slab directly and allocates nothing. Path-mode
+reconstructs into a single reused buffer rather than materialising 800k strings.
+
+**2. The index is published while it is built.** The walker emits chunks; each chunk is immutable
+once published, and the index is the list of chunks, so growth costs no copying and a published
+snapshot is never rewritten. Parent indices are global, so a chunk can reference entries in
+earlier ones. Search runs against whatever chunks exist, so the first results arrive in well under
+a second instead of after the whole walk.
+
+**3. The status line stops lying.** The index has three states — absent, building, complete — and
+the bottom line distinguishes them. A count is only shown when the index is complete; while it
+builds, the prompt says so; and `(no matches)` is reserved for a complete index that genuinely
+holds none.
+
+The walk itself stays serial: `build_parallel` measured 1.66×, which does not pay for its
+complexity once results stream.
+
+### Consequences to settle in implementation
+
+- **A growing corpus under a live query.** [ADR 0023](../../docs/adr/0023-narrowing-dims-and-dimmed-is-inert.md)
+  anchors the selection forward on every rematch. With chunks arriving, a new match can land
+  *before* the current selection in tree order and pull it backwards, which would be a cursor that
+  moves while the user is reading. The rule to hold: an arriving chunk never moves a settled
+  selection — it may only add matches the user can step to.
+- **Rebuild churn.** `REBUILD_THROTTLE` exists because dirty batches arrive in bursts; with chunked
+  publishing, a rebuild discards the chunk list and starts again, so the throttle still matters and
+  the state returns to *building*.
+- **`--pick` before the index exists.** `Enter` must not confirm against an index that is still
+  building without saying so; the picker's contract is that it returns what the user chose.
