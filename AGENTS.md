@@ -45,6 +45,18 @@ Live cmux testing never drives the maintainer's own cmux instance: launch a sepa
 `CMUX_WORKSPACE_ID`/`CMUX_SURFACE_ID` from its `cmux tree --id-format both`) for every command
 aimed at it.
 
+## Publishing
+
+**Nothing reaches `main` or the outside world without explicit approval, however small.** Local
+commits and pushes to a sprint branch need no permission and should happen freely; everything
+below is asked for first, every time, including a one-line documentation fix:
+
+- pushing to `main` — whether directly or by merging a branch into it;
+- tags, releases, and anything published to the Homebrew tap;
+- issues, comments, or pull requests on any other project's tracker.
+
+Approval is per action, not standing: approval to push once is not approval to push again.
+
 ## Development workflow (sessions + sprints)
 
 **Follow this workflow only when asked to develop birch as the maintainer** — otherwise it is

@@ -302,18 +302,45 @@ rejected, per-item detail that does not change an answer: all of that goes above
 
 In this order, **omitting any that is empty**:
 
-1. **Fixed** — one line per item: slug plus a few words, not a sentence. Includes scope creep and
-   any extra work beyond the approved set, marked as such.
+1. **Done** — **applied changes only**: what was written somewhere durable — commits (pushed or
+   not), files created or edited, anything published to another repository or service. One line per
+   item: slug plus a few words, not a sentence. Includes scope creep and any extra work beyond the
+   approved set, marked as such, and work with no task behind it. Analysis, answers, findings, and
+   proposals that exist only in the chat are **not** Done — a draft is not a change, and neither is
+   a scratch file. If nothing was written, the section is omitted.
 2. **Scope rejected** — what the sprint took on and did *not* deliver, dropped after the scope was
    approved. Never lists what was never in the started scope.
 3. **ADRs** — what each decides, summarised.
 4. **Surfaces** — what changed in the public surface, summarised.
-5. **Backlog changes** — tasks created, removed, or modified outside the sprint scope; anything
-   filed or left unfixed lands here. Informational: **no approval is asked for these.**
+5. **Backlog changes** — changes to the *backlog itself*: tasks created, removed, retitled, or
+   re-scoped outside the sprint scope, and anything filed rather than fixed. Work that was simply
+   carried out is **Done**, not a backlog change. Informational: **no approval is asked for
+   these.**
 6. **Gates** — one line, per above.
 7. **The asks**, numbered. An ask exists for every decision not already approved explicitly — a new
    or changed ADR, a decision taken during implementation the approved design did not cover.
    **The ask to merge is always last.**
+
+### Confirming a completed action
+
+An action that was already approved and has now been carried out is **confirmed, never
+re-approved**. It goes in a short block at the very top of the message, headed
+`<topic> - Confirmation`, followed by a `---` separator, and it does **not** appear in the TLDR: a
+TLDR headed *Approval* carries only what is still being decided. `Done` inside that TLDR is for
+changes belonging to the pending decision — not for work already signed off and finished.
+
+One message often carries both, in this order and visibly separated, so it is never ambiguous
+where the report of the past ends and the next decision begins:
+
+```
+<topic> - Confirmation
+  what was carried out
+---
+<next topic> - Approval
+  the context sections, one per ask
+TLDR - <next topic> - Approval
+  the TLDR
+```
 
 There is no notes section, and no section for commentary. If an item is not one of the above, the
 threshold for mentioning it at all is that a decision changes without it.
@@ -322,6 +349,11 @@ threshold for mentioning it at all is that a decision changes without it.
 itself is too short to hold: what the decision is, what the alternatives were, and the references
 worth opening — task slugs, ADRs, key files with line numbers. The ask stays one or two lines; the
 section above it is where the reasoning lives.
+
+**An ask to publish something carries the thing itself.** Filing an issue, opening a PR, sending a
+comment, posting a release note — the exact proposed text is part of the ask, not a summary of it,
+because the text *is* what is being approved. Short texts go inline; anything long enough to bury
+the decision goes in a file under `.scratchpad/` with its path given in the ask.
 
 Each section **names its ask in its heading** — `## Ask 1 — <the question>` — so the pairing is
 obvious from either direction and survives renumbering. Sections appear in ask order.
