@@ -92,17 +92,29 @@ entries are actually constructed the speedup collapses to **1.66×**, because al
 collection dominate, not directory traversal. 9.4 s becomes 5.7 s — still unusable, and worse from
 cold.
 
-**Memory is large, but mostly self-inflicted.** Per entry: 80 B of inline struct, `rel` averaging
-109 B, `abs` 126 B, `name` 20 B. Home-directory paths are long — `Library/Caches` and `node_modules`
-chains — but each path is also stored roughly **2.3 times**: `abs` is only root + `/` + `rel`, and
-`name` is the tail of `rel`, for which `name_offset` already exists. That redundancy is **115 MB,
-44 % of the total**, and removing it (deriving `abs`, slicing `name`) also shrinks the struct from
-80 B to ~32 B — about **263 MB → ~110 MB**, mechanically, with no change to the model.
+**Memory is ten times what it needs to be.** The index stores a flat list of full relative paths,
+so every entry re-stores its ancestors' names — 825,782 entries live under only 87,231 directories.
+Measured alternatives for the same corpus:
 
-So the honest conclusion is narrower than "eager indexing is impossible": the *time* has no
-constant-factor rescue — 9.4 s warm, 5.7 s parallel, worse cold — while the *memory* has an obvious
-one that should be taken regardless of which model is chosen. What remains open is whether ~110 MB
-and several seconds are acceptable for a home-sized root, or whether the corpus itself must shrink.
+| representation | size |
+|---|---|
+| today — three copies per entry, 80 B struct | **263 MB** (316 MB RSS) |
+| a path slab, fzf-style: full paths + 8 B/entry offsets | 92 MB |
+| **name + parent: basenames + 12 B/entry** | **25 MB** |
+| interned basenames + parent | 21 MB (516,450 distinct names of 825,782) |
+
+The basenames alone are 16 MB. A tree-shaped index — each entry a parent index and a slice of a
+basename slab — reaches ~25 MB, and interning buys little beyond that. This is a representation
+problem, not a scale problem.
+
+**fzf is the reference point, and its speed is architectural.** It holds full lines in one slab
+(the 92 MB row — it is not frugal either), never allocates per item, and above all **streams**:
+matching begins while the producer is still walking, so results appear at once and refine. It does
+not have a faster walk; it has a corpus that is usable before the walk finishes.
+
+So neither time nor memory is inherent. The time has no constant-factor rescue — 9.4 s warm, 5.7 s
+parallel, worse cold — but it stops mattering if the corpus is searchable while it grows. The
+memory is a tenfold overhead in how entries are stored.
 
 ### The honesty half — settled, and independent
 
