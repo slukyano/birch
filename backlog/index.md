@@ -35,6 +35,7 @@ okf_version: "0.1"
 * [Make git badge placement configurable](tasks/064-configurable-badge-placement.md) - Theme axis + setting: right / left / none, with a fitting default per built-in theme.
 * [Add a "random" theme](tasks/065-random-theme.md) - --theme random resolves to a randomly chosen built-in theme at launch.
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
+* [Add in/out badges for branch changes](tasks/078-add-branch-diff-badges.md) - Mark files whose changes are committed on this branch but not on main, and the reverse.
 * [A quit arriving during a terminal handover is swallowed](tasks/077-quit-swallowed-during-terminal-handover.md) - perform_open's stale-event drain discards the quit flag, so SIGHUP or ctl quit is answered and ignored.
 * [Search is unusable on a large root](tasks/076-search-unusable-on-large-roots.md) - From $HOME the index never lands and the status line claims "no matches"; both modes, not just --pick.
 * [Show how much a filter actually matches](tasks/070-show-filter-match-counts.md) - Per-folder or total match counts, so a filtered browse knows where to go.
