@@ -69,3 +69,58 @@ Launching from `$HOME` puts a permission error in the status line — `cannot re
 /Users/…/.Trash`, which is not readable on macOS. A root will routinely contain entries the
 process cannot read, so an unreadable child is normal rather than newsworthy; whether it deserves
 the status line at all is part of this task or its own.
+
+## Design
+
+### Measured
+
+`build_index` was timed against `$HOME` (827,724 entries) with the filesystem cache warm, and
+against a parallel walk doing the same work — building entries, not merely counting them:
+
+| | time | notes |
+|---|---|---|
+| serial `build_index`, cold-ish cache | **19.1 s** | the shipped implementation |
+| serial `build_index`, warm cache | **9.4 s** | best case, repeated run |
+| parallel walk, entries built | **5.7 s** | `build_parallel`, one core per thread |
+| parallel walk, counting only | 1.2 s | not the real workload — construction dominates |
+| index memory | **~247 MB** | `size_of` + the `rel` and `abs` strings |
+
+### What the numbers rule out
+
+**Parallelising is not the fix.** The walk-only figure (1.2 s, 15× faster) is misleading: once the
+entries are actually constructed the speedup collapses to **1.66×**, because allocation and
+collection dominate, not directory traversal. 9.4 s becomes 5.7 s — still unusable, and worse from
+cold.
+
+**Memory alone disqualifies indexing a home directory eagerly.** ~247 MB of index for one root, to
+support a feature the user may never invoke, is not a reasonable resting size for a file tree.
+
+So there is no constant-factor rescue: **eagerly indexing the whole tree is the wrong model at this
+scale**, and the design has to change what gets indexed, not how fast it is walked.
+
+### The honesty half — settled, and independent
+
+While no index exists, a query must not answer `(no matches)`. That is a claim about the corpus
+birch cannot make, and it is why the bug reads as "search is broken" rather than "search is not
+ready". The status line distinguishes three states — no index yet, an index that is partial, and a
+complete index — and a count is only shown for the last. This half is worth landing whatever is
+decided about the model, and it is what makes any bounded model honest rather than silently wrong.
+
+### The model — open
+
+Three candidates, differing in what the corpus *is*:
+
+- **Bounded** — walk until a cap (entries or time), stop, and say the index is partial. Bounded
+  memory and predictable cost; results are incomplete, so every "no matches" needs the qualifier.
+- **Progressive** — publish the index in chunks as the walk proceeds, so search is usable within a
+  second and improves while the user types. Combined with the parallel walk it makes the first
+  results nearly immediate. Memory still climbs unless it is also capped, and a growing corpus
+  interacts with the forward anchor and the "dimmed is inert" rules of
+  [ADR 0023](../../docs/adr/0023-narrowing-dims-and-dimmed-is-inert.md): matches may appear behind
+  the selection after it has settled.
+- **Tree-first** — search only what the tree has already loaded, deepening in the background. Cheap
+  and instantly correct, but a fresh picker has almost nothing loaded, which is the case that
+  matters most.
+
+These compose: progressive *with* a cap is bounded memory plus immediate usefulness, at the cost of
+being the most involved of the three.
