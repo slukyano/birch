@@ -60,29 +60,31 @@ as that feature growing rather than a new one.
 
 ## Design
 
-### Where they go
+### What the user sees
 
-The badge gutter is already two columns wide and paints only one (`BADGE_WIDTH = 2`, `badge_line`
-emits a single glyph), so the branch badge takes the column that is blank today. The gutter becomes
-two axes side by side — **branch state outermost, working tree innermost**, next to the name it
-describes — and [`064`](064-configurable-badge-placement.md) moves both together as one unit. No
-new columns, and `hit_test` is unaffected because the gutter's width does not change.
+The VS Code model, extended by one question. A file that is modified in the working tree still shows
+its `M`; a file whose change is **already committed on this branch but absent from the base** shows
+the same letter, marked so the two cannot be confused — this second mark answers "what would I be
+merging?"
 
-### What they say
+The mark is a small glyph beside the letter rather than a different alphabet: `↑M` reads as "an `M`
+that is going out", where a bare `M` is "an `M` sitting in my working tree". One vocabulary of
+letters, one modifier that says which side of the comparison it belongs to. A separate in/out symbol
+set was rejected — two alphabets in adjacent columns is a legend to memorise.
 
-**The same alphabet, a different reference point.** A branch badge reuses `FileStatus` and its
-letters, computed against the base instead of against `HEAD`, so there is one badge language to
-learn and the column position says which question is being answered. A separate in/out symbol set
-was rejected: two alphabets in adjacent columns is a legend the user has to hold.
+A collapsed directory rolls its branch state up the same way it rolls up working-tree state, so a
+folded tree still shows where the branch's changes are.
+
+**This costs gutter width.** Today the gutter is two columns and paints one. The branch axis needs
+two cells of its own — the modifier and the letter — so with branch badges on, the right-hand
+furniture becomes `↑M M` and the gutter grows from 2 columns to 4. That is real estate taken from
+names in a narrow side pane, which is why the axis is a setting and why it is absent whenever no
+base resolves.
 
 **Outgoing only, in this task.** `git diff --name-status <merge-base>..HEAD` — what this branch has
-that the base does not. The incoming direction (what the base gained since the branch diverged) is
-the more novel half and a genuinely useful warning, but it doubles the git work, needs a second
-column or a precedence rule, and answers a different question. It is deferred rather than designed
-badly here.
-
-**Rollups follow the existing rule.** A collapsed directory shows the branch rollup dot exactly as
-it shows the working-tree one, in its own column.
+that the base does not, which is exactly "what would I be merging". The incoming direction (what the
+base gained since the branch diverged) answers a different question, needs its own modifier, and
+would take a third pair of columns; it is deferred rather than crammed in.
 
 ### What "main" is
 
