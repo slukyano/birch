@@ -325,18 +325,25 @@ In this order, **omitting any that is empty**:
 
 A message is plain prose, then **sections separated by `---`** — including before the TLDR. Each
 section covers one topic or one workflow operation: an acknowledgement, the context behind one ask,
-the TLDR. Only one section may be a TLDR, and it is always last.
+the TLDR. Sections are **lettered `A.`, `B.`, `C.`…** in order. Only one may be a TLDR, and it is
+always last.
+
+The TLDR's heading **names every topic it covers**, joined with `+`, so it is clear which sections
+it draws on.
 
 ```
 plain chat text — the answer, the finding, whatever is being said
 ---
-<topic> - Confirmation
+A. <topic> - Confirmation
   an approved action that has now been carried out
 ---
-<topic> - Approval
+B. <topic> - Approval
   the context behind its ask
 ---
-TLDR - <topic> - Approval
+C. <other topic> - Approval
+  the context behind its ask
+---
+D. TLDR - <topic> + <other topic> - Approval
   the TLDR
 ```
 
