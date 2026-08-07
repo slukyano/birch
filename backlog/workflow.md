@@ -298,6 +298,20 @@ rejected, per-item detail that does not change an answer: all of that goes above
 - **A fact earns its place only by changing a decision.** If the answer is the same whether or not
   the maintainer knows it, it is not TLDR material.
 
+### Standard sections
+
+In this order, omitting any that is empty:
+
+1. **Fixed** — one line per item: slug plus a few words, not a sentence. Includes scope creep and
+   any extra work done beyond the approved set, marked as such.
+2. **ADRs** — what each one decides, summarised.
+3. **Surfaces** — what changed in the public surface, summarised.
+4. **Anything else**, one bullet each: filed, not fixed, notes, warnings, and pointers to whatever
+   is especially worth reviewing.
+5. **The asks**, numbered. Everything not already approved explicitly gets one — a new or changed
+   ADR, a task created or retitled or dropped, a decision taken during implementation that the
+   approved design did not cover. **The ask to merge is always last.**
+
 Every presentation is **self-contained**: full context and the explicit question(s) spelled out
 each time, never "as before" or a bare pointer. **Final approvals** (scope, design, implementation)
 are always presented on the **complete** artifact as a whole; partial or incremental presentations
