@@ -83,7 +83,7 @@ against a parallel walk doing the same work — building entries, not merely cou
 | serial `build_index`, warm cache | **9.4 s** | best case, repeated run |
 | parallel walk, entries built | **5.7 s** | `build_parallel`, one core per thread |
 | parallel walk, counting only | 1.2 s | not the real workload — construction dominates |
-| index memory | **~247 MB** | `size_of` + the `rel` and `abs` strings |
+| index memory | **316 MB peak RSS** | 263 MB logical, over 825,744 entries |
 
 ### What the numbers rule out
 
@@ -92,11 +92,17 @@ entries are actually constructed the speedup collapses to **1.66×**, because al
 collection dominate, not directory traversal. 9.4 s becomes 5.7 s — still unusable, and worse from
 cold.
 
-**Memory alone disqualifies indexing a home directory eagerly.** ~247 MB of index for one root, to
-support a feature the user may never invoke, is not a reasonable resting size for a file tree.
+**Memory is large, but mostly self-inflicted.** Per entry: 80 B of inline struct, `rel` averaging
+109 B, `abs` 126 B, `name` 20 B. Home-directory paths are long — `Library/Caches` and `node_modules`
+chains — but each path is also stored roughly **2.3 times**: `abs` is only root + `/` + `rel`, and
+`name` is the tail of `rel`, for which `name_offset` already exists. That redundancy is **115 MB,
+44 % of the total**, and removing it (deriving `abs`, slicing `name`) also shrinks the struct from
+80 B to ~32 B — about **263 MB → ~110 MB**, mechanically, with no change to the model.
 
-So there is no constant-factor rescue: **eagerly indexing the whole tree is the wrong model at this
-scale**, and the design has to change what gets indexed, not how fast it is walked.
+So the honest conclusion is narrower than "eager indexing is impossible": the *time* has no
+constant-factor rescue — 9.4 s warm, 5.7 s parallel, worse cold — while the *memory* has an obvious
+one that should be taken regardless of which model is chosen. What remains open is whether ~110 MB
+and several seconds are acceptable for a home-sized root, or whether the corpus itself must shrink.
 
 ### The honesty half — settled, and independent
 
