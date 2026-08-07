@@ -25,6 +25,7 @@ okf_version: "0.1"
 * [Sprint 015 — Visual design: earn "beautiful"](sprints/sprint-015.md) - Done.
 * [Sprint 016 — Navigation & search feel](sprints/sprint-016.md) - Done.
 * [Sprint 017 — Pointer feel](sprints/sprint-017.md) - Done.
+* [Sprint 018 — Branch state, and critical fixes](sprints/sprint-018.md) - Designing.
 
 # Tasks
 
