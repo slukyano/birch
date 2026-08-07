@@ -267,6 +267,19 @@ agent finishes an iteration or needs a decision, it formats the ask as:
 This applies to scope approval, design approval, implementation approval, ADR acceptance,
 and stop-and-ask questions raised mid-implementation.
 
+## Summaries speak in outcomes
+
+A section describing work says **what changes for someone using birch** — the visible behaviour, the
+lasting effect, what becomes possible or stops being possible. Internals are supporting detail for
+an outcome, never the summary itself.
+
+> "`perform_open` returns whether a quit was seen, and its drain is re-expressed with `drain_batch`"
+> — an implementation note.
+> "A quit asked for while an editor is open now actually quits, instead of being acknowledged and
+> ignored" — the outcome, with the mechanism available underneath if wanted.
+
+The test: a reader who does not know the codebase should still be able to decide.
+
 ## Naming
 
 **A task is referred to by its full concept name** — `076-search-unusable-on-large-roots`, never a
