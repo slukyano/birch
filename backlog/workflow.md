@@ -318,6 +318,11 @@ In this order, **omitting any that is empty**:
 There is no notes section, and no section for commentary. If an item is not one of the above, the
 threshold for mentioning it at all is that a decision changes without it.
 
+**Every ask has a matching section above the TLDR**, one per ask, carrying the context the ask
+itself is too short to hold: what the decision is, what the alternatives were, and the references
+worth opening — task slugs, ADRs, key files with line numbers. The ask stays one or two lines; the
+section above it is where the reasoning lives.
+
 Every presentation is **self-contained**: full context and the explicit question(s) spelled out
 each time, never "as before" or a bare pointer. **Final approvals** (scope, design, implementation)
 are always presented on the **complete** artifact as a whole; partial or incremental presentations
