@@ -151,7 +151,10 @@ context menu's design would have been more expensive.
 | Socket | `SettingKey::ScrollLines`, `SettingKey::Scrollbar` — additive only |
 | `birch ctl` | `set scroll-lines <n>`, `set scrollbar <on\|off\|toggle>` |
 
-`069` and `067` add no public surface. No breaking changes.
+`069` and `067` add no public surface. No breaking changes. The binding spec
+([`docs/design.md`](../../docs/design.md)) was amended to match: both settings joined the Defaults
+table, and the Mouse section gained the release rule and lost the claim that a chevron acts on the
+press.
 
 # Architectural decisions
 
@@ -165,7 +168,9 @@ context menu's design would have been more expensive.
 
 # Bugs found & fixed
 
-Found by the **independent review** (no majors; ten minor findings, all fixed):
+Found by the **independent review** — no majors. Nine minor findings and two nits: all nine minors
+and one nit (the selection wash) are fixed below; the other nit was that the backlog had not been
+closed out yet, which this section's own commit did.
 
 - A hand-off in the event that *opened* a batch let exactly one queued event run behind the child —
   the flag was checked after handling, not before. Both call sites now share one tested rule.
@@ -192,14 +197,17 @@ shown. The bottom stays exact there and the top slot is shared.
 
 - **Keyboard navigation is still O(rows) per event.** `Down` must skip dim rows, so it cannot use
   the scroll fast path: 3 ms at a realistic 50 keys/s on a 9 156-row tree, but 1 382 ms under a
-  synthetic 2 500/s burst. Recorded as a consequence in ADR 0024, not hidden.
+  synthetic 2 500/s burst — a rate no keyboard produces. ADR 0024 records the shape of this
+  ("per-event work is now worth auditing; the linear-in-rows cost stands"); the two figures are
+  measured here and appear nowhere else.
 - **Intermediate frames are not drawn.** A 300-event flick renders the destination, not the
   journey. This is the intent — those frames were paid for and never seen.
 - **The per-gesture event count of a real trackpad is unmeasured.** Synthetic `CGEvent` scrolls
   cannot reproduce momentum phases, which originate in the trackpad driver. It bounds the perceived
   *distance* of a flick, never the freeze; every tick provably moves exactly `scroll_lines` rows.
 - **A 2-row-tall pane shows no scrollbar at all**, deliberately: its track has no room to move, so
-  a thumb there would claim both ends at once.
+  a thumb there would claim both ends at once. A pane **4 columns wide or narrower** shows none
+  either, even when the rows overflow — the badge gutter and the bar would leave the names nothing.
 - **`--pick` from a home-sized root still cannot search** (`076`), and **a quit during a terminal
   handover is still swallowed** (`077`). Both are filed, neither is fixed.
 

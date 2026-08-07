@@ -113,9 +113,9 @@ so outside the `docs/design.md` scope fence.
 * [Add the glob view filter](archive/027-add-picker-filter.md) - `--filter`/`--filter-mode` in both modes; files judged, folders navigable but gated on pick.
 * [→ always moves or reveals](archive/060-right-arrow-always-advances.md) - Expand, split, or advance; inert only when no live row follows.
 * [Indent guides vs. chevrons: a fallback-font hazard](archive/059-fix-guide-chevron-alignment.md) - Measured to the font files; documented, no render change.
-
-# Dropped
 * [Input bursts freeze the pane](archive/069-fix-wheel-scrolling.md) - One event cost a full O(rows) rebuild behind an unbounded queue; the loop now draws once per batch (ADR 0024).
 * [Make scroll speed configurable](archive/075-configurable-scroll-speed.md) - Rows per wheel tick as a setting (1-10, default 3), across flag, config key, and ctl set.
 * [Select on mouse release, not on press](archive/067-select-on-mouse-up.md) - A click is a press and a release on the same row and zone, acting on the release (ADR 0025).
 * [Add a scrollbar](archive/068-add-scrollbar.md) - One inert column at the right edge, shown only when the rows overflow.
+
+# Dropped

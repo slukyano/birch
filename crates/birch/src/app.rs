@@ -772,11 +772,6 @@ impl App {
         Response::ok(None)
     }
 
-    /// Click decision (ADR 0015): chevron clicks activate immediately (each
-    /// press is its own toggle, and it disarms a pending double — chevron-
-    /// then-name fast is a select); name clicks select, and only a completed
-    /// double-click activates. Tree semantics now apply in both modes, since
-    /// the picker renders the same tree (ADR 0023).
     /// Arms a press on the hit row, or on nothing when the press landed
     /// outside the tree. Stores the row's real path, so a snapshot arriving
     /// before the release cannot redirect the click (ADR 0025).
@@ -808,6 +803,12 @@ impl App {
         self.resolve_click(rows, idx, on_chevron, now)
     }
 
+    /// Click decision (ADR 0015): a chevron click toggles (each completed
+    /// click is its own toggle, and it disarms a pending double — chevron-
+    /// then-name fast is a select); name clicks select, and only a completed
+    /// double-click activates. Reached from the *release* (ADR 0025), never
+    /// from the press. Tree semantics apply in both modes, since the picker
+    /// renders the same tree (ADR 0023).
     fn resolve_click(
         &mut self,
         rows: &[Row],
