@@ -323,8 +323,14 @@ itself is too short to hold: what the decision is, what the alternatives were, a
 worth opening — task slugs, ADRs, key files with line numbers. The ask stays one or two lines; the
 section above it is where the reasoning lives.
 
-Each section **names its ask in its heading** — `## Ask 1 — <topic>` — so the pairing is obvious
-from either direction and survives renumbering. Sections appear in ask order.
+Each section **names its ask in its heading** — `## Ask 1 — <the question>` — so the pairing is
+obvious from either direction and survives renumbering. Sections appear in ask order.
+
+**An ask is a question or a choice, never a topic.** "Ask 1 — the wash and the scrollbar" is a
+subject line; "Ask 1 — should the selection highlight stop short of the scrollbar?" is an ask. For
+an approval, state the **lasting effect being approved** — how the thing behaves from now on —
+rather than the edit that produced it, because the edit is not what is being agreed to. The same
+sentence opens the section, so the decision is legible without reading the reasoning under it.
 
 Every presentation is **self-contained**: full context and the explicit question(s) spelled out
 each time, never "as before" or a bare pointer. **Final approvals** (scope, design, implementation)
