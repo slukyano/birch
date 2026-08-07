@@ -77,6 +77,31 @@ pub struct Settings {
     pub compact: bool,
     /// The active theme (ADR 0021); the render layer resolves it to a `Theme`.
     pub theme: ThemeId,
+    /// Scroll indicator on the pane's right edge, shown only when the rows
+    /// overflow the viewport.
+    pub scrollbar: bool,
+    /// Rows a single wheel tick scrolls, clamped to
+    /// [`SCROLL_LINES_MIN`]..=[`SCROLL_LINES_MAX`].
+    pub scroll_lines: u8,
+}
+
+/// Fewest rows one wheel tick may scroll: a tick that moves nothing is a tick
+/// that does nothing.
+pub const SCROLL_LINES_MIN: u8 = 1;
+/// Most rows one wheel tick may scroll. A momentum burst delivers tens of
+/// events per gesture, so at the default of 3 one flick already travels ~90
+/// rows; past 10 a single tick stops being a speed and becomes a teleport.
+pub const SCROLL_LINES_MAX: u8 = 10;
+/// The terminal convention, and birch's default.
+pub const SCROLL_LINES_DEFAULT: u8 = 3;
+
+/// Clamps into the accepted range. Used where a value must degrade rather
+/// than fail (the config file); surfaces that can report an error reject
+/// instead. Takes the widest integer TOML can carry, so that a number far
+/// outside the range still clamps instead of failing to parse and taking the
+/// rest of the config file down with it.
+pub fn clamp_scroll_lines(n: i64) -> u8 {
+    n.clamp(i64::from(SCROLL_LINES_MIN), i64::from(SCROLL_LINES_MAX)) as u8
 }
 
 impl Default for Settings {
@@ -90,6 +115,8 @@ impl Default for Settings {
             show_ignored: true,
             compact: true,
             theme: ThemeId::default(),
+            scrollbar: true,
+            scroll_lines: SCROLL_LINES_DEFAULT,
         }
     }
 }

@@ -160,6 +160,8 @@ ignored = true         # show gitignored entries (dimmed)
 noise = false          # show .git, .DS_Store, ...
 compact = true         # compact single-child folder chains
 mouse = true           # mouse support
+scroll-lines = 3       # rows per mouse-wheel tick (1-10)
+scrollbar = true       # scroll indicator on the right edge, when rows overflow
 open-cmd = "nvim {}"   # open command template ({} = path)
 ```
 
@@ -215,7 +217,8 @@ surface — mostly driven by host adapters rather than run by hand:
 
 ```sh
 birch ctl reveal src/main.rs   # select and scroll to a path — this is how the tree follows an editor
-birch ctl set git off          # flip a setting: hidden | ignored | noise | icons | compact | git | theme
+birch ctl set git off          # flip a setting: hidden | ignored | noise | icons | compact | git |
+                               #   scrollbar | theme <id> | scroll-lines <1-10>
 birch ctl get-path --abs       # print the current selection
 birch ctl quit                 # exit the instance
 ```

@@ -63,6 +63,8 @@ birch ctl <verb> [...]    # control a running instance (see Control socket)
 | Compact folders | on | `--no-compact` |
 | Mouse | on | `--no-mouse` |
 | Theme | `birch` | `--theme <id>` |
+| Scroll lines per wheel tick | 3 (range 1–10) | `--scroll-lines <n>` |
+| Scrollbar | on (shown only when rows overflow) | `--no-scrollbar` |
 
 Directories always sort before files. Defaults persist in the config file
 (`~/.config/birch/birch.toml`, ADR 0022); boolean flags are bidirectional, and the precedence is
@@ -96,8 +98,9 @@ Printable characters are permanently reserved for search — no letter hotkeys, 
 
 ### Mouse (native, on by default)
 
-- **Single-click selects; double-click activates** (ADR 0015 — reversed from the original VS Code-school single-click-activates). In a host pane, a click meant to focus the pane — or just to point — arrives as a normal click, so the first click must be harmless: it only moves selection. A second click on the same row within 450 ms is Enter's twin (open file / toggle dir). Clicking a dir's chevron still toggles immediately without moving selection; each chevron press is its own toggle.
-- **Scroll wheel**: 3 lines/tick.
+- **Single-click selects; double-click activates** (ADR 0015 — reversed from the original VS Code-school single-click-activates). In a host pane, a click meant to focus the pane — or just to point — arrives as a normal click, so the first click must be harmless: it only moves selection. A second click on the same row within 450 ms is Enter's twin (open file / toggle dir). Clicking a dir's chevron toggles without moving selection; each chevron click is its own toggle.
+- **A click completes on release** (ADR 0025): the press arms, and the click acts only when the button is released on the same row, in the same zone. Releasing anywhere else abandons it, so a click can be revoked by sliding off. The double-click window measures release to release — two complete clicks.
+- **Scroll wheel**: `--scroll-lines` rows per tick, 3 by default (1–10).
 - **Hover highlight** (SGR 1003 motion tracking).
 - **Right-click → context menu** (keyboard works inside it: arrows/Enter/Esc):
 

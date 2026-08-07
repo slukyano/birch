@@ -16,6 +16,78 @@ pub const INDENT_WIDTH: u16 = 2;
 /// Width of the right-hand git badge column.
 pub const BADGE_WIDTH: u16 = 2;
 
+/// Width of the scrollbar column, when one is shown.
+pub const SCROLLBAR_WIDTH: u16 = 1;
+
+/// Where the scrollbar's thumb sits, in rows from the top of the viewport.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Thumb {
+    pub start: usize,
+    pub len: usize,
+}
+
+/// Largest share of the track the thumb may occupy, as a fraction. A thumb
+/// that nearly fills its track reads as "nothing to scroll" even when there
+/// is; capping it keeps the free space visible.
+const MAX_THUMB_NUM: usize = 4;
+const MAX_THUMB_DEN: usize = 5;
+
+/// The thumb for `scroll` over `rows` rows in a `viewport`-row pane, or `None`
+/// when everything fits — the only case in which no bar is drawn, since a bar
+/// is exactly the signal that scrolling is possible.
+///
+/// The free space *is* the message, so the thumb never fills the track: while
+/// scrolling up is possible there is space above it, and while scrolling down
+/// is possible there is space below. It touches the top only at the very top
+/// and the bottom only at the very bottom, so "am I actually at the end?" is
+/// answered honestly. A track too short to seat a thumb between two gaps is
+/// documented at its branch below.
+pub fn thumb(rows: usize, viewport: usize, scroll: usize) -> Option<Thumb> {
+    if viewport == 0 || rows <= viewport {
+        return None;
+    }
+    let max_scroll = rows - viewport;
+    let scroll = scroll.min(max_scroll);
+    // Leave a cell at each end wherever the track can afford it, so a mid
+    // scroll shows gaps on both sides; and cap the thumb well short of the
+    // full track, so the space that means "there is more" stays legible.
+    let capped = (viewport * MAX_THUMB_NUM) / MAX_THUMB_DEN;
+    let max_len = viewport
+        .saturating_sub(2)
+        .min(capped)
+        .max(1)
+        .min(viewport.saturating_sub(1).max(1));
+    let len = ((viewport * viewport) / rows).clamp(1, max_len);
+    let travel = viewport - len;
+    if travel == 0 {
+        // A single-cell track: no arrangement shows a thumb and a gap at once.
+        return None;
+    }
+    let start = if scroll == 0 {
+        0
+    } else if scroll == max_scroll {
+        travel
+    } else if travel >= 2 {
+        // Strictly between the ends: a gap above *and* below, so both
+        // directions read as available.
+        ((scroll * travel) / max_scroll).clamp(1, travel - 1)
+    } else {
+        // A two-cell track has one free cell and three states to tell apart.
+        // The bottom stays exact — "am I at the end?" is the question the bar
+        // exists to answer — and the top cell is shared with the rows below it.
+        0
+    };
+    Some(Thumb { start, len })
+}
+
+/// Whether a scrollbar column is reserved for this frame.
+fn scrollbar_shown(settings: &Settings, rows: usize, viewport: usize, width: u16) -> bool {
+    settings.scrollbar
+        // The furniture must not eat the last column of the names.
+        && width > BADGE_WIDTH + 1 + SCROLLBAR_WIDTH
+        && thumb(rows, viewport, 0).is_some()
+}
+
 /// The tree gets everything above the one-line status bar.
 pub fn tree_viewport_height(area: Rect) -> usize {
     area.height.saturating_sub(1) as usize
@@ -35,15 +107,23 @@ pub fn draw(
     }
     let viewport = tree_viewport_height(area);
     let badge_width = BADGE_WIDTH.min(area.width);
+    // The scrollbar takes the far-right column, pushing the badges left, and
+    // only while it is shown — a blank reserved column is real estate paid for
+    // nothing in a narrow pane.
+    let bar_width = if scrollbar_shown(settings, rows.len(), viewport, area.width) {
+        SCROLLBAR_WIDTH
+    } else {
+        0
+    };
     // One gutter column before the badges so truncated text never touches
     // a status indicator.
     let tree_area = Rect {
-        width: area.width - badge_width - 1.min(area.width - badge_width),
+        width: area.width - bar_width - badge_width - 1.min(area.width - bar_width - badge_width),
         height: viewport as u16,
         ..area
     };
     let badge_area = Rect {
-        x: area.x + area.width - badge_width,
+        x: area.x + area.width - bar_width - badge_width,
         width: badge_width,
         height: viewport as u16,
         ..area
@@ -78,6 +158,33 @@ pub fn draw(
     }
     frame.render_widget(Paragraph::new(lines).style(canvas), tree_area);
     frame.render_widget(Paragraph::new(badges).style(canvas), badge_area);
+    if bar_width > 0
+        && let Some(Thumb { start, len }) = thumb(rows.len(), viewport, view.scroll)
+    {
+        let x = area.x + area.width - SCROLLBAR_WIDTH;
+        let track = Style::default().fg(theme.palette.guide);
+        let grip = Style::default().fg(theme.palette.selection_accent);
+        let bar: Vec<Line> = (0..viewport)
+            .map(|i| {
+                let on_thumb = i >= start && i < start + len;
+                let (glyph, style) = if on_thumb {
+                    ("\u{2588}", grip)
+                } else {
+                    ("\u{2502}", track)
+                };
+                Line::from(Span::styled(glyph, style))
+            })
+            .collect();
+        frame.render_widget(
+            Paragraph::new(bar).style(canvas),
+            Rect {
+                x,
+                width: SCROLLBAR_WIDTH,
+                height: viewport as u16,
+                ..area
+            },
+        );
+    }
 
     frame.render_widget(
         Paragraph::new(format!(" {bottom_line}")).style(canvas.add_modifier(Modifier::DIM)),
@@ -94,7 +201,10 @@ pub fn draw(
         let y = tree_area.y + i;
         let wash = theme.palette.selection_bg;
         let buffer = frame.buffer_mut();
-        for x in area.left()..area.right() {
+        // Up to, but not including, the scrollbar: the bar reads as furniture
+        // outside the row, and in themes where the guide colour equals the
+        // wash the track would vanish on the selected row.
+        for x in area.left()..area.right() - bar_width {
             let cell = &mut buffer[(x, y)];
             let painted = cell.bg != Color::Reset && Some(cell.bg) != theme.palette.app_bg;
             if !painted {
@@ -399,12 +509,21 @@ fn base_name_style(theme: &Theme, row: &Row) -> Style {
 pub fn hit_test(
     rows: &[Row],
     view: &FlatView,
+    settings: &Settings,
     area: Rect,
     column: u16,
     row_y: u16,
 ) -> Option<(usize, bool)> {
     let viewport = tree_viewport_height(area) as u16;
     if row_y < area.y || row_y >= area.y + viewport {
+        return None;
+    }
+    // While the scrollbar is shown its column is inert: a pure indicator must
+    // not double as a selection surface, and this reserves the gesture for a
+    // future drag-to-scroll.
+    if scrollbar_shown(settings, rows.len(), viewport as usize, area.width)
+        && column >= area.x + area.width - SCROLLBAR_WIDTH
+    {
         return None;
     }
     let idx = view.scroll + (row_y - area.y) as usize;
@@ -453,15 +572,33 @@ mod tests {
         }
     }
 
+    /// Settings with the scrollbar off, so these cases test row geometry
+    /// alone; the bar's own column has its own tests.
+    fn no_bar() -> Settings {
+        Settings {
+            scrollbar: false,
+            ..Settings::default()
+        }
+    }
+
     #[test]
     fn hit_test_resolves_rows_and_chevrons() {
         let rows = vec![row("src", NodeKind::Dir, 0), row("deep", NodeKind::Dir, 1)];
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
-        assert_eq!(hit_test(&rows, &view, area, 0, 0), Some((0, true)));
-        assert_eq!(hit_test(&rows, &view, area, 5, 0), Some((0, false)));
-        assert_eq!(hit_test(&rows, &view, area, 2, 1), Some((1, true)));
-        assert_eq!(hit_test(&rows, &view, area, 0, 5), None);
+        assert_eq!(
+            hit_test(&rows, &view, &no_bar(), area, 0, 0),
+            Some((0, true))
+        );
+        assert_eq!(
+            hit_test(&rows, &view, &no_bar(), area, 5, 0),
+            Some((0, false))
+        );
+        assert_eq!(
+            hit_test(&rows, &view, &no_bar(), area, 2, 1),
+            Some((1, true))
+        );
+        assert_eq!(hit_test(&rows, &view, &no_bar(), area, 0, 5), None);
     }
 
     #[test]
@@ -472,7 +609,10 @@ mod tests {
         let rows = vec![r];
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
-        assert_eq!(hit_test(&rows, &view, area, 0, 0), Some((0, false)));
+        assert_eq!(
+            hit_test(&rows, &view, &no_bar(), area, 0, 0),
+            Some((0, false))
+        );
     }
 
     #[test]
@@ -480,8 +620,8 @@ mod tests {
         let rows = vec![row("a", NodeKind::File, 0); 20];
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
-        assert!(hit_test(&rows, &view, area, 0, 9).is_none());
-        assert!(hit_test(&rows, &view, area, 0, 8).is_some());
+        assert!(hit_test(&rows, &view, &no_bar(), area, 0, 9).is_none());
+        assert!(hit_test(&rows, &view, &no_bar(), area, 0, 8).is_some());
     }
 
     #[test]
@@ -492,9 +632,9 @@ mod tests {
         let mut view = FlatView::default();
         view.scroll = 5;
         let area = Rect::new(0, 0, 40, 10);
-        let (idx, _) = hit_test(&rows, &view, area, 4, 0).unwrap();
+        let (idx, _) = hit_test(&rows, &view, &no_bar(), area, 4, 0).unwrap();
         assert_eq!(rows[idx].name, "f5");
-        let (idx, _) = hit_test(&rows, &view, area, 4, 8).unwrap();
+        let (idx, _) = hit_test(&rows, &view, &no_bar(), area, 4, 8).unwrap();
         assert_eq!(rows[idx].name, "f13");
     }
 
@@ -742,12 +882,12 @@ mod tests {
             let start = 2 * INDENT_WIDTH; // depth 2
             let rows = vec![dir];
             assert_eq!(
-                hit_test(&rows, &view, area, start, 0),
+                hit_test(&rows, &view, &no_bar(), area, start, 0),
                 Some((0, true)),
                 "theme {id:?} chevron hit at depth offset"
             );
             assert_eq!(
-                hit_test(&rows, &view, area, start.saturating_sub(1), 0),
+                hit_test(&rows, &view, &no_bar(), area, start.saturating_sub(1), 0),
                 Some((0, false)),
                 "theme {id:?} just left of the chevron is not the chevron"
             );
@@ -815,5 +955,202 @@ mod tests {
             .map(|s| s.content.to_string())
             .collect();
         assert_eq!(texts, ["  ", "  ", "\u{2514}\u{2500}"]);
+    }
+
+    // ---- 068: the scrollbar ----
+
+    #[test]
+    fn no_thumb_when_everything_fits() {
+        assert_eq!(thumb(10, 10, 0), None);
+        assert_eq!(thumb(3, 10, 0), None);
+        // A zero-height viewport has no track to draw on.
+        assert_eq!(thumb(100, 0, 0), None);
+    }
+
+    #[test]
+    fn the_thumb_touches_an_end_only_at_that_end() {
+        let viewport = 10;
+        let rows = 100;
+        let max_scroll = rows - viewport;
+        let top = thumb(rows, viewport, 0).unwrap();
+        assert_eq!(top.start, 0, "top only at the top");
+        let bottom = thumb(rows, viewport, max_scroll).unwrap();
+        assert_eq!(
+            bottom.start + bottom.len,
+            viewport,
+            "bottom only at the bottom"
+        );
+        // One row from either end must not claim the extreme.
+        let near_top = thumb(rows, viewport, 1).unwrap();
+        assert!(near_top.start > 0, "one row down is not the top");
+        let near_bottom = thumb(rows, viewport, max_scroll - 1).unwrap();
+        assert!(
+            near_bottom.start + near_bottom.len < viewport,
+            "one row up is not the bottom"
+        );
+    }
+
+    #[test]
+    fn the_thumb_is_never_invisible_and_never_the_whole_track() {
+        // A huge tree in a small pane still shows something to grab.
+        let t = thumb(1_000_000, 5, 0).unwrap();
+        assert_eq!(t.len, 1);
+        // A tree barely taller than the pane leaves room to move, and the cap
+        // keeps that room visible rather than hairline.
+        let t = thumb(11, 10, 0).unwrap();
+        assert!(t.len <= 8, "a near-full thumb reports nothing: {}", t.len);
+        assert!(t.len >= 1);
+    }
+
+    #[test]
+    fn the_thumb_stays_inside_the_track_at_every_scroll() {
+        for rows in [11usize, 40, 999, 10_000] {
+            for viewport in [1usize, 2, 7, 45] {
+                if rows <= viewport {
+                    continue;
+                }
+                for scroll in [0, 1, 3, rows - viewport - 1, rows - viewport, rows] {
+                    let Some(t) = thumb(rows, viewport, scroll) else {
+                        // Only a single-cell track shows nothing while scrollable.
+                        assert_eq!(viewport, 1, "rows={rows} viewport={viewport}");
+                        continue;
+                    };
+                    assert!(
+                        t.start + t.len <= viewport,
+                        "rows={rows} viewport={viewport} scroll={scroll} overflowed"
+                    );
+                    assert!(t.len >= 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_bar_is_shown_whenever_scrolling_is_possible() {
+        // The bar is the signal that there is more; it disappears only when
+        // everything fits. Even a tiny track keeps it.
+        assert!(thumb(100, 2, 0).is_some());
+        assert!(thumb(100, 3, 0).is_some());
+        assert!(thumb(1_000_000, 45, 0).is_some());
+        assert_eq!(thumb(45, 45, 0), None, "everything fits");
+        // A single-cell track cannot seat a thumb and a gap at once.
+        assert_eq!(thumb(100, 1, 0), None);
+    }
+
+    #[test]
+    fn free_space_shows_in_every_direction_that_can_be_scrolled() {
+        // The rule: while scrolling up is possible there is space above the
+        // thumb, and while scrolling down is possible there is space below.
+        for rows in [4usize, 11, 46, 999, 10_000] {
+            for viewport in [3usize, 5, 12, 45] {
+                if rows <= viewport {
+                    continue;
+                }
+                let max_scroll = rows - viewport;
+                for scroll in [0, 1, 2, max_scroll / 2, max_scroll - 1, max_scroll] {
+                    let t = thumb(rows, viewport, scroll).expect("scrolling is possible");
+                    let ctx = format!("rows={rows} viewport={viewport} scroll={scroll}");
+                    assert!(t.len < viewport, "the thumb filled the track: {ctx}");
+                    if scroll > 0 {
+                        assert!(t.start >= 1, "no space above while scrollable up: {ctx}");
+                    }
+                    if scroll < max_scroll {
+                        assert!(
+                            t.start + t.len < viewport,
+                            "no space below while scrollable down: {ctx}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_thumb_never_fills_more_than_its_share_of_the_track() {
+        // Barely more rows than fit: proportionally the thumb would be almost
+        // the whole track and read as "nothing to scroll".
+        let t = thumb(46, 45, 0).unwrap();
+        assert!(t.len <= 45 * 4 / 5, "thumb was {} of 45", t.len);
+        assert!(t.len >= 1);
+    }
+
+    #[test]
+    fn a_single_slot_track_keeps_the_bottom_exact() {
+        // Two rows of track leave one free slot: the bottom must still mean
+        // the bottom, even though the top slot is shared.
+        let (rows, viewport) = (100, 2);
+        assert_eq!(thumb(rows, viewport, 0).unwrap().start, 0);
+        assert_eq!(thumb(rows, viewport, 50).unwrap().start, 0);
+        let bottom = thumb(rows, viewport, rows - viewport).unwrap();
+        assert_eq!(bottom.start + bottom.len, viewport);
+    }
+
+    #[test]
+    fn the_layout_holds_in_a_pane_too_narrow_for_the_furniture() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = theme();
+        let rows: Vec<Row> = (0..40)
+            .map(|i| row(&format!("f{i}"), NodeKind::File, 0))
+            .collect();
+        let view = FlatView::default();
+        // Every pane from one cell wide upward must draw without panicking on
+        // the u16 arithmetic that reserves the bar and badge columns.
+        for width in 1..=12u16 {
+            for height in 1..=4u16 {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|frame| draw(frame, &rows, &view, &Settings::default(), &theme, ""))
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn the_selection_wash_stops_before_the_scrollbar() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        // In themes where the guide colour equals the wash, washing over the
+        // bar would erase the track on the selected row.
+        let theme = theme();
+        let rows: Vec<Row> = (0..40)
+            .map(|i| row(&format!("f{i}"), NodeKind::File, 0))
+            .collect();
+        let mut view = FlatView::default();
+        view.selection = Some(rows[0].path.clone());
+        let (w, h) = (30u16, 4u16);
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &rows, &view, &Settings::default(), &theme, ""))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let bar_cell = &buffer[(w - 1, 0)];
+        assert_ne!(
+            bar_cell.bg, theme.palette.selection_bg,
+            "the wash reached the scrollbar column"
+        );
+    }
+
+    #[test]
+    fn the_bar_column_is_inert_while_shown() {
+        let rows: Vec<Row> = (0..50)
+            .map(|i| row(&format!("f{i}"), NodeKind::File, 0))
+            .collect();
+        let view = FlatView::default();
+        let area = Rect::new(0, 0, 40, 10);
+        let on = Settings::default();
+        // The far-right column belongs to the bar, not to the row behind it.
+        assert_eq!(hit_test(&rows, &view, &on, area, 39, 0), None);
+        assert!(hit_test(&rows, &view, &on, area, 38, 0).is_some());
+        // With the bar off, the same column selects again.
+        assert!(hit_test(&rows, &view, &no_bar(), area, 39, 0).is_some());
+    }
+
+    #[test]
+    fn the_bar_column_stays_live_when_the_rows_fit() {
+        let rows = vec![row("only", NodeKind::File, 0)];
+        let view = FlatView::default();
+        let area = Rect::new(0, 0, 40, 10);
+        assert!(hit_test(&rows, &view, &Settings::default(), area, 39, 0).is_some());
     }
 }

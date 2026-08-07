@@ -24,7 +24,7 @@ okf_version: "0.1"
 * [Sprint 014 — Docs & publication polish](sprints/sprint-014.md) - Done.
 * [Sprint 015 — Visual design: earn "beautiful"](sprints/sprint-015.md) - Done.
 * [Sprint 016 — Navigation & search feel](sprints/sprint-016.md) - Done.
-* [Sprint 017 — Pointer feel](sprints/sprint-017.md) - Implementing.
+* [Sprint 017 — Pointer feel](sprints/sprint-017.md) - Done.
 
 # Tasks
 
@@ -35,10 +35,8 @@ okf_version: "0.1"
 * [Make git badge placement configurable](tasks/064-configurable-badge-placement.md) - Theme axis + setting: right / left / none, with a fitting default per built-in theme.
 * [Add a "random" theme](tasks/065-random-theme.md) - --theme random resolves to a randomly chosen built-in theme at launch.
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
-* [Select on mouse release, not on press](tasks/067-select-on-mouse-up.md) - A click is a press and a release on the same row, acting on the release (ADR 0025).
-* [Add a scrollbar](tasks/068-add-scrollbar.md) - One inert column at the right edge, shown only when rows overflow; flag, config key, and ctl set.
-* [Input bursts freeze the pane](tasks/069-fix-wheel-scrolling.md) - One event cost a full row rebuild behind an unbounded queue; the wheel is where it showed (ADR 0024).
-* [Make scroll speed configurable](tasks/075-configurable-scroll-speed.md) - Lines per wheel tick as a setting (1-10, default 3), with flag, config key, and ctl set.
+* [A quit arriving during a terminal handover is swallowed](tasks/077-quit-swallowed-during-terminal-handover.md) - perform_open's stale-event drain discards the quit flag, so SIGHUP or ctl quit is answered and ignored.
+* [Search is unusable on a large root](tasks/076-search-unusable-on-large-roots.md) - From $HOME the index never lands and the status line claims "no matches"; both modes, not just --pick.
 * [Show how much a filter actually matches](tasks/070-show-filter-match-counts.md) - Per-folder or total match counts, so a filtered browse knows where to go.
 * [Add the context menu](tasks/071-add-context-menu.md) - The right-click action surface, split out of the 0.5 bundle so it can land before the ops it hosts.
 * [Move files and folders by dragging](tasks/072-drag-to-move.md) - Drag a row onto a directory to move it; blocked on a scope-fence amendment, since drag-and-drop move is on the permanent out-of-scope list.
@@ -115,5 +113,9 @@ so outside the `docs/design.md` scope fence.
 * [Add the glob view filter](archive/027-add-picker-filter.md) - `--filter`/`--filter-mode` in both modes; files judged, folders navigable but gated on pick.
 * [→ always moves or reveals](archive/060-right-arrow-always-advances.md) - Expand, split, or advance; inert only when no live row follows.
 * [Indent guides vs. chevrons: a fallback-font hazard](archive/059-fix-guide-chevron-alignment.md) - Measured to the font files; documented, no render change.
+* [Input bursts freeze the pane](archive/069-fix-wheel-scrolling.md) - One event cost a full O(rows) rebuild behind an unbounded queue; the loop now draws once per batch (ADR 0024).
+* [Make scroll speed configurable](archive/075-configurable-scroll-speed.md) - Rows per wheel tick as a setting (1-10, default 3), across flag, config key, and ctl set.
+* [Select on mouse release, not on press](archive/067-select-on-mouse-up.md) - A click is a press and a release on the same row and zone, acting on the release (ADR 0025).
+* [Add a scrollbar](archive/068-add-scrollbar.md) - One inert column at the right edge, shown only when the rows overflow.
 
 # Dropped

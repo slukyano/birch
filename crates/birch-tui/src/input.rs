@@ -6,24 +6,22 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
-/// Lines per scroll-wheel tick (design doc: 3).
-pub const SCROLL_LINES: isize = 3;
-
-/// Two clicks on the same row within this window activate (ADR 0015).
+/// Two complete clicks on the same row within this window activate — measured
+/// release to release (ADR 0015, as amended by ADR 0025).
 pub const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(450);
 
-/// Infers double-clicks from single Down events (terminals never synthesize
-/// them). Keyed on the row path, not the visual index, so a live-update
-/// reshuffle between the two clicks cannot activate the wrong row.
+/// Infers double-clicks from completed single clicks (terminals never
+/// synthesize them). Keyed on the row path, not the visual index, so a
+/// live-update reshuffle between the two clicks cannot activate the wrong row.
 #[derive(Default)]
 pub struct ClickTimer {
     last: Option<(PathBuf, Instant)>,
 }
 
 impl ClickTimer {
-    /// Records a click on `path` at `now`; true when it completes a
-    /// double-click. A completed double disarms — a triple-click starts a
-    /// fresh select cycle.
+    /// Records a completed click on `path` at `now` (its *release*); true when
+    /// it completes a double-click. A completed double disarms — a
+    /// triple-click starts a fresh select cycle.
     pub fn observe(&mut self, path: &Path, now: Instant) -> bool {
         let double = self
             .last
@@ -57,7 +55,13 @@ pub enum InputAction {
     Backspace,
     ScrollUp,
     ScrollDown,
-    Click {
+    /// Left button down: arms a click, acts on nothing (ADR 0025).
+    Press {
+        column: u16,
+        row: u16,
+    },
+    /// Left button up: completes the armed click, or abandons it.
+    Release {
         column: u16,
         row: u16,
     },
@@ -86,7 +90,15 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
             _ => None,
         },
         Event::Mouse(mouse) if mouse_enabled => match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => Some(InputAction::Click {
+            MouseEventKind::Down(MouseButton::Left) => Some(InputAction::Press {
+                column: mouse.column,
+                row: mouse.row,
+            }),
+            // Any left-button release completes the armed press. birch enables
+            // SGR encoding, where a release names its button; a terminal that
+            // reports an ambiguous release still resolves correctly, because
+            // at most one press is ever armed (ADR 0025).
+            MouseEventKind::Up(MouseButton::Left) => Some(InputAction::Release {
                 column: mouse.column,
                 row: mouse.row,
             }),
@@ -132,6 +144,47 @@ mod tests {
         });
         assert_eq!(map_event(&ev, true), Some(InputAction::ScrollDown));
         assert_eq!(map_event(&ev, false), None);
+    }
+
+    #[test]
+    fn the_left_button_maps_to_press_and_release() {
+        let at = |kind| {
+            Event::Mouse(MouseEvent {
+                kind,
+                column: 7,
+                row: 3,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        // The press arms and the release completes (ADR 0025); both carry the
+        // coordinates, and the app decides what they mean.
+        assert_eq!(
+            map_event(&at(MouseEventKind::Down(MouseButton::Left)), true),
+            Some(InputAction::Press { column: 7, row: 3 })
+        );
+        assert_eq!(
+            map_event(&at(MouseEventKind::Up(MouseButton::Left)), true),
+            Some(InputAction::Release { column: 7, row: 3 })
+        );
+        // Other buttons stay unmapped — the right button belongs to the
+        // context menu, which does not exist yet.
+        assert_eq!(
+            map_event(&at(MouseEventKind::Down(MouseButton::Right)), true),
+            None
+        );
+        assert_eq!(
+            map_event(&at(MouseEventKind::Up(MouseButton::Right)), true),
+            None
+        );
+        // With the mouse disabled, neither reaches the app.
+        assert_eq!(
+            map_event(&at(MouseEventKind::Down(MouseButton::Left)), false),
+            None
+        );
+        assert_eq!(
+            map_event(&at(MouseEventKind::Up(MouseButton::Left)), false),
+            None
+        );
     }
 
     #[test]

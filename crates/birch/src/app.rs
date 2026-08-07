@@ -1,6 +1,8 @@
-//! The app loop: one `recv()` over the unified event channel; deltas mutate
-//! the tree, input becomes actions, every iteration reconciles watches,
-//! requests peek-loads, persists expansion changes, and redraws.
+//! The app loop: one `recv()` over the unified event channel followed by a
+//! drain of whatever else has queued, so a *batch* of events costs one redraw
+//! (ADR 0024); deltas mutate the tree, input becomes actions, every iteration
+//! reconciles watches, requests peek-loads, persists expansion changes, and
+//! redraws.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -18,7 +20,7 @@ use birch_core::search::{self, IndexCmd, IndexEvent, Match, SearchIndex, search}
 use birch_core::watcher::{WatchCmd, WatchEvent};
 use birch_core::{
     Filter, NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree,
-    TreeDelta, persist,
+    TreeDelta, persist, settings,
 };
 use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row};
 use birch_tui::input::{self, InputAction};
@@ -110,9 +112,82 @@ struct App {
     picked: Option<PathBuf>,
     input_paused: Arc<AtomicBool>,
     click_timer: input::ClickTimer,
+    /// The armed press: which row a left button-down landed on, and whether it
+    /// landed in the chevron zone. A click completes only when the release
+    /// matches both (ADR 0025). Keyed on the real path, so a snapshot arriving
+    /// between press and release cannot redirect the click.
+    armed_press: Option<(PathBuf, bool)>,
+    /// Row count from the last draw. A scroll needs the count and nothing
+    /// else, so it is served from here instead of rebuilding every row
+    /// (ADR 0024); `FlatView::reconcile` re-clamps before every draw anyway.
+    rows_len: usize,
+    /// Set when a child process owned the terminal, so the batch ends and the
+    /// screen it left is redrawn at once (ADR 0024).
+    yielded_terminal: bool,
 }
 
 /// Runs the app; in picker mode the returned path is the confirmed pick.
+/// How long one batch may spend consuming already-queued events before the
+/// frame is drawn regardless (ADR 0024). A budget rather than an event count:
+/// it degrades with the machine's speed instead of meaning different things on
+/// different hardware.
+const BATCH_BUDGET: Duration = Duration::from_millis(8);
+
+/// Whether the batch may continue, given what the last handled event did.
+/// One rule, asked both before a batch opens and after each event inside it,
+/// so the two can never disagree (ADR 0024, decision 4).
+fn batch_step(quit: bool, yielded_terminal: bool) -> BatchStep {
+    if quit {
+        BatchStep::Quit
+    } else if yielded_terminal {
+        // A child owned the tty; queued events must not run behind it, and the
+        // screen it left needs the redraw now.
+        BatchStep::Stop
+    } else {
+        BatchStep::Continue
+    }
+}
+
+/// What the batch should do after an event was handled.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BatchStep {
+    Continue,
+    /// End the batch and draw (a child owned the terminal).
+    Stop,
+    /// End the batch and the loop.
+    Quit,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BatchStop {
+    Drained,
+    Budget,
+    Handoff,
+    Quit,
+}
+
+/// Handles every event already queued, in order, until the channel is empty or
+/// `deadline` passes. Never blocks: only what has *already* arrived joins the
+/// batch, so an idle birch still draws one frame per event.
+fn drain_batch<F>(events: &Receiver<AppEvent>, deadline: Instant, mut handle: F) -> BatchStop
+where
+    F: FnMut(AppEvent) -> BatchStep,
+{
+    loop {
+        if Instant::now() >= deadline {
+            return BatchStop::Budget;
+        }
+        let Ok(event) = events.try_recv() else {
+            return BatchStop::Drained;
+        };
+        match handle(event) {
+            BatchStep::Continue => {}
+            BatchStep::Stop => return BatchStop::Handoff,
+            BatchStep::Quit => return BatchStop::Quit,
+        }
+    }
+}
+
 pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<PathBuf>> {
     let AppWiring {
         root,
@@ -161,6 +236,9 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         picked: None,
         input_paused,
         click_timer: input::ClickTimer::default(),
+        armed_press: None,
+        rows_len: 0,
+        yielded_terminal: false,
     };
 
     if app.mode == Mode::Tree {
@@ -180,6 +258,22 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         if app.handle(terminal, &events, event) {
             break;
         }
+        // One frame per *batch* (ADR 0024): whatever else has already queued
+        // is handled first, in order, and the whole batch shares one redraw.
+        // A hand-off in the event just handled ends the batch before it starts
+        // — nothing may run behind a child that owned the tty (decision 4).
+        let stopped = if batch_step(false, app.yielded_terminal) == BatchStep::Continue {
+            drain_batch(&events, Instant::now() + BATCH_BUDGET, |event| {
+                let quit = app.handle(terminal, &events, event);
+                batch_step(quit, app.yielded_terminal)
+            })
+        } else {
+            BatchStop::Handoff
+        };
+        if stopped == BatchStop::Quit {
+            break;
+        }
+        app.yielded_terminal = false;
         loop_result = app.finish_iteration(terminal);
     }
     if app.mode == Mode::Tree {
@@ -324,8 +418,20 @@ impl App {
             _ => {}
         }
 
+        // A scroll reads the row *count* and nothing else, so it never
+        // rebuilds the rows (ADR 0024). This is the hot path under a wheel
+        // burst; everything below it walks the tree.
+        if let Some(delta) = match action {
+            InputAction::ScrollUp => Some(-(self.settings.scroll_lines as isize)),
+            InputAction::ScrollDown => Some(self.settings.scroll_lines as isize),
+            _ => None,
+        } {
+            let viewport = render::tree_viewport_height(area(terminal));
+            self.scroll_rows(delta, viewport);
+            return false;
+        }
+
         let rows = self.rows();
-        let viewport = render::tree_viewport_height(area(terminal));
         // With a live search, ↑/↓ cycle the matches — in both modes now
         // (ADR 0023): the picker is the same tree, so it steps the same way.
         if let Some(state) = &self.search
@@ -350,27 +456,35 @@ impl App {
                 NavEffect::None
             }
             InputAction::Enter => self.activate(&rows, None),
-            InputAction::ScrollUp => {
-                self.view.scroll_by(&rows, -input::SCROLL_LINES, viewport);
+            // The press only arms — nothing is selected, toggled, or opened
+            // until the release lands on the same row and zone (ADR 0025).
+            InputAction::Press { column, row } => {
+                let hit = render::hit_test(
+                    &rows,
+                    &self.view,
+                    &self.settings,
+                    area(terminal),
+                    column,
+                    row,
+                );
+                self.arm_press(&rows, hit);
                 NavEffect::None
             }
-            InputAction::ScrollDown => {
-                self.view.scroll_by(&rows, input::SCROLL_LINES, viewport);
-                NavEffect::None
+            InputAction::Release { column, row } => {
+                let hit = render::hit_test(
+                    &rows,
+                    &self.view,
+                    &self.settings,
+                    area(terminal),
+                    column,
+                    row,
+                );
+                self.resolve_release(&rows, hit, Instant::now())
             }
-            InputAction::Click { column, row } => {
-                match render::hit_test(&rows, &self.view, area(terminal), column, row) {
-                    Some((idx, on_chevron)) => {
-                        self.resolve_click(&rows, idx, on_chevron, Instant::now())
-                    }
-                    None => {
-                        // Any intervening click resets a pending double.
-                        self.click_timer.disarm();
-                        NavEffect::None
-                    }
-                }
-            }
-            InputAction::Redraw
+            // Scrolling returned above, from the count-only fast path.
+            InputAction::ScrollUp
+            | InputAction::ScrollDown
+            | InputAction::Redraw
             | InputAction::Quit
             | InputAction::Char(_)
             | InputAction::Backspace
@@ -380,7 +494,10 @@ impl App {
         // and skips no-op writes, so over-marking is cheap.
         if matches!(
             action,
-            InputAction::Right | InputAction::Left | InputAction::Enter | InputAction::Click { .. }
+            InputAction::Right
+                | InputAction::Left
+                | InputAction::Enter
+                | InputAction::Release { .. }
         ) {
             self.expansion_dirty = true;
         }
@@ -524,6 +641,21 @@ impl App {
         };
         // Theme is a theme-id string, not the on/off SettingValue every other
         // key parses. The redraw at the end of the loop applies it live.
+        // Numeric settings are parsed before SettingValue, as Theme is: their
+        // value is not on/off/toggle.
+        if let SettingKey::ScrollLines = key {
+            return match value.parse::<u8>() {
+                Ok(n) if (settings::SCROLL_LINES_MIN..=settings::SCROLL_LINES_MAX).contains(&n) => {
+                    self.settings.scroll_lines = n;
+                    Response::ok(None)
+                }
+                _ => Response::err(format!(
+                    "scroll-lines must be a whole number from {} to {}",
+                    settings::SCROLL_LINES_MIN,
+                    settings::SCROLL_LINES_MAX
+                )),
+            };
+        }
         if let SettingKey::Theme = key {
             return match value.parse::<ThemeId>() {
                 Ok(id) => {
@@ -562,7 +694,12 @@ impl App {
                     self.repo_root = None;
                 }
             }
-            SettingKey::Theme => return Response::err("theme is handled before value parsing"),
+            SettingKey::Scrollbar => {
+                self.settings.scrollbar = value.apply(self.settings.scrollbar);
+            }
+            SettingKey::Theme | SettingKey::ScrollLines => {
+                return Response::err("handled before value parsing");
+            }
         }
         Response::ok(None)
     }
@@ -622,11 +759,43 @@ impl App {
         Response::ok(None)
     }
 
-    /// Click decision (ADR 0015): chevron clicks activate immediately (each
-    /// press is its own toggle, and it disarms a pending double — chevron-
+    /// Arms a press on the hit row, or on nothing when the press landed
+    /// outside the tree. Stores the row's real path, so a snapshot arriving
+    /// before the release cannot redirect the click (ADR 0025).
+    fn arm_press(&mut self, rows: &[Row], hit: Option<(usize, bool)>) {
+        self.armed_press = hit
+            .and_then(|(idx, on_chevron)| rows.get(idx).map(|row| (row.path.clone(), on_chevron)));
+    }
+
+    /// Completes an armed press, or abandons it. A click acts only when the
+    /// release lands on the same row *and* the same zone as the press; every
+    /// other outcome does nothing and clears a pending double-click, which is
+    /// how ADR 0015 already treats an intervening click (ADR 0025).
+    #[allow(clippy::doc_markdown)]
+    fn resolve_release(
+        &mut self,
+        rows: &[Row],
+        hit: Option<(usize, bool)>,
+        now: Instant,
+    ) -> NavEffect {
+        let armed = self.armed_press.take();
+        let (Some((path, armed_chevron)), Some((idx, on_chevron))) = (armed, hit) else {
+            self.click_timer.disarm();
+            return NavEffect::None;
+        };
+        if on_chevron != armed_chevron || rows.get(idx).map(|r| r.path.as_path()) != Some(&path) {
+            self.click_timer.disarm();
+            return NavEffect::None;
+        }
+        self.resolve_click(rows, idx, on_chevron, now)
+    }
+
+    /// Click decision (ADR 0015): a chevron click toggles (each completed
+    /// click is its own toggle, and it disarms a pending double — chevron-
     /// then-name fast is a select); name clicks select, and only a completed
-    /// double-click activates. Tree semantics now apply in both modes, since
-    /// the picker renders the same tree (ADR 0023).
+    /// double-click activates. Reached from the *release* (ADR 0025), never
+    /// from the press. Tree semantics apply in both modes, since the picker
+    /// renders the same tree (ADR 0023).
     fn resolve_click(
         &mut self,
         rows: &[Row],
@@ -988,6 +1157,7 @@ impl App {
         self.process_restores();
         self.step_reveal();
         let rows = self.rows();
+        self.rows_len = rows.len();
         let viewport = render::tree_viewport_height(area(terminal));
         if !self.mode.is_pick() {
             self.reconcile_watches(&rows);
@@ -1151,6 +1321,13 @@ impl App {
         }
     }
 
+    /// Scrolls by `delta` rows against the count from the last draw. Kept
+    /// separate from the rows so a wheel burst costs a clamp, not a tree walk
+    /// (ADR 0024); the clamp itself stays in `FlatView`.
+    fn scroll_rows(&mut self, delta: isize, viewport: usize) {
+        self.view.scroll_by(self.rows_len, delta, viewport);
+    }
+
     fn refresh_git(&mut self) {
         if self.settings.git
             && let Some(repo) = &self.repo_root
@@ -1192,6 +1369,7 @@ impl App {
         self.input_paused.store(true, Ordering::SeqCst);
         thread::sleep(Duration::from_millis(120));
         term::restore(self.settings.mouse, self.mode.is_pick());
+        self.yielded_terminal = true;
         let result = Command::new(program).args(args).status();
         let reentered = term::reenter(self.settings.mouse, self.mode.is_pick());
         self.input_paused.store(false, Ordering::SeqCst);
@@ -1328,6 +1506,9 @@ mod tests {
             picked: None,
             input_paused: Arc::new(AtomicBool::new(false)),
             click_timer: input::ClickTimer::default(),
+            armed_press: None,
+            rows_len: 0,
+            yielded_terminal: false,
         };
         app.tree.set_expanded(Path::new("/r"), true);
         Harness {
@@ -2030,7 +2211,8 @@ mod tests {
         let rows = h.app.rows();
         let viewport = 10;
         h.app.view.reconcile(&rows, viewport); // consumes the reveal's follow
-        h.app.view.scroll_by(&rows, 12, viewport);
+        h.app.rows_len = rows.len();
+        h.app.scroll_rows(12, viewport);
         assert_eq!(h.app.view.scroll, 12);
 
         // Redraws keep coming while the search is live; none of them may drag
@@ -2065,7 +2247,8 @@ mod tests {
         let rows = h.app.rows();
         let viewport = 10;
         h.app.view.reconcile(&rows, viewport);
-        h.app.view.scroll_by(&rows, 20, viewport);
+        h.app.rows_len = rows.len();
+        h.app.scroll_rows(20, viewport);
         let scrolled = h.app.view.scroll;
         assert!(scrolled > 0, "the wheel moved the viewport");
 
@@ -2080,7 +2263,8 @@ mod tests {
         );
 
         // Typing still takes the pane to the match it selects.
-        h.app.view.scroll_by(&rows, 5, viewport);
+        h.app.rows_len = rows.len();
+        h.app.scroll_rows(5, viewport);
         h.app.search_pop();
         let rows = h.app.rows();
         h.app.view.reconcile(&rows, viewport);
@@ -2247,6 +2431,345 @@ mod tests {
         assert!(
             h.app.view.selection.is_none(),
             "no live row means no selection, not a phantom one"
+        );
+    }
+
+    // ---- ADR 0024: one frame per batch ----
+
+    #[test]
+    fn a_handoff_or_a_quit_closes_the_batch() {
+        // The rule the loop asks before opening a batch and after every event
+        // inside one (ADR 0024, decision 4). A hand-off in the event that
+        // opened the batch must stop it before a single queued event runs.
+        assert_eq!(batch_step(false, false), BatchStep::Continue);
+        assert_eq!(batch_step(false, true), BatchStep::Stop);
+        assert_eq!(batch_step(true, false), BatchStep::Quit);
+        // Quitting wins: nothing may run behind it either.
+        assert_eq!(batch_step(true, true), BatchStep::Quit);
+    }
+
+    #[test]
+    fn drain_batch_takes_everything_already_queued() {
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..5 {
+            tx.send(AppEvent::Shutdown).unwrap();
+        }
+        let mut seen = 0;
+        let stop = drain_batch(&rx, Instant::now() + Duration::from_secs(5), |_| {
+            seen += 1;
+            BatchStep::Continue
+        });
+        assert_eq!(seen, 5);
+        assert_eq!(stop, BatchStop::Drained);
+    }
+
+    #[test]
+    fn drain_batch_never_blocks_on_an_empty_channel() {
+        // An idle birch must still draw one frame per event, so a batch that
+        // finds nothing queued returns at once rather than waiting out its
+        // budget.
+        let (_tx, rx) = mpsc::channel::<AppEvent>();
+        let started = Instant::now();
+        let stop = drain_batch(&rx, started + Duration::from_secs(30), |_| {
+            BatchStep::Continue
+        });
+        assert_eq!(stop, BatchStop::Drained);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn drain_batch_stops_at_the_budget() {
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..500 {
+            tx.send(AppEvent::Shutdown).unwrap();
+        }
+        let mut seen = 0;
+        // A budget already spent draws before consuming anything more.
+        let stop = drain_batch(&rx, Instant::now(), |_| {
+            seen += 1;
+            BatchStep::Continue
+        });
+        assert_eq!(seen, 0);
+        assert_eq!(stop, BatchStop::Budget);
+    }
+
+    #[test]
+    fn drain_batch_ends_on_handoff_and_on_quit() {
+        for (step, expected) in [
+            (BatchStep::Stop, BatchStop::Handoff),
+            (BatchStep::Quit, BatchStop::Quit),
+        ] {
+            let (tx, rx) = mpsc::channel();
+            for _ in 0..4 {
+                tx.send(AppEvent::Shutdown).unwrap();
+            }
+            let mut seen = 0;
+            let stop = drain_batch(&rx, Instant::now() + Duration::from_secs(5), |_| {
+                seen += 1;
+                step
+            });
+            // The event that stopped the batch was handled; the rest were not.
+            assert_eq!(seen, 1);
+            assert_eq!(stop, expected);
+        }
+    }
+
+    #[test]
+    fn scroll_uses_the_cached_row_count_not_a_rebuild() {
+        let mut h = harness(Mode::Tree);
+        h.app.rows_len = 100;
+        h.app.scroll_rows(30, 10);
+        assert_eq!(h.app.view.scroll, 30);
+        // Clamped to rows_len - viewport, so overscrolling stops rather than
+        // running away.
+        h.app.scroll_rows(1000, 10);
+        assert_eq!(h.app.view.scroll, 90);
+        h.app.scroll_rows(-1000, 10);
+        assert_eq!(h.app.view.scroll, 0);
+    }
+
+    #[test]
+    fn scroll_does_nothing_when_the_rows_fit() {
+        let mut h = harness(Mode::Tree);
+        h.app.rows_len = 4;
+        h.app.scroll_rows(30, 10);
+        assert_eq!(h.app.view.scroll, 0);
+    }
+
+    #[test]
+    fn ctl_set_scroll_lines_accepts_the_range_and_refuses_the_rest() {
+        let mut h = harness(Mode::Tree);
+        let mut req = Request::new(Verb::Set);
+        req.setting = Some(SettingKey::ScrollLines);
+
+        req.value = Some("7".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert_eq!(h.app.settings.scroll_lines, 7);
+
+        // Out of range, not a number, and empty are all refused, and none of
+        // them disturbs the value already set.
+        for bad in ["0", "11", "250", "abc", "", "-1", "3.5"] {
+            req.value = Some(bad.into());
+            let reply = h.app.ctl_response(req.clone()).0;
+            assert!(!reply.ok, "{bad} should be refused");
+            assert_eq!(h.app.settings.scroll_lines, 7, "{bad} changed the value");
+        }
+    }
+
+    #[test]
+    fn ctl_set_scrollbar_toggles_like_its_neighbours() {
+        let mut h = harness(Mode::Tree);
+        let mut req = Request::new(Verb::Set);
+        req.setting = Some(SettingKey::Scrollbar);
+        assert!(h.app.settings.scrollbar);
+        req.value = Some("off".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert!(!h.app.settings.scrollbar);
+        req.value = Some("toggle".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert!(h.app.settings.scrollbar);
+        req.value = Some("maybe".into());
+        assert!(!h.app.ctl_response(req).0.ok, "not a SettingValue");
+        assert!(h.app.settings.scrollbar, "a refusal changes nothing");
+    }
+
+    #[test]
+    fn scroll_distance_follows_the_setting() {
+        let mut h = harness(Mode::Tree);
+        h.app.rows_len = 1000;
+        h.app.settings.scroll_lines = 1;
+        h.app.scroll_rows(h.app.settings.scroll_lines as isize, 10);
+        assert_eq!(h.app.view.scroll, 1);
+        h.app.settings.scroll_lines = 10;
+        h.app.scroll_rows(h.app.settings.scroll_lines as isize, 10);
+        assert_eq!(h.app.view.scroll, 11);
+    }
+
+    // ---- ADR 0025: a click completes on release ----
+
+    /// Arms a press on `idx` and returns the hit tuple a release would carry.
+    fn press(app: &mut App, rows: &[Row], idx: usize, on_chevron: bool) {
+        app.armed_press = Some((rows[idx].path.clone(), on_chevron));
+    }
+
+    #[test]
+    fn arming_resolves_the_hit_to_a_real_path() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a", NodeKind::File), ("b", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        h.app.arm_press(&rows, Some((2, false)));
+        assert_eq!(
+            h.app.armed_press,
+            Some((rows[2].path.clone(), false)),
+            "the arm keys on the row's real path, not its index"
+        );
+        h.app.arm_press(&rows, Some((1, true)));
+        assert_eq!(h.app.armed_press, Some((rows[1].path.clone(), true)));
+        // A press outside the tree arms nothing.
+        h.app.arm_press(&rows, None);
+        assert_eq!(h.app.armed_press, None);
+        // A hit past the end cannot panic or arm a phantom row.
+        h.app.arm_press(&rows, Some((999, false)));
+        assert_eq!(h.app.armed_press, None);
+    }
+
+    #[test]
+    fn press_alone_selects_nothing() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a", NodeKind::File), ("b", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        let before = h.app.view.selection.clone();
+        press(&mut h.app, &rows, 2, false);
+        assert_eq!(h.app.view.selection, before, "a press must not select");
+    }
+
+    #[test]
+    fn release_on_the_pressed_row_selects() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a", NodeKind::File), ("b", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        press(&mut h.app, &rows, 2, false);
+        h.app
+            .resolve_release(&rows, Some((2, false)), Instant::now());
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(rows[2].path.as_path())
+        );
+        assert!(h.app.armed_press.is_none(), "the arm is spent");
+    }
+
+    #[test]
+    fn release_on_a_different_row_does_nothing() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a", NodeKind::File), ("b", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        let before = h.app.view.selection.clone();
+        press(&mut h.app, &rows, 1, false);
+        h.app
+            .resolve_release(&rows, Some((2, false)), Instant::now());
+        assert_eq!(
+            h.app.view.selection, before,
+            "sliding off the pressed row revokes the click"
+        );
+        assert!(h.app.armed_press.is_none());
+    }
+
+    #[test]
+    fn release_outside_the_tree_does_nothing() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
+        let rows = h.app.rows();
+        let before = h.app.view.selection.clone();
+        press(&mut h.app, &rows, 1, false);
+        h.app.resolve_release(&rows, None, Instant::now());
+        assert_eq!(h.app.view.selection, before);
+    }
+
+    #[test]
+    fn a_release_with_no_press_does_nothing() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
+        let rows = h.app.rows();
+        let before = h.app.view.selection.clone();
+        h.app
+            .resolve_release(&rows, Some((1, false)), Instant::now());
+        assert_eq!(h.app.view.selection, before);
+    }
+
+    #[test]
+    fn a_press_on_the_chevron_released_on_the_name_does_not_toggle() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("sub", NodeKind::Dir)]);
+        feed(&mut h.app, "/r/sub", &[("f", NodeKind::File)]);
+        let rows = h.app.rows();
+        let expanded = h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded;
+        press(&mut h.app, &rows, 1, true);
+        h.app
+            .resolve_release(&rows, Some((1, false)), Instant::now());
+        assert_eq!(
+            h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded,
+            expanded,
+            "the zones differ, so the click is abandoned"
+        );
+    }
+
+    #[test]
+    fn two_complete_clicks_activate_but_press_release_press_does_not() {
+        let mut h = harness(Mode::Pick);
+        feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
+        let rows = h.app.rows();
+        let t0 = Instant::now();
+        press(&mut h.app, &rows, 1, false);
+        h.app.resolve_release(&rows, Some((1, false)), t0);
+        assert!(h.app.picked.is_none(), "one click only selects");
+        // A second press without its release must not activate.
+        press(&mut h.app, &rows, 1, false);
+        assert!(h.app.picked.is_none());
+        h.app
+            .resolve_release(&rows, Some((1, false)), t0 + Duration::from_millis(100));
+        assert_eq!(
+            h.app.picked.as_deref(),
+            Some(rows[1].path.as_path()),
+            "two complete clicks activate"
+        );
+    }
+
+    #[test]
+    fn the_double_click_window_is_measured_release_to_release() {
+        let mut h = harness(Mode::Pick);
+        feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
+        let rows = h.app.rows();
+        let t0 = Instant::now();
+        press(&mut h.app, &rows, 1, false);
+        h.app.resolve_release(&rows, Some((1, false)), t0);
+        press(&mut h.app, &rows, 1, false);
+        // Beyond the window: a slow second click is two singles, not a double.
+        h.app.resolve_release(
+            &rows,
+            Some((1, false)),
+            t0 + input::DOUBLE_CLICK_WINDOW + Duration::from_millis(1),
+        );
+        assert!(h.app.picked.is_none());
+    }
+
+    #[test]
+    fn an_abandoned_click_clears_a_pending_double() {
+        let mut h = harness(Mode::Pick);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a", NodeKind::File), ("b", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        let t0 = Instant::now();
+        press(&mut h.app, &rows, 1, false);
+        h.app.resolve_release(&rows, Some((1, false)), t0);
+        // A press released elsewhere is an intervening click: it resets.
+        press(&mut h.app, &rows, 1, false);
+        h.app
+            .resolve_release(&rows, Some((2, false)), t0 + Duration::from_millis(50));
+        press(&mut h.app, &rows, 1, false);
+        h.app
+            .resolve_release(&rows, Some((1, false)), t0 + Duration::from_millis(100));
+        assert!(
+            h.app.picked.is_none(),
+            "the abandoned click reset the double"
         );
     }
 }

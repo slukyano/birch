@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Pointer feel
-status: Implementing
+status: Done
 branch: sprint/017
 tasks:
 - 069-fix-wheel-scrolling
@@ -98,15 +98,136 @@ reproduction precedes design.
 
 # Checklist
 
-- [ ] 069-fix-wheel-scrolling
-- [ ] 075-configurable-scroll-speed
-- [ ] 067-select-on-mouse-up
-- [ ] 068-add-scrollbar
+- [x] 069-fix-wheel-scrolling
+- [x] 075-configurable-scroll-speed
+- [x] 067-select-on-mouse-up
+- [x] 068-add-scrollbar
 
 # Open questions
 
 _(none open — `069`'s two were settled: the batch is bounded by a ~8 ms time budget rather than an
 event count, and the loop contract is recorded as ADR 0024.)_
+
+# Sprint summary
+
+The mouse became trustworthy, and the loop underneath it stopped being the bottleneck.
+
+**`069` was not the task it was written as.** The report was wheel-specific — "runs away sometimes,
+overscrolling makes it all freeze" — and the file named viewport-driven peek-loading as the leading
+suspect. A PTY harness feeding synthetic SGR wheel events, measuring how long a keystroke waits
+behind a burst, moved the diagnosis entirely: peeks accounted for ~18 % (`--no-compact`), git for
+none (`--no-git`), and a burst of 1 000 `Down` keypresses froze the pane identically at 3 516 ms.
+The defect was the event loop — one event cost a full O(all visible rows) rebuild, paid twice per
+input event, behind an unbounded channel — and the wheel was merely the only device that emits
+hundreds of events per second. The task was retitled **"Input bursts freeze the pane"** so the
+archive records what was actually wrong, and the loop contract became
+[ADR 0024](../../docs/adr/0024-the-loop-draws-once-per-batch.md).
+
+**`067` settled a question two unbuilt features were waiting on.** Moving the click to the release
+is a feel fix on its own, but `071` (does right-click move the selection?) and `072` (where does a
+drag threshold live?) both build on whatever press-vs-release rule holds, and settling it inside the
+context menu's design would have been more expensive.
+[ADR 0025](../../docs/adr/0025-a-click-completes-on-release.md) gives them a contract to cite.
+
+**`075` arrived mid-sprint** at the maintainer's request and is the only scope growth.
+
+# Task ledger
+
+| Task | Weight | What changed |
+|---|---|---|
+| [`069-fix-wheel-scrolling`](../archive/069-fix-wheel-scrolling.md) | **major** | An input burst froze the pane; the loop now handles a batch of queued events and draws once, and scrolling reads a cached row count instead of rebuilding rows. Planned as peek rate-limiting; measurement disproved that suspect and the task was retitled from "Mouse-wheel scrolling feels broken". |
+| [`075-configurable-scroll-speed`](../archive/075-configurable-scroll-speed.md) | mid | Rows per wheel tick became a setting (1–10, default 3) across flag, config, and socket. Created during the design phase at the maintainer's request; not in the approved scope. |
+| [`067-select-on-mouse-up`](../archive/067-select-on-mouse-up.md) | mid | A click became a press and a release on the same row and zone, acting on the release. Delivered as designed; the one open question — whether the chevron keeps button-down — resolved to a single rule for every affordance. |
+| [`068-add-scrollbar`](../archive/068-add-scrollbar.md) | mid | A one-column indicator at the right edge, shown only when rows overflow, inert to clicks. Delivered as designed. |
+| [`076-search-unusable-on-large-roots`](../tasks/076-search-unusable-on-large-roots.md) | — | Created this sprint from a maintainer report, `Draft`, not worked: from `$HOME` the index never lands and the status line claims "no matches". |
+| [`077-quit-swallowed-during-terminal-handover`](../tasks/077-quit-swallowed-during-terminal-handover.md) | — | Created this sprint from the independent review, `Draft`, not worked: a pre-existing bug outside the diff. |
+
+# Public-surface delta
+
+| Surface | Addition |
+|---|---|
+| CLI | `--scroll-lines <n>` (1–10), `--no-scrollbar` (and hidden `--scrollbar`) |
+| Config (`birch.toml`) | `scroll-lines`, `scrollbar` |
+| Socket | `SettingKey::ScrollLines`, `SettingKey::Scrollbar` — additive only |
+| `birch ctl` | `set scroll-lines <n>`, `set scrollbar <on\|off\|toggle>` |
+
+`069` and `067` add no public surface. No breaking changes. The binding spec
+([`docs/design.md`](../../docs/design.md)) was amended to match: both settings joined the Defaults
+table, and the Mouse section gained the release rule and lost the claim that a chevron acts on the
+press.
+
+# Architectural decisions
+
+- **[ADR 0024](../../docs/adr/0024-the-loop-draws-once-per-batch.md)** — an iteration of the loop
+  handles a *batch* of events and draws once, bounded by an ~8 ms budget. Every event is still
+  handled, in order; only the frame is deferred. Quitting and terminal hand-off close a batch at
+  once, and an event computes the row set only if it needs one.
+- **[ADR 0025](../../docs/adr/0025-a-click-completes-on-release.md)** — a click is a press and a
+  release on the same row and zone, taking effect on the release; anything else abandons it. The
+  double-click window measures release to release. ADR 0015 stands except for its moment.
+
+# Bugs found & fixed
+
+Found by the **independent review** — no majors. Nine minor findings and two nits: all nine minors
+and one nit (the selection wash) are fixed below; the other nit was that the backlog had not been
+closed out yet, which this section's own commit did.
+
+- A hand-off in the event that *opened* a batch let exactly one queued event run behind the child —
+  the flag was checked after handling, not before. Both call sites now share one tested rule.
+- `scroll-lines` above 255 failed to parse as a `u8` and discarded the **whole config file**,
+  clamping only below that. Read as the widest integer TOML carries, so 300 clamps to 10.
+- *(Withdrawn.)* A status message arriving mid-batch was reported as losable — cleared by a later
+  event in the same batch and never drawn. A guard was written, then removed: with an unreadable
+  directory expanded from inside a sustained wheel burst, the message reached a frame on every run
+  both with and without the guard. The finding was reasoned rather than observed, and no
+  reproduction exists, so the special case was not kept.
+- `thumb()` returned a full-height thumb for a one-row track, claiming top and bottom at once.
+- The selection wash painted over the scrollbar column, erasing the track on the selected row in
+  the themes where the guide colour equals the wash.
+- `FlatView::scroll_by` had no caller left while the app duplicated its clamp.
+- The ADR 0015 doc comment had been separated from `resolve_click` and still described the chevron
+  as acting on the press.
+- Six code paths had no test: the socket `scrollbar` key, the config `scrollbar` branch, arming
+  from a hit, the batch rule, a pane too narrow for the furniture, and the wash boundary.
+- `README.md`'s `ctl set` key list and `CHANGELOG.md`'s `Unreleased` section were missing this
+  sprint's four user-visible changes.
+
+Found during implementation, by a property test over many row/viewport combinations: `thumb()`
+panicked when the track had a single free slot (a 2-row viewport), where three states cannot be
+shown. The bottom stays exact there and the top slot is shared.
+
+# Remaining limitations & highlights
+
+- **Keyboard navigation is still O(rows) per event.** `Down` must skip dim rows, so it cannot use
+  the scroll fast path: 3 ms at a realistic 50 keys/s on a 9 156-row tree, but 1 382 ms under a
+  synthetic 2 500/s burst — a rate no keyboard produces. ADR 0024 records the shape of this
+  ("per-event work is now worth auditing; the linear-in-rows cost stands"); the two figures are
+  measured here and appear nowhere else.
+- **Intermediate frames are not drawn.** A 300-event flick renders the destination, not the
+  journey. This is the intent — those frames were paid for and never seen.
+- **The per-gesture event count of a real trackpad is unmeasured.** Synthetic `CGEvent` scrolls
+  cannot reproduce momentum phases, which originate in the trackpad driver. It bounds the perceived
+  *distance* of a flick, never the freeze; every tick provably moves exactly `scroll_lines` rows.
+- **The bar is shown whenever scrolling is possible**, and the free space is the message: the thumb
+  never fills the track, so space above it means "more above" and space below means "more below".
+  It is capped at four fifths of the track, since a thumb that nearly fills its track reads as
+  "nothing to scroll". Only two panes show no bar: one whose rows fit, and a single-cell track,
+  which cannot seat a thumb and a gap at once. A pane **4 columns wide or narrower** also shows
+  none — the badge gutter and the bar would leave the names nothing.
+- **`--pick` from a home-sized root still cannot search** (`076`), and **a quit during a terminal
+  handover is still swallowed** (`077`). Both are filed, neither is fixed.
+
+# Verification
+
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` — all green;
+  **206 tests** (58 + 66 + 82).
+- Hands-on, through real PTYs: scroll distance at `scroll-lines` 1/3/5/7/10 via flag, config, and
+  live `ctl set`; out-of-range refused by flag and socket and clamped by config; press-only inert,
+  press-and-release selecting, slide-off revoking, chevron press released on the name not toggling,
+  each observed through `ctl get-path`; the scrollbar looked at on screen at the top, at the
+  bottom, with `--no-scrollbar`, with a tree that fits, and in a 14-column pane.
+- Latency re-measured after every subsequent change: flick 785 ms → **0–4 ms**, overscroll
+  3 483 ms → **0–3 ms**.
 
 # Session log
 
@@ -128,3 +249,7 @@ event count, and the loop contract is recorded as ADR 0024.)_
 - `069` and `075` designs approved. Settled with them: the batch takes a ~8 ms time budget, the
   loop contract becomes **ADR 0024** (`Proposed`), `075` keeps the 1–10 range, and `069` is
   retitled "Input bursts freeze the pane" since the keyboard freezes identically.
+- Independent review: no majors, ten minor findings, all fixed — including one queued event running
+  behind a terminal hand-off, a `scroll-lines` above 255 discarding the whole config file, and a
+  mid-batch status message that could never be drawn. A pre-existing quit-swallow the review found
+  outside the diff became `077`. Closed out; gates green.

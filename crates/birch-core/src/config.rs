@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::settings::{Settings, ThemeId};
+use crate::settings::{Settings, ThemeId, clamp_scroll_lines};
 
 /// A partial set of personal defaults parsed from the TOML config. Every field
 /// is optional — a missing key means "no opinion, use the built-in default".
@@ -26,6 +26,8 @@ pub struct Config {
     pub compact: Option<bool>,
     pub mouse: Option<bool>,
     pub open_cmd: Option<String>,
+    pub scroll_lines: Option<i64>,
+    pub scrollbar: Option<bool>,
 }
 
 impl Config {
@@ -101,6 +103,14 @@ impl Config {
         if let Some(mouse) = self.mouse {
             s.mouse = mouse;
         }
+        if let Some(scrollbar) = self.scrollbar {
+            s.scrollbar = scrollbar;
+        }
+        // Out of range degrades rather than failing: a config file must never
+        // block launch (ADR 0022).
+        if let Some(scroll_lines) = self.scroll_lines {
+            s.scroll_lines = clamp_scroll_lines(scroll_lines);
+        }
     }
 }
 
@@ -124,6 +134,8 @@ mod tests {
             compact = false
             mouse = false
             open-cmd = "code {}"
+            scroll-lines = 5
+            scrollbar = false
         "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.theme, Some(ThemeId::Jetbrains));
@@ -135,6 +147,8 @@ mod tests {
         assert_eq!(config.compact, Some(false));
         assert_eq!(config.mouse, Some(false));
         assert_eq!(config.open_cmd.as_deref(), Some("code {}"));
+        assert_eq!(config.scroll_lines, Some(5));
+        assert_eq!(config.scrollbar, Some(false));
     }
 
     #[test]
@@ -198,6 +212,8 @@ mod tests {
             compact: Some(false),
             mouse: Some(false),
             open_cmd: Some("vim {}".into()),
+            scroll_lines: None,
+            scrollbar: None,
         };
         let mut settings = Settings::default();
         config.apply_to(&mut settings);
@@ -233,5 +249,66 @@ mod tests {
         // and asserts the shape of the resolved path.
         let path = Config::path();
         assert!(path.ends_with("birch/birch.toml"));
+    }
+
+    #[test]
+    fn scroll_lines_out_of_range_is_clamped_not_rejected() {
+        // A config file must never block launch (ADR 0022), so an impossible
+        // value degrades into the accepted range.
+        let mut s = Settings::default();
+        Config {
+            scroll_lines: Some(250),
+            ..Config::default()
+        }
+        .apply_to(&mut s);
+        assert_eq!(s.scroll_lines, crate::settings::SCROLL_LINES_MAX);
+
+        let mut s = Settings::default();
+        Config {
+            scroll_lines: Some(0),
+            ..Config::default()
+        }
+        .apply_to(&mut s);
+        assert_eq!(s.scroll_lines, crate::settings::SCROLL_LINES_MIN);
+    }
+
+    #[test]
+    fn a_scroll_lines_too_large_for_a_byte_still_clamps() {
+        // The value must degrade on its own, not take the rest of the file
+        // with it: a parse failure discards every other key too (ADR 0022).
+        let toml = r#"
+            theme = "nord"
+            scroll-lines = 300
+        "#;
+        let config: Config = toml::from_str(toml).expect("still parses");
+        let mut s = Settings::default();
+        config.apply_to(&mut s);
+        assert_eq!(s.scroll_lines, crate::settings::SCROLL_LINES_MAX);
+        assert_eq!(s.theme, ThemeId::Nord, "the rest of the file survived");
+
+        let toml = "scroll-lines = -7";
+        let config: Config = toml::from_str(toml).expect("still parses");
+        let mut s = Settings::default();
+        config.apply_to(&mut s);
+        assert_eq!(s.scroll_lines, crate::settings::SCROLL_LINES_MIN);
+    }
+
+    #[test]
+    fn scrollbar_applies_from_the_config() {
+        let mut s = Settings::default();
+        assert!(s.scrollbar, "on by default");
+        Config {
+            scrollbar: Some(false),
+            ..Config::default()
+        }
+        .apply_to(&mut s);
+        assert!(!s.scrollbar);
+    }
+
+    #[test]
+    fn absent_scroll_lines_keeps_the_default() {
+        let mut s = Settings::default();
+        Config::default().apply_to(&mut s);
+        assert_eq!(s.scroll_lines, crate::settings::SCROLL_LINES_DEFAULT);
     }
 }

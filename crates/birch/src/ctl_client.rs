@@ -53,7 +53,7 @@ enum VerbCmd {
         setting: SettingArg,
         /// on/off/true/false/1/0/toggle — or, for `theme`, a theme id
         /// (birch/vscode/jetbrains/xcode/mocha/tokyonight/gruvbox/nord/
-        /// rosepine/retro/plain).
+        /// rosepine/retro/plain); scroll-lines takes a number from 1 to 10.
         value: String,
     },
     /// Re-root the tree.
@@ -73,6 +73,8 @@ enum SettingArg {
     Compact,
     Git,
     Theme,
+    Scrollbar,
+    ScrollLines,
 }
 
 impl From<SettingArg> for SettingKey {
@@ -85,6 +87,8 @@ impl From<SettingArg> for SettingKey {
             SettingArg::Compact => SettingKey::Compact,
             SettingArg::Git => SettingKey::Git,
             SettingArg::Theme => SettingKey::Theme,
+            SettingArg::Scrollbar => SettingKey::Scrollbar,
+            SettingArg::ScrollLines => SettingKey::ScrollLines,
         }
     }
 }

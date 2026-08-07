@@ -5,6 +5,32 @@ All notable changes to birch are documented here, following
 
 ## [Unreleased]
 
+### Added
+
+- **Configurable scroll speed**: `--scroll-lines <n>` (1–10, default 3), the `scroll-lines` config
+  key, and `birch ctl set scroll-lines <n>` at runtime. Out of range is refused by the flag and by
+  the socket, and clamped by the config file, which never blocks launch.
+- **A scrollbar** on the pane's right edge, shown whenever the rows overflow the viewport and
+  hidden when everything fits. The thumb never fills the track: space above it means there is more
+  above, space below means more below. Off with `--no-scrollbar`, the `scrollbar` config key, or
+  `birch ctl set scrollbar off`. Its column does not accept clicks.
+
+### Changed
+
+- **A click now completes on release** rather than on press, and only when the release lands on the
+  row and zone the press started on — so a click can be revoked by sliding off before letting go.
+  The double-click window measures release to release, i.e. two complete clicks
+  ([ADR 0025](docs/adr/0025-a-click-completes-on-release.md)).
+
+### Fixed
+
+- **A burst of input no longer freezes the pane.** Every event cost a full rebuild of every visible
+  row — twice per input event — behind an unbounded queue, so a fast scroll kept moving for seconds
+  after the fingers stopped and answered no keystroke meanwhile. The loop now handles a whole batch
+  of queued events and draws once, and scrolling no longer rebuilds the rows at all. On a
+  9 000-row tree a hard flick went from 785 ms unresponsive to 4 ms, and an overscrolled burst from
+  3 483 ms to 3 ms ([ADR 0024](docs/adr/0024-the-loop-draws-once-per-batch.md)).
+
 ## [0.2.0] - 2026-08-05
 
 Search and the picker became one thing. A search or a filter now **dims** rows instead of replacing

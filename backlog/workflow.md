@@ -287,6 +287,51 @@ Under the heading:
 Each question must be understandable **on its own** — no reliance on the prose above it, on an
 earlier message, or on a file. The TLDR repeats what a decision needs rather than referring to it.
 
+**Nothing else belongs in it.** The TLDR is read first and often alone, bottom-up; the prose above
+exists to be double-clicked into, not summarised a second time. The bar is *just enough to make
+scrolling up unnecessary* — and no more. Measurements, narrative, file lists, what was tried and
+rejected, per-item detail that does not change an answer: all of that goes above the separator.
+
+- **Gates are one line**: green or not, and the names of the checks that ran — e.g. *gates green
+  (cargo fmt, clippy, tests, independent review)*. Test counts, timings, and per-check output stay
+  above.
+- **A fact earns its place only by changing a decision.** If the answer is the same whether or not
+  the maintainer knows it, it is not TLDR material.
+
+### Standard sections
+
+In this order, **omitting any that is empty**:
+
+1. **Fixed** — one line per item: slug plus a few words, not a sentence. Includes scope creep and
+   any extra work beyond the approved set, marked as such.
+2. **Scope rejected** — what the sprint took on and did *not* deliver, dropped after the scope was
+   approved. Never lists what was never in the started scope.
+3. **ADRs** — what each decides, summarised.
+4. **Surfaces** — what changed in the public surface, summarised.
+5. **Backlog changes** — tasks created, removed, or modified outside the sprint scope; anything
+   filed or left unfixed lands here. Informational: **no approval is asked for these.**
+6. **Gates** — one line, per above.
+7. **The asks**, numbered. An ask exists for every decision not already approved explicitly — a new
+   or changed ADR, a decision taken during implementation the approved design did not cover.
+   **The ask to merge is always last.**
+
+There is no notes section, and no section for commentary. If an item is not one of the above, the
+threshold for mentioning it at all is that a decision changes without it.
+
+**Every ask has a matching section above the TLDR**, one per ask, carrying the context the ask
+itself is too short to hold: what the decision is, what the alternatives were, and the references
+worth opening — task slugs, ADRs, key files with line numbers. The ask stays one or two lines; the
+section above it is where the reasoning lives.
+
+Each section **names its ask in its heading** — `## Ask 1 — <the question>` — so the pairing is
+obvious from either direction and survives renumbering. Sections appear in ask order.
+
+**An ask is a question or a choice, never a topic.** "Ask 1 — the wash and the scrollbar" is a
+subject line; "Ask 1 — should the selection highlight stop short of the scrollbar?" is an ask. For
+an approval, state the **lasting effect being approved** — how the thing behaves from now on —
+rather than the edit that produced it, because the edit is not what is being agreed to. The same
+sentence opens the section, so the decision is legible without reading the reasoning under it.
+
 Every presentation is **self-contained**: full context and the explicit question(s) spelled out
 each time, never "as before" or a bare pointer. **Final approvals** (scope, design, implementation)
 are always presented on the **complete** artifact as a whole; partial or incremental presentations

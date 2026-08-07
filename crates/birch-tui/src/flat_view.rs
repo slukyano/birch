@@ -734,8 +734,11 @@ impl FlatView {
         }
     }
 
-    pub fn scroll_by(&mut self, rows: &[Row], delta: isize, viewport: usize) {
-        let max_scroll = rows.len().saturating_sub(viewport);
+    /// Scrolls by `delta`, clamped to the last full screen. Takes the row
+    /// *count* rather than the rows: a wheel burst must not need a tree walk
+    /// (ADR 0024), and this is the single place the clamp lives.
+    pub fn scroll_by(&mut self, rows_len: usize, delta: isize, viewport: usize) {
+        let max_scroll = rows_len.saturating_sub(viewport);
         self.scroll = self.scroll.saturating_add_signed(delta).min(max_scroll);
     }
 
@@ -1563,7 +1566,7 @@ mod tests {
         fv.reconcile(&rows, 2);
         assert_eq!(fv.scroll, 0);
 
-        fv.scroll_by(&rows, 3, 2);
+        fv.scroll_by(rows.len(), 3, 2);
         assert_eq!(fv.scroll, 3);
         fv.reconcile(&rows, 2);
         assert_eq!(fv.scroll, 3);
@@ -1581,7 +1584,7 @@ mod tests {
         let rows = rows_plain(&tree);
         fv.selection = Some("/r/readme.md".into());
         fv.sync(&rows);
-        fv.scroll_by(&rows, 100, 2);
+        fv.scroll_by(rows.len(), 100, 2);
         assert_eq!(fv.scroll, 4); // 6 rows - viewport 2
 
         tree.set_expanded(Path::new("/r/src"), false);
