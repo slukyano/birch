@@ -124,11 +124,6 @@ struct App {
     /// Set when a child process owned the terminal, so the batch ends and the
     /// screen it left is redrawn at once (ADR 0024).
     yielded_terminal: bool,
-    /// Set when a status message arrived in the batch now being assembled. A
-    /// batch draws once, so without this an input event later in the same
-    /// batch would clear the message before any frame showed it — deferring
-    /// the frame must not change what the user sees (ADR 0024, decision 2).
-    status_fresh: bool,
 }
 
 /// Runs the app; in picker mode the returned path is the confirmed pick.
@@ -244,7 +239,6 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         armed_press: None,
         rows_len: 0,
         yielded_terminal: false,
-        status_fresh: false,
     };
 
     if app.mode == Mode::Tree {
@@ -328,10 +322,7 @@ impl App {
                     self.tree.apply(delta);
                 }
             }
-            SourceEvent::Message(message) => {
-                self.status = message;
-                self.status_fresh = true;
-            }
+            SourceEvent::Message(message) => self.status = message,
         }
     }
 
@@ -409,11 +400,7 @@ impl App {
         if action == InputAction::Quit {
             return true;
         }
-        // Transient — but a message that arrived earlier in this same batch has
-        // not been drawn yet, and clearing it here would erase it unseen.
-        if !self.status_fresh {
-            self.status.clear();
-        }
+        self.status.clear(); // status messages are transient
 
         // Search editing works the same in both modes.
         match action {
@@ -1184,8 +1171,6 @@ impl App {
         let theme = Theme::for_id(self.settings.theme);
         let (view, settings) = (&self.view, &self.settings);
         terminal.draw(|frame| render::draw(frame, &rows, view, settings, &theme, &bottom))?;
-        // The frame showed whatever arrived; the next batch may clear it again.
-        self.status_fresh = false;
         Ok(())
     }
 
@@ -1524,7 +1509,6 @@ mod tests {
             armed_press: None,
             rows_len: 0,
             yielded_terminal: false,
-            status_fresh: false,
         };
         app.tree.set_expanded(Path::new("/r"), true);
         Harness {

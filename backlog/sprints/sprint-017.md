@@ -176,8 +176,11 @@ closed out yet, which this section's own commit did.
   the flag was checked after handling, not before. Both call sites now share one tested rule.
 - `scroll-lines` above 255 failed to parse as a `u8` and discarded the **whole config file**,
   clamping only below that. Read as the widest integer TOML carries, so 300 clamps to 10.
-- A status message arriving mid-batch could be cleared by a later event in the same batch and never
-  drawn — precisely what deferring the frame was not supposed to change.
+- *(Withdrawn.)* A status message arriving mid-batch was reported as losable — cleared by a later
+  event in the same batch and never drawn. A guard was written, then removed: with an unreadable
+  directory expanded from inside a sustained wheel burst, the message reached a frame on every run
+  both with and without the guard. The finding was reasoned rather than observed, and no
+  reproduction exists, so the special case was not kept.
 - `thumb()` returned a full-height thumb for a one-row track, claiming top and bottom at once.
 - The selection wash painted over the scrollbar column, erasing the track on the selected row in
   the themes where the guide colour equals the wash.
