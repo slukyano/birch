@@ -323,6 +323,9 @@ itself is too short to hold: what the decision is, what the alternatives were, a
 worth opening — task slugs, ADRs, key files with line numbers. The ask stays one or two lines; the
 section above it is where the reasoning lives.
 
+Each section **names its ask in its heading** — `## Ask 1 — <topic>` — so the pairing is obvious
+from either direction and survives renumbering. Sections appear in ask order.
+
 Every presentation is **self-contained**: full context and the explicit question(s) spelled out
 each time, never "as before" or a bare pointer. **Final approvals** (scope, design, implementation)
 are always presented on the **complete** artifact as a whole; partial or incremental presentations
