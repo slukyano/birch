@@ -287,6 +287,17 @@ Under the heading:
 Each question must be understandable **on its own** — no reliance on the prose above it, on an
 earlier message, or on a file. The TLDR repeats what a decision needs rather than referring to it.
 
+**Nothing else belongs in it.** The TLDR is read first and often alone, bottom-up; the prose above
+exists to be double-clicked into, not summarised a second time. The bar is *just enough to make
+scrolling up unnecessary* — and no more. Measurements, narrative, file lists, what was tried and
+rejected, per-item detail that does not change an answer: all of that goes above the separator.
+
+- **Gates are one line**: green or not, and the names of the checks that ran — e.g. *gates green
+  (cargo fmt, clippy, tests, independent review)*. Test counts, timings, and per-check output stay
+  above.
+- **A fact earns its place only by changing a decision.** If the answer is the same whether or not
+  the maintainer knows it, it is not TLDR material.
+
 Every presentation is **self-contained**: full context and the explicit question(s) spelled out
 each time, never "as before" or a bare pointer. **Final approvals** (scope, design, implementation)
 are always presented on the **complete** artifact as a whole; partial or incremental presentations
