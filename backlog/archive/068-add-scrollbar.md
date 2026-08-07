@@ -64,7 +64,10 @@ theme axis in this version; if the bar needs to be styled apart from the guides,
 
 Thumb geometry, from `view.scroll`, `rows.len()`, and `viewport`:
 
-- **length** = `max(1, viewport² / rows.len())` — proportional, never invisible;
+- **length** = proportional (`viewport² / rows.len()`), never invisible, and **capped at four
+  fifths of the track** with a cell left at each end where the track can afford it — the free space
+  is what says "there is more", so a thumb that nearly fills the track reports the opposite of the
+  truth;
 - **position** = `scroll × (viewport − length) / (rows.len() − viewport)`, and clamped so the thumb
   touches the top **only** at `scroll == 0` and the bottom **only** at the maximum scroll. "Am I
   actually at the end?" is the question a scrollbar exists to answer, and rounding must not lie

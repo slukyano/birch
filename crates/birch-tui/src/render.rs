@@ -26,26 +26,41 @@ pub struct Thumb {
     pub len: usize,
 }
 
+/// Largest share of the track the thumb may occupy, as a fraction. A thumb
+/// that nearly fills its track reads as "nothing to scroll" even when there
+/// is; capping it keeps the free space visible.
+const MAX_THUMB_NUM: usize = 4;
+const MAX_THUMB_DEN: usize = 5;
+
 /// The thumb for `scroll` over `rows` rows in a `viewport`-row pane, or `None`
-/// when everything fits — and equally when the pane is too short for the thumb
-/// to move, since a bar pinned at full height carries no information either.
+/// when everything fits — the only case in which no bar is drawn, since a bar
+/// is exactly the signal that scrolling is possible.
 ///
-/// The thumb touches the top only at the very top and the bottom only at the
-/// very bottom: "am I actually at the end?" is the question a scrollbar exists
-/// to answer, so rounding must never claim an extreme that is not real. The
-/// single exception is documented at the `travel == 1` branch below.
+/// The free space *is* the message, so the thumb never fills the track: while
+/// scrolling up is possible there is space above it, and while scrolling down
+/// is possible there is space below. It touches the top only at the very top
+/// and the bottom only at the very bottom, so "am I actually at the end?" is
+/// answered honestly. A track too short to seat a thumb between two gaps is
+/// documented at its branch below.
 pub fn thumb(rows: usize, viewport: usize, scroll: usize) -> Option<Thumb> {
     if viewport == 0 || rows <= viewport {
         return None;
     }
     let max_scroll = rows - viewport;
     let scroll = scroll.min(max_scroll);
-    // Proportional, but never invisible and never the whole track.
-    let len = ((viewport * viewport) / rows).clamp(1, viewport.saturating_sub(1).max(1));
+    // Leave a cell at each end wherever the track can afford it, so a mid
+    // scroll shows gaps on both sides; and cap the thumb well short of the
+    // full track, so the space that means "there is more" stays legible.
+    let capped = (viewport * MAX_THUMB_NUM) / MAX_THUMB_DEN;
+    let max_len = viewport
+        .saturating_sub(2)
+        .min(capped)
+        .max(1)
+        .min(viewport.saturating_sub(1).max(1));
+    let len = ((viewport * viewport) / rows).clamp(1, max_len);
     let travel = viewport - len;
     if travel == 0 {
-        // A one-row track: the thumb would fill it at every scroll, claiming
-        // both ends at once. Show nothing rather than something false.
+        // A single-cell track: no arrangement shows a thumb and a gap at once.
         return None;
     }
     let start = if scroll == 0 {
@@ -53,12 +68,13 @@ pub fn thumb(rows: usize, viewport: usize, scroll: usize) -> Option<Thumb> {
     } else if scroll == max_scroll {
         travel
     } else if travel >= 2 {
-        // Strictly between the ends, so neither extreme is ever claimed early.
+        // Strictly between the ends: a gap above *and* below, so both
+        // directions read as available.
         ((scroll * travel) / max_scroll).clamp(1, travel - 1)
     } else {
-        // A track with one free slot cannot show three states. The bottom is
-        // the end that matters — "am I at the end?" — so it stays exact, and
-        // the top slot is shared with the rows just below it.
+        // A two-cell track has one free cell and three states to tell apart.
+        // The bottom stays exact — "am I at the end?" is the question the bar
+        // exists to answer — and the top cell is shared with the rows below it.
         0
     };
     Some(Thumb { start, len })
@@ -979,9 +995,10 @@ mod tests {
         // A huge tree in a small pane still shows something to grab.
         let t = thumb(1_000_000, 5, 0).unwrap();
         assert_eq!(t.len, 1);
-        // A tree barely taller than the pane leaves room to move.
+        // A tree barely taller than the pane leaves room to move, and the cap
+        // keeps that room visible rather than hairline.
         let t = thumb(11, 10, 0).unwrap();
-        assert!(t.len < 10, "a full-height thumb reports nothing");
+        assert!(t.len <= 8, "a near-full thumb reports nothing: {}", t.len);
         assert!(t.len >= 1);
     }
 
@@ -994,7 +1011,7 @@ mod tests {
                 }
                 for scroll in [0, 1, 3, rows - viewport - 1, rows - viewport, rows] {
                     let Some(t) = thumb(rows, viewport, scroll) else {
-                        // The only track with no room to move is a one-row one.
+                        // Only a single-cell track shows nothing while scrollable.
                         assert_eq!(viewport, 1, "rows={rows} viewport={viewport}");
                         continue;
                     };
@@ -1009,11 +1026,52 @@ mod tests {
     }
 
     #[test]
-    fn a_track_with_no_travel_shows_nothing() {
-        // A one-row track would hold a full-height thumb at every scroll,
-        // claiming the top and the bottom at once. Better to show no bar.
+    fn a_bar_is_shown_whenever_scrolling_is_possible() {
+        // The bar is the signal that there is more; it disappears only when
+        // everything fits. Even a tiny track keeps it.
+        assert!(thumb(100, 2, 0).is_some());
+        assert!(thumb(100, 3, 0).is_some());
+        assert!(thumb(1_000_000, 45, 0).is_some());
+        assert_eq!(thumb(45, 45, 0), None, "everything fits");
+        // A single-cell track cannot seat a thumb and a gap at once.
         assert_eq!(thumb(100, 1, 0), None);
-        assert_eq!(thumb(100, 1, 99), None);
+    }
+
+    #[test]
+    fn free_space_shows_in_every_direction_that_can_be_scrolled() {
+        // The rule: while scrolling up is possible there is space above the
+        // thumb, and while scrolling down is possible there is space below.
+        for rows in [4usize, 11, 46, 999, 10_000] {
+            for viewport in [3usize, 5, 12, 45] {
+                if rows <= viewport {
+                    continue;
+                }
+                let max_scroll = rows - viewport;
+                for scroll in [0, 1, 2, max_scroll / 2, max_scroll - 1, max_scroll] {
+                    let t = thumb(rows, viewport, scroll).expect("scrolling is possible");
+                    let ctx = format!("rows={rows} viewport={viewport} scroll={scroll}");
+                    assert!(t.len < viewport, "the thumb filled the track: {ctx}");
+                    if scroll > 0 {
+                        assert!(t.start >= 1, "no space above while scrollable up: {ctx}");
+                    }
+                    if scroll < max_scroll {
+                        assert!(
+                            t.start + t.len < viewport,
+                            "no space below while scrollable down: {ctx}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_thumb_never_fills_more_than_its_share_of_the_track() {
+        // Barely more rows than fit: proportionally the thumb would be almost
+        // the whole track and read as "nothing to scroll".
+        let t = thumb(46, 45, 0).unwrap();
+        assert!(t.len <= 45 * 4 / 5, "thumb was {} of 45", t.len);
+        assert!(t.len >= 1);
     }
 
     #[test]

@@ -10,8 +10,9 @@ All notable changes to birch are documented here, following
 - **Configurable scroll speed**: `--scroll-lines <n>` (1–10, default 3), the `scroll-lines` config
   key, and `birch ctl set scroll-lines <n>` at runtime. Out of range is refused by the flag and by
   the socket, and clamped by the config file, which never blocks launch.
-- **A scrollbar** on the pane's right edge, shown only when the rows overflow the viewport and
-  hidden when everything fits. Off with `--no-scrollbar`, the `scrollbar` config key, or
+- **A scrollbar** on the pane's right edge, shown whenever the rows overflow the viewport and
+  hidden when everything fits. The thumb never fills the track: space above it means there is more
+  above, space below means more below. Off with `--no-scrollbar`, the `scrollbar` config key, or
   `birch ctl set scrollbar off`. Its column does not accept clicks.
 
 ### Changed

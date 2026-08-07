@@ -205,9 +205,12 @@ shown. The bottom stays exact there and the top slot is shared.
 - **The per-gesture event count of a real trackpad is unmeasured.** Synthetic `CGEvent` scrolls
   cannot reproduce momentum phases, which originate in the trackpad driver. It bounds the perceived
   *distance* of a flick, never the freeze; every tick provably moves exactly `scroll_lines` rows.
-- **A 2-row-tall pane shows no scrollbar at all**, deliberately: its track has no room to move, so
-  a thumb there would claim both ends at once. A pane **4 columns wide or narrower** shows none
-  either, even when the rows overflow — the badge gutter and the bar would leave the names nothing.
+- **The bar is shown whenever scrolling is possible**, and the free space is the message: the thumb
+  never fills the track, so space above it means "more above" and space below means "more below".
+  It is capped at four fifths of the track, since a thumb that nearly fills its track reads as
+  "nothing to scroll". Only two panes show no bar: one whose rows fit, and a single-cell track,
+  which cannot seat a thumb and a gap at once. A pane **4 columns wide or narrower** also shows
+  none — the badge gutter and the bar would leave the names nothing.
 - **`--pick` from a home-sized root still cannot search** (`076`), and **a quit during a terminal
   handover is still swallowed** (`077`). Both are filed, neither is fixed.
 
