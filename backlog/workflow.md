@@ -300,17 +300,23 @@ rejected, per-item detail that does not change an answer: all of that goes above
 
 ### Standard sections
 
-In this order, omitting any that is empty:
+In this order, **omitting any that is empty**:
 
 1. **Fixed** — one line per item: slug plus a few words, not a sentence. Includes scope creep and
-   any extra work done beyond the approved set, marked as such.
-2. **ADRs** — what each one decides, summarised.
-3. **Surfaces** — what changed in the public surface, summarised.
-4. **Anything else**, one bullet each: filed, not fixed, notes, warnings, and pointers to whatever
-   is especially worth reviewing.
-5. **The asks**, numbered. Everything not already approved explicitly gets one — a new or changed
-   ADR, a task created or retitled or dropped, a decision taken during implementation that the
-   approved design did not cover. **The ask to merge is always last.**
+   any extra work beyond the approved set, marked as such.
+2. **Scope rejected** — what the sprint took on and did *not* deliver, dropped after the scope was
+   approved. Never lists what was never in the started scope.
+3. **ADRs** — what each decides, summarised.
+4. **Surfaces** — what changed in the public surface, summarised.
+5. **Backlog changes** — tasks created, removed, or modified outside the sprint scope; anything
+   filed or left unfixed lands here. Informational: **no approval is asked for these.**
+6. **Gates** — one line, per above.
+7. **The asks**, numbered. An ask exists for every decision not already approved explicitly — a new
+   or changed ADR, a decision taken during implementation the approved design did not cover.
+   **The ask to merge is always last.**
+
+There is no notes section, and no section for commentary. If an item is not one of the above, the
+threshold for mentioning it at all is that a decision changes without it.
 
 Every presentation is **self-contained**: full context and the explicit question(s) spelled out
 each time, never "as before" or a bare pointer. **Final approvals** (scope, design, implementation)
