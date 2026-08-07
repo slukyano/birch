@@ -97,9 +97,11 @@ pub const SCROLL_LINES_DEFAULT: u8 = 3;
 
 /// Clamps into the accepted range. Used where a value must degrade rather
 /// than fail (the config file); surfaces that can report an error reject
-/// instead.
-pub fn clamp_scroll_lines(n: u8) -> u8 {
-    n.clamp(SCROLL_LINES_MIN, SCROLL_LINES_MAX)
+/// instead. Takes the widest integer TOML can carry, so that a number far
+/// outside the range still clamps instead of failing to parse and taking the
+/// rest of the config file down with it.
+pub fn clamp_scroll_lines(n: i64) -> u8 {
+    n.clamp(i64::from(SCROLL_LINES_MIN), i64::from(SCROLL_LINES_MAX)) as u8
 }
 
 impl Default for Settings {

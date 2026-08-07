@@ -124,6 +124,11 @@ struct App {
     /// Set when a child process owned the terminal, so the batch ends and the
     /// screen it left is redrawn at once (ADR 0024).
     yielded_terminal: bool,
+    /// Set when a status message arrived in the batch now being assembled. A
+    /// batch draws once, so without this an input event later in the same
+    /// batch would clear the message before any frame showed it — deferring
+    /// the frame must not change what the user sees (ADR 0024, decision 2).
+    status_fresh: bool,
 }
 
 /// Runs the app; in picker mode the returned path is the confirmed pick.
@@ -132,6 +137,21 @@ struct App {
 /// it degrades with the machine's speed instead of meaning different things on
 /// different hardware.
 const BATCH_BUDGET: Duration = Duration::from_millis(8);
+
+/// Whether the batch may continue, given what the last handled event did.
+/// One rule, asked both before a batch opens and after each event inside it,
+/// so the two can never disagree (ADR 0024, decision 4).
+fn batch_step(quit: bool, yielded_terminal: bool) -> BatchStep {
+    if quit {
+        BatchStep::Quit
+    } else if yielded_terminal {
+        // A child owned the tty; queued events must not run behind it, and the
+        // screen it left needs the redraw now.
+        BatchStep::Stop
+    } else {
+        BatchStep::Continue
+    }
+}
 
 /// What the batch should do after an event was handled.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -224,6 +244,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         armed_press: None,
         rows_len: 0,
         yielded_terminal: false,
+        status_fresh: false,
     };
 
     if app.mode == Mode::Tree {
@@ -245,17 +266,16 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         }
         // One frame per *batch* (ADR 0024): whatever else has already queued
         // is handled first, in order, and the whole batch shares one redraw.
-        let stopped = drain_batch(&events, Instant::now() + BATCH_BUDGET, |event| {
-            if app.handle(terminal, &events, event) {
-                BatchStep::Quit
-            } else if app.yielded_terminal {
-                // A child owned the tty; queued events must not run behind it,
-                // and the screen it left needs the redraw now.
-                BatchStep::Stop
-            } else {
-                BatchStep::Continue
-            }
-        });
+        // A hand-off in the event just handled ends the batch before it starts
+        // — nothing may run behind a child that owned the tty (decision 4).
+        let stopped = if batch_step(false, app.yielded_terminal) == BatchStep::Continue {
+            drain_batch(&events, Instant::now() + BATCH_BUDGET, |event| {
+                let quit = app.handle(terminal, &events, event);
+                batch_step(quit, app.yielded_terminal)
+            })
+        } else {
+            BatchStop::Handoff
+        };
         if stopped == BatchStop::Quit {
             break;
         }
@@ -308,7 +328,10 @@ impl App {
                     self.tree.apply(delta);
                 }
             }
-            SourceEvent::Message(message) => self.status = message,
+            SourceEvent::Message(message) => {
+                self.status = message;
+                self.status_fresh = true;
+            }
         }
     }
 
@@ -386,7 +409,11 @@ impl App {
         if action == InputAction::Quit {
             return true;
         }
-        self.status.clear(); // status messages are transient
+        // Transient — but a message that arrived earlier in this same batch has
+        // not been drawn yet, and clearing it here would erase it unseen.
+        if !self.status_fresh {
+            self.status.clear();
+        }
 
         // Search editing works the same in both modes.
         match action {
@@ -445,15 +472,15 @@ impl App {
             // The press only arms — nothing is selected, toggled, or opened
             // until the release lands on the same row and zone (ADR 0025).
             InputAction::Press { column, row } => {
-                self.armed_press = render::hit_test(
+                let hit = render::hit_test(
                     &rows,
                     &self.view,
                     &self.settings,
                     area(terminal),
                     column,
                     row,
-                )
-                .map(|(idx, on_chevron)| (rows[idx].path.clone(), on_chevron));
+                );
+                self.arm_press(&rows, hit);
                 NavEffect::None
             }
             InputAction::Release { column, row } => {
@@ -750,10 +777,19 @@ impl App {
     /// then-name fast is a select); name clicks select, and only a completed
     /// double-click activates. Tree semantics now apply in both modes, since
     /// the picker renders the same tree (ADR 0023).
+    /// Arms a press on the hit row, or on nothing when the press landed
+    /// outside the tree. Stores the row's real path, so a snapshot arriving
+    /// before the release cannot redirect the click (ADR 0025).
+    fn arm_press(&mut self, rows: &[Row], hit: Option<(usize, bool)>) {
+        self.armed_press = hit
+            .and_then(|(idx, on_chevron)| rows.get(idx).map(|row| (row.path.clone(), on_chevron)));
+    }
+
     /// Completes an armed press, or abandons it. A click acts only when the
     /// release lands on the same row *and* the same zone as the press; every
     /// other outcome does nothing and clears a pending double-click, which is
     /// how ADR 0015 already treats an intervening click (ADR 0025).
+    #[allow(clippy::doc_markdown)]
     fn resolve_release(
         &mut self,
         rows: &[Row],
@@ -1147,6 +1183,8 @@ impl App {
         let theme = Theme::for_id(self.settings.theme);
         let (view, settings) = (&self.view, &self.settings);
         terminal.draw(|frame| render::draw(frame, &rows, view, settings, &theme, &bottom))?;
+        // The frame showed whatever arrived; the next batch may clear it again.
+        self.status_fresh = false;
         Ok(())
     }
 
@@ -1298,14 +1336,10 @@ impl App {
     }
 
     /// Scrolls by `delta` rows against the count from the last draw. Kept
-    /// separate from the rows so a wheel burst costs a clamp, not a tree walk.
+    /// separate from the rows so a wheel burst costs a clamp, not a tree walk
+    /// (ADR 0024); the clamp itself stays in `FlatView`.
     fn scroll_rows(&mut self, delta: isize, viewport: usize) {
-        let max_scroll = self.rows_len.saturating_sub(viewport);
-        self.view.scroll = self
-            .view
-            .scroll
-            .saturating_add_signed(delta)
-            .min(max_scroll);
+        self.view.scroll_by(self.rows_len, delta, viewport);
     }
 
     fn refresh_git(&mut self) {
@@ -1489,6 +1523,7 @@ mod tests {
             armed_press: None,
             rows_len: 0,
             yielded_terminal: false,
+            status_fresh: false,
         };
         app.tree.set_expanded(Path::new("/r"), true);
         Harness {
@@ -2191,7 +2226,8 @@ mod tests {
         let rows = h.app.rows();
         let viewport = 10;
         h.app.view.reconcile(&rows, viewport); // consumes the reveal's follow
-        h.app.view.scroll_by(&rows, 12, viewport);
+        h.app.rows_len = rows.len();
+        h.app.scroll_rows(12, viewport);
         assert_eq!(h.app.view.scroll, 12);
 
         // Redraws keep coming while the search is live; none of them may drag
@@ -2226,7 +2262,8 @@ mod tests {
         let rows = h.app.rows();
         let viewport = 10;
         h.app.view.reconcile(&rows, viewport);
-        h.app.view.scroll_by(&rows, 20, viewport);
+        h.app.rows_len = rows.len();
+        h.app.scroll_rows(20, viewport);
         let scrolled = h.app.view.scroll;
         assert!(scrolled > 0, "the wheel moved the viewport");
 
@@ -2241,7 +2278,8 @@ mod tests {
         );
 
         // Typing still takes the pane to the match it selects.
-        h.app.view.scroll_by(&rows, 5, viewport);
+        h.app.rows_len = rows.len();
+        h.app.scroll_rows(5, viewport);
         h.app.search_pop();
         let rows = h.app.rows();
         h.app.view.reconcile(&rows, viewport);
@@ -2414,6 +2452,18 @@ mod tests {
     // ---- ADR 0024: one frame per batch ----
 
     #[test]
+    fn a_handoff_or_a_quit_closes_the_batch() {
+        // The rule the loop asks before opening a batch and after every event
+        // inside one (ADR 0024, decision 4). A hand-off in the event that
+        // opened the batch must stop it before a single queued event runs.
+        assert_eq!(batch_step(false, false), BatchStep::Continue);
+        assert_eq!(batch_step(false, true), BatchStep::Stop);
+        assert_eq!(batch_step(true, false), BatchStep::Quit);
+        // Quitting wins: nothing may run behind it either.
+        assert_eq!(batch_step(true, true), BatchStep::Quit);
+    }
+
+    #[test]
     fn drain_batch_takes_everything_already_queued() {
         let (tx, rx) = mpsc::channel();
         for _ in 0..5 {
@@ -2522,6 +2572,23 @@ mod tests {
     }
 
     #[test]
+    fn ctl_set_scrollbar_toggles_like_its_neighbours() {
+        let mut h = harness(Mode::Tree);
+        let mut req = Request::new(Verb::Set);
+        req.setting = Some(SettingKey::Scrollbar);
+        assert!(h.app.settings.scrollbar);
+        req.value = Some("off".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert!(!h.app.settings.scrollbar);
+        req.value = Some("toggle".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert!(h.app.settings.scrollbar);
+        req.value = Some("maybe".into());
+        assert!(!h.app.ctl_response(req).0.ok, "not a SettingValue");
+        assert!(h.app.settings.scrollbar, "a refusal changes nothing");
+    }
+
+    #[test]
     fn scroll_distance_follows_the_setting() {
         let mut h = harness(Mode::Tree);
         h.app.rows_len = 1000;
@@ -2538,6 +2605,31 @@ mod tests {
     /// Arms a press on `idx` and returns the hit tuple a release would carry.
     fn press(app: &mut App, rows: &[Row], idx: usize, on_chevron: bool) {
         app.armed_press = Some((rows[idx].path.clone(), on_chevron));
+    }
+
+    #[test]
+    fn arming_resolves_the_hit_to_a_real_path() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a", NodeKind::File), ("b", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+        h.app.arm_press(&rows, Some((2, false)));
+        assert_eq!(
+            h.app.armed_press,
+            Some((rows[2].path.clone(), false)),
+            "the arm keys on the row's real path, not its index"
+        );
+        h.app.arm_press(&rows, Some((1, true)));
+        assert_eq!(h.app.armed_press, Some((rows[1].path.clone(), true)));
+        // A press outside the tree arms nothing.
+        h.app.arm_press(&rows, None);
+        assert_eq!(h.app.armed_press, None);
+        // A hit past the end cannot panic or arm a phantom row.
+        h.app.arm_press(&rows, Some((999, false)));
+        assert_eq!(h.app.armed_press, None);
     }
 
     #[test]

@@ -26,7 +26,7 @@ pub struct Config {
     pub compact: Option<bool>,
     pub mouse: Option<bool>,
     pub open_cmd: Option<String>,
-    pub scroll_lines: Option<u8>,
+    pub scroll_lines: Option<i64>,
     pub scrollbar: Option<bool>,
 }
 
@@ -270,6 +270,39 @@ mod tests {
         }
         .apply_to(&mut s);
         assert_eq!(s.scroll_lines, crate::settings::SCROLL_LINES_MIN);
+    }
+
+    #[test]
+    fn a_scroll_lines_too_large_for_a_byte_still_clamps() {
+        // The value must degrade on its own, not take the rest of the file
+        // with it: a parse failure discards every other key too (ADR 0022).
+        let toml = r#"
+            theme = "nord"
+            scroll-lines = 300
+        "#;
+        let config: Config = toml::from_str(toml).expect("still parses");
+        let mut s = Settings::default();
+        config.apply_to(&mut s);
+        assert_eq!(s.scroll_lines, crate::settings::SCROLL_LINES_MAX);
+        assert_eq!(s.theme, ThemeId::Nord, "the rest of the file survived");
+
+        let toml = "scroll-lines = -7";
+        let config: Config = toml::from_str(toml).expect("still parses");
+        let mut s = Settings::default();
+        config.apply_to(&mut s);
+        assert_eq!(s.scroll_lines, crate::settings::SCROLL_LINES_MIN);
+    }
+
+    #[test]
+    fn scrollbar_applies_from_the_config() {
+        let mut s = Settings::default();
+        assert!(s.scrollbar, "on by default");
+        Config {
+            scrollbar: Some(false),
+            ..Config::default()
+        }
+        .apply_to(&mut s);
+        assert!(!s.scrollbar);
     }
 
     #[test]

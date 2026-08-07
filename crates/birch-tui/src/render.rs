@@ -27,11 +27,13 @@ pub struct Thumb {
 }
 
 /// The thumb for `scroll` over `rows` rows in a `viewport`-row pane, or `None`
-/// when everything fits — a full-height bar carries no information.
+/// when everything fits — and equally when the pane is too short for the thumb
+/// to move, since a bar pinned at full height carries no information either.
 ///
 /// The thumb touches the top only at the very top and the bottom only at the
 /// very bottom: "am I actually at the end?" is the question a scrollbar exists
-/// to answer, so rounding must never claim an extreme that is not real.
+/// to answer, so rounding must never claim an extreme that is not real. The
+/// single exception is documented at the `travel == 1` branch below.
 pub fn thumb(rows: usize, viewport: usize, scroll: usize) -> Option<Thumb> {
     if viewport == 0 || rows <= viewport {
         return None;
@@ -41,7 +43,12 @@ pub fn thumb(rows: usize, viewport: usize, scroll: usize) -> Option<Thumb> {
     // Proportional, but never invisible and never the whole track.
     let len = ((viewport * viewport) / rows).clamp(1, viewport.saturating_sub(1).max(1));
     let travel = viewport - len;
-    let start = if scroll == 0 || travel == 0 {
+    if travel == 0 {
+        // A one-row track: the thumb would fill it at every scroll, claiming
+        // both ends at once. Show nothing rather than something false.
+        return None;
+    }
+    let start = if scroll == 0 {
         0
     } else if scroll == max_scroll {
         travel
@@ -178,7 +185,10 @@ pub fn draw(
         let y = tree_area.y + i;
         let wash = theme.palette.selection_bg;
         let buffer = frame.buffer_mut();
-        for x in area.left()..area.right() {
+        // Up to, but not including, the scrollbar: the bar reads as furniture
+        // outside the row, and in themes where the guide colour equals the
+        // wash the track would vanish on the selected row.
+        for x in area.left()..area.right() - bar_width {
             let cell = &mut buffer[(x, y)];
             let painted = cell.bg != Color::Reset && Some(cell.bg) != theme.palette.app_bg;
             if !painted {
@@ -983,7 +993,11 @@ mod tests {
                     continue;
                 }
                 for scroll in [0, 1, 3, rows - viewport - 1, rows - viewport, rows] {
-                    let t = thumb(rows, viewport, scroll).unwrap();
+                    let Some(t) = thumb(rows, viewport, scroll) else {
+                        // The only track with no room to move is a one-row one.
+                        assert_eq!(viewport, 1, "rows={rows} viewport={viewport}");
+                        continue;
+                    };
                     assert!(
                         t.start + t.len <= viewport,
                         "rows={rows} viewport={viewport} scroll={scroll} overflowed"
@@ -995,6 +1009,14 @@ mod tests {
     }
 
     #[test]
+    fn a_track_with_no_travel_shows_nothing() {
+        // A one-row track would hold a full-height thumb at every scroll,
+        // claiming the top and the bottom at once. Better to show no bar.
+        assert_eq!(thumb(100, 1, 0), None);
+        assert_eq!(thumb(100, 1, 99), None);
+    }
+
+    #[test]
     fn a_single_slot_track_keeps_the_bottom_exact() {
         // Two rows of track leave one free slot: the bottom must still mean
         // the bottom, even though the top slot is shared.
@@ -1003,6 +1025,52 @@ mod tests {
         assert_eq!(thumb(rows, viewport, 50).unwrap().start, 0);
         let bottom = thumb(rows, viewport, rows - viewport).unwrap();
         assert_eq!(bottom.start + bottom.len, viewport);
+    }
+
+    #[test]
+    fn the_layout_holds_in_a_pane_too_narrow_for_the_furniture() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = theme();
+        let rows: Vec<Row> = (0..40)
+            .map(|i| row(&format!("f{i}"), NodeKind::File, 0))
+            .collect();
+        let view = FlatView::default();
+        // Every pane from one cell wide upward must draw without panicking on
+        // the u16 arithmetic that reserves the bar and badge columns.
+        for width in 1..=12u16 {
+            for height in 1..=4u16 {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|frame| draw(frame, &rows, &view, &Settings::default(), &theme, ""))
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn the_selection_wash_stops_before_the_scrollbar() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        // In themes where the guide colour equals the wash, washing over the
+        // bar would erase the track on the selected row.
+        let theme = theme();
+        let rows: Vec<Row> = (0..40)
+            .map(|i| row(&format!("f{i}"), NodeKind::File, 0))
+            .collect();
+        let mut view = FlatView::default();
+        view.selection = Some(rows[0].path.clone());
+        let (w, h) = (30u16, 4u16);
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &rows, &view, &Settings::default(), &theme, ""))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let bar_cell = &buffer[(w - 1, 0)];
+        assert_ne!(
+            bar_cell.bg, theme.palette.selection_bg,
+            "the wash reached the scrollbar column"
+        );
     }
 
     #[test]
