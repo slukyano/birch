@@ -57,3 +57,63 @@ Not on the permanent out-of-scope list, and it extends an existing whitelisted f
 introducing a new one — the design doc's Files source already promises "git status badges + colors"
 with ancestor propagation. Worth confirming with the maintainer that a second badge *axis* counts
 as that feature growing rather than a new one.
+
+## Design
+
+### Where they go
+
+The badge gutter is already two columns wide and paints only one (`BADGE_WIDTH = 2`, `badge_line`
+emits a single glyph), so the branch badge takes the column that is blank today. The gutter becomes
+two axes side by side — **branch state outermost, working tree innermost**, next to the name it
+describes — and [`064`](064-configurable-badge-placement.md) moves both together as one unit. No
+new columns, and `hit_test` is unaffected because the gutter's width does not change.
+
+### What they say
+
+**The same alphabet, a different reference point.** A branch badge reuses `FileStatus` and its
+letters, computed against the base instead of against `HEAD`, so there is one badge language to
+learn and the column position says which question is being answered. A separate in/out symbol set
+was rejected: two alphabets in adjacent columns is a legend the user has to hold.
+
+**Outgoing only, in this task.** `git diff --name-status <merge-base>..HEAD` — what this branch has
+that the base does not. The incoming direction (what the base gained since the branch diverged) is
+the more novel half and a genuinely useful warning, but it doubles the git work, needs a second
+column or a precedence rule, and answers a different question. It is deferred rather than designed
+badly here.
+
+**Rollups follow the existing rule.** A collapsed directory shows the branch rollup dot exactly as
+it shows the working-tree one, in its own column.
+
+### What "main" is
+
+Resolved in order, first hit wins: the branch's upstream tracking ref; then the remote's default
+branch (`origin/HEAD`); then a local `main` or `master`. When none resolves — a detached `HEAD`, a
+repository with no commits, a branch with no merge-base — **the axis is simply absent**, no badges
+and no error, exactly as `--no-git` renders. The resolved base is reported in the root row's
+annotation so the comparison is never a mystery.
+
+### Refresh
+
+Branch state changes on `commit`, `checkout`, `rebase`, `fetch` — none of which touch the working
+tree the watcher observes, and all of which live inside `.git`, a directory birch treats as noise.
+The git worker gains a watch on `.git/HEAD` and the ref roots, so the badges refresh when the branch
+moves. This is the one place the task touches the watcher, and it is deliberately narrow: two paths,
+not a recursive watch of `.git`.
+
+### Cost
+
+A `merge-base` plus a `diff --name-status` per refresh, on top of today's `status`. When `HEAD` is
+already the base — the common case — the diff is empty and the work is one `merge-base` call.
+Results are cached against the resolved base commit and the branch tip, so a refresh triggered by an
+unrelated file change reuses them.
+
+### Public-surface delta
+
+- **CLI**: `--no-branch-badges` (with the hidden bidirectional `--branch-badges`).
+- **Config**: `branch-badges = <bool>`, default on where a base resolves.
+- **Socket**: `SettingKey::BranchBadges`, an on/off/toggle value — additive.
+
+### Open
+
+Whether the incoming direction lands in a follow-up task, and whether the base should be
+overridable per invocation (`--base <ref>`) rather than only resolved.
