@@ -62,38 +62,39 @@ as that feature growing rather than a new one.
 
 ### What the user sees
 
-A second status column answering "what would I be merging?", beside the one that answers "what have
-I edited?".
+One extra column marking the files this branch would merge — the scope of the change, not its
+shape.
 
 ```
 branch badges off                    branch badges on
-    src                     ●            src                  ⎇● ●
-    │  app.rs               M            │  app.rs            ⎇M M
-    │  input.rs                          │  input.rs          ⎇A
-    │  render.rs                         │  render.rs         ⎇M
+    src                     ●            src                   ⎇ ●
+    │  app.rs               M            │  app.rs             ⎇ M
+    │  input.rs                          │  input.rs           ⎇
+    │  render.rs                         │  render.rs          ⎇
     │  main.rs              M            │  main.rs              M
     README.md               A            README.md              A
 ```
 
-- **The local badge is outermost and never moves.** Turning branch badges on adds columns *inward*,
-  so the letter a user already reads stays in its column — the space between the two axes is what
-  guarantees it, not merely a separator.
-- **Same letters, one branch mark.** `⎇M` is "modified relative to the base"; a bare `M` is
-  "modified in the working tree". `app.rs` is both. `input.rs` is added on this branch with nothing
-  uncommitted. `main.rs` is edited but identical to the base once discarded. A separate alphabet was
-  rejected — two vocabularies in adjacent columns is a legend to memorise.
-- **`⎇`, not an arrow.** `↑` universally means "committed but not pushed"; using it for the base
-  comparison would misread. `⎇` is the branch glyph already familiar from shell prompts.
-- **Rollups as today.** A collapsed directory shows a dot per axis, so a folded tree still shows
-  where the branch's work is.
-- **Cost: the gutter grows from 2 columns to 5** when the axis is on — taken from filenames, which
-  is why it is a setting.
+- **One symbol, one meaning.** `⎇` says "this file differs from the base" — it is in scope for the
+  merge. It carries no letter: whether the change is an add or a modify is already in the
+  working-tree column when it matters, and one keystroke away in a diff when it does not. A second
+  vocabulary of letters would have to be learned and told apart from the first at a glance.
+- **The local badge is outermost and never moves.** The mark is added *inward*, and the space
+  between the two keeps the letter a user already reads in exactly its column.
+- **Rollups as today.** A collapsed directory carries the mark if anything beneath it is in scope,
+  so a folded tree still shows where the branch's work is.
+- **`⎇`, not an arrow.** `↑` universally means "committed but not pushed"; `⎇` is the branch glyph
+  already familiar from shell prompts.
+- **Cost: two columns**, taken from filenames — which is why it is a setting.
 
-**Only the base comparison, for now.** Comparing against this branch's own remote (`↑`, committed
-but unpushed) was considered and left out: it is nearly always a subset of the base comparison —
-unpushed work almost always also differs from the base — so it repeats information for two more
-columns. Comparing against a *local* `main` was rejected outright: a pull request is opened against
-the remote, and local `main` is usually the staler of the two.
+**One thing it cannot show.** A file *deleted* on this branch has no row to mark: it is absent from
+disk, so the tree has nothing to draw. That is true of any design here, and it means the column
+answers "what would I be merging, of what exists" rather than "what does this branch change".
+
+**Only the base comparison.** Comparing against this branch's own remote (committed but unpushed)
+was left out: it is nearly always a subset of the base comparison, so it repeats information for
+another column. Comparing against a *local* `main` was rejected outright — a pull request is opened
+against the remote, and local `main` is usually the staler of the two.
 
 ### What the base is
 
