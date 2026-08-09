@@ -2,7 +2,7 @@
 type: Task
 title: Make git badge placement configurable
 description: Badges (M/U/A letters) become a theme axis and a setting — right column, left of the name, or none — with a fitting default per built-in theme.
-status: Draft
+status: Designed
 priority: medium
 blocked_by:
 - 054-refine-tree-visual-design
@@ -38,3 +38,31 @@ for each built-in theme.
 - `right` currently reserves a fixed 2-column gutter; `none` should give that width back to names.
 
 Related: `061` (theme axes), ADR 0021 (the theme system).
+
+## Design
+
+Delivered as specified above — `BadgePlacement { Right, Left, None }` as a theme axis beside
+`BadgeStyle`, a `badges` key across config, flag, and `ctl set`, and per-theme defaults. What the
+design phase settled is how it sits beside the two neighbours that arrived since:
+
+- **The gutter is two columns wide but paints one.** `BADGE_WIDTH` is 2 and `badge_line` emits a
+  single glyph, so the second column is blank padding. Placement moves the gutter as a whole; it
+  does not change that width, which matters because [`078`](078-add-branch-diff-badges.md) claims
+  the spare column.
+- **`Left` places the gutter between the indent guides and the name**, so the name's start column
+  shifts by the gutter width. `hit_test` computes the chevron zone from `depth * INDENT_WIDTH`
+  today; under `Left` both the chevron zone and the name zone move, and the two must be derived
+  from one shared geometry rather than computed twice.
+- **`None` returns the width to names** and keeps everything else: status colours on names, rollup
+  dots on directories, and `--no-git` remaining a separate switch that turns the *data* off.
+- **The scrollbar is outside the gutter.** [`068`](../archive/068-add-scrollbar.md) took the
+  far-right column and reserves it only while shown; under `Right` the order is
+  `tree │ gutter │ badges │ bar`, and under `Left` the bar keeps its column while the badges move
+  to the other side.
+
+### Public-surface delta
+
+- **CLI**: `--badges <right|left|none>`.
+- **Config**: `badges = "right"`.
+- **Socket**: `SettingKey::Badges`, value parsed like `Theme` rather than as on/off — additive.
+- **Theme**: a `BadgePlacement` axis, with per-theme defaults as tabulated above.

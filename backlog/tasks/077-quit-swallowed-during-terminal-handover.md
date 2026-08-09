@@ -2,7 +2,7 @@
 type: Task
 title: A quit arriving during a terminal handover is swallowed
 description: The stale-event drain that runs after a child returns the tty discards the quit flag, so a SIGHUP or ctl quit delivered while the child was running is answered and then ignored.
-status: Draft
+status: Designed
 priority: medium
 ---
 
@@ -48,3 +48,30 @@ losing the save-and-restore ordering that a normal quit performs.
   drain: two places that consume queued events by different rules is how this diverged.
 - A regression test can drive it without a real child: queue a `Shutdown` before the drain runs and
   assert the loop ends.
+
+## Design
+
+`perform_open` returns nothing, so the quit `handle` reports inside its stale-event drain has
+nowhere to go. Three changes:
+
+1. **`perform_open` returns whether a quit was seen.** Its two call sites propagate it: the
+   `NavEffect::Open` arm of `handle_action` folds it into the value it already returns
+   (`self.picked.is_some()`), and `handle_ctl`'s `CtlEffect::Open` returns it instead of `false`.
+2. **The drain becomes the batch drain.** The loop in `perform_open` is a second, subtly different
+   consumer of queued events — which is precisely how the two diverged. It is re-expressed with
+   `drain_batch`, the helper [ADR 0024](../../docs/adr/0024-the-loop-draws-once-per-batch.md)
+   introduced, with a closure that discards stale `AppEvent::Input` and reports a quit as
+   `BatchStep::Quit`. Nothing may run behind a quit, which is the same rule the batch already obeys.
+3. **The quit still exits through the normal path.** Returning the flag reaches `run`'s loop, which
+   already performs `save_persisted`, socket cleanup, and terminal restore. No separate teardown.
+
+### Public-surface delta
+
+**None.** `birch ctl quit` already replies `ok`; it now also does what it says.
+
+### Tests
+
+`drain_batch`'s own behaviour is covered from sprint 017. What is new is the closure's mapping and
+the propagation: a queued `AppEvent::Shutdown` during a handover yields quit; a queued stale
+`AppEvent::Input` is discarded and does not; and a quit stops the drain rather than letting queued
+events run behind it.

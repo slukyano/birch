@@ -2,7 +2,7 @@
 type: Task
 title: Add in/out badges for branch changes
 description: Badges in the git gutter marking files whose changes are committed on this branch but not on main, and the reverse.
-status: Draft
+status: Designed
 priority: medium
 ---
 
@@ -57,3 +57,88 @@ Not on the permanent out-of-scope list, and it extends an existing whitelisted f
 introducing a new one — the design doc's Files source already promises "git status badges + colors"
 with ancestor propagation. Worth confirming with the maintainer that a second badge *axis* counts
 as that feature growing rather than a new one.
+
+## Design
+
+### What the user sees
+
+One extra column marking the files this branch would merge — the scope of the change, not its
+shape.
+
+```
+branch badges off                    branch badges on
+    src                     ●            src                   ⎇ ●
+    │  app.rs               M            │  app.rs             ⎇ M
+    │  input.rs                          │  input.rs           ⎇
+    │  render.rs                         │  render.rs          ⎇
+    │  main.rs              M            │  main.rs              M
+    README.md               A            README.md              A
+```
+
+- **One symbol, one meaning.** `⎇` says "this file differs from the base" — it is in scope for the
+  merge. It carries no letter: whether the change is an add or a modify is already in the
+  working-tree column when it matters, and one keystroke away in a diff when it does not. A second
+  vocabulary of letters would have to be learned and told apart from the first at a glance.
+- **The local badge is outermost and never moves.** The mark is added *inward*, and the space
+  between the two keeps the letter a user already reads in exactly its column.
+- **Rollups as today.** A collapsed directory carries the mark if anything beneath it is in scope,
+  so a folded tree still shows where the branch's work is.
+- **`⎇`, not an arrow.** `↑` universally means "committed but not pushed"; `⎇` is the branch glyph
+  already familiar from shell prompts.
+- **Cost: two columns**, taken from filenames — which is why it is a setting.
+
+**One thing it cannot show.** A file *deleted* on this branch has no row to mark: it is absent from
+disk, so the tree has nothing to draw. That is true of any design here, and it means the column
+answers "what would I be merging, of what exists" rather than "what does this branch change".
+
+**Only the base comparison.** Comparing against this branch's own remote (committed but unpushed)
+was left out: it is nearly always a subset of the base comparison, so it repeats information for
+another column. Comparing against a *local* `main` was rejected outright — a pull request is opened
+against the remote, and local `main` is usually the staler of the two.
+
+### What the base is
+
+The remote's default branch: `origin/HEAD`, else `origin/main`, else `origin/master`. Not a local
+branch — the comparison exists to answer a question about a pull request, and local `main` answers
+a different one.
+
+When no remote base resolves — no remote, a detached `HEAD`, a repository with no commits — **the
+axis is simply absent**: no badges, no error, the gutter back to two columns.
+
+**The base is only as fresh as the last fetch, and birch will not fetch.** A comparison can be hours
+stale with nothing on screen to say so, so the root row names the base and its age —
+`birch  ~/work/birch  (vs origin/main, fetched 2h ago)` — and the badges carry their own caveat.
+
+### Refresh
+
+Branch state changes on `commit`, `checkout`, `rebase`, `fetch` — none of which touch the working
+tree the watcher observes, and all of which live inside `.git`, a directory birch treats as noise.
+The git worker gains a watch on `.git/HEAD` and the ref roots, so the badges refresh when the branch
+moves. This is the one place the task touches the watcher, and it is deliberately narrow: two paths,
+not a recursive watch of `.git`.
+
+### Cost
+
+A `merge-base` plus a `diff --name-status` per refresh, on top of today's `status`. When `HEAD` is
+already the base — the common case — the diff is empty and the work is one `merge-base` call.
+Results are cached against the resolved base commit and the branch tip, so a refresh triggered by an
+unrelated file change reuses them.
+
+### Public-surface delta
+
+- **CLI**: `--no-branch-badges` (with the hidden bidirectional `--branch-badges`).
+- **Config**: `branch-badges = <bool>`, default on where a base resolves.
+- **Socket**: `SettingKey::BranchBadges`, an on/off/toggle value — additive.
+
+### To verify during implementation
+
+`⎇` (U+2387) is in Miscellaneous Technical, where East Asian Width is ambiguous — the same class of
+glyph that made indent guides look misaligned in
+[`059-fix-guide-chevron-alignment`](../archive/059-fix-guide-chevron-alignment.md), where a fallback
+font rendered a PUA chevron wider than its cell. That sprint left a vhs-plus-pixel-measurement
+harness; the glyph is checked with it before it is settled, and themes whose primary font lacks it
+get a fallback.
+
+### Open
+
+Whether the base should be overridable per invocation (`--base <ref>`) rather than only resolved.

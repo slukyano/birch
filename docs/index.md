@@ -45,6 +45,7 @@ Process: see [the task workflow](../backlog/workflow.md#adrs).
 * [0023 — Narrowing dims instead of replacing rows, and a dimmed row is inert](adr/0023-narrowing-dims-and-dimmed-is-inert.md)
 * [0024 — The event loop draws once per batch, not once per event](adr/0024-the-loop-draws-once-per-batch.md)
 * [0025 — A click completes on release, on the row it started on](adr/0025-a-click-completes-on-release.md)
+* [0026 — The search index is a tree, published while it is built](adr/0026-the-index-is-a-tree-published-progressively.md)
 
 # Research
 
