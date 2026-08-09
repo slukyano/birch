@@ -2,7 +2,7 @@
 type: Task
 title: Make git badge placement configurable
 description: Badges (M/U/A letters) become a theme axis and a setting — right column, left of the name, or none — with a fitting default per built-in theme.
-status: Draft
+status: Designed
 priority: medium
 blocked_by:
 - 054-refine-tree-visual-design

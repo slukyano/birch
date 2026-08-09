@@ -2,7 +2,7 @@
 type: Task
 title: Add in/out badges for branch changes
 description: Badges in the git gutter marking files whose changes are committed on this branch but not on main, and the reverse.
-status: Draft
+status: Designed
 priority: medium
 ---
 

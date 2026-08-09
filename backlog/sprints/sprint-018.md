@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Branch state, and critical fixes
-status: Designing
+status: Implementing
 branch: sprint/018
 tasks:
 - 076-search-unusable-on-large-roots
@@ -91,3 +91,13 @@ _(none yet)_
 # Session log
 
 - Scoped and cut: `076`, `077`, `064`, `078`. Branch `sprint/018` cut from `main`.
+- Design phase: `076-search-unusable-on-large-roots` measured — 9.4 s warm, 19.1 s cold, 263 MB —
+  which disproved the task's own suspicion that parallelising the walk was the fix (1.66× once
+  entries are constructed) and showed the index is ten times larger than the data needs. Became
+  **ADR 0026**: a tree-shaped index published in chunks while it builds, with absent/building/
+  complete states so `(no matches)` becomes a claim birch may make.
+  `078-add-branch-diff-badges` went through several shapes at the maintainer's direction and settled
+  on **one** `⎇` column meaning "in this branch's change set", with the local badge outermost and
+  immovable; the remote-branch comparison was dropped as a near-subset of the base one.
+- Design approved: ADR 0026 `Proposed → Accepted`; the four tasks `Draft → Designed`; the sprint
+  `Designing → Implementing`. Design merge to `main`.

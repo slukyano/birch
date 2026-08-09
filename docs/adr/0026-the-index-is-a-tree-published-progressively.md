@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: The search index is a tree, published while it is built
-status: Proposed
+status: Accepted
 sprint: sprint-018
 ---
 
