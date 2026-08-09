@@ -62,37 +62,51 @@ as that feature growing rather than a new one.
 
 ### What the user sees
 
-The VS Code model, extended by one question. A file that is modified in the working tree still shows
-its `M`; a file whose change is **already committed on this branch but absent from the base** shows
-the same letter, marked so the two cannot be confused — this second mark answers "what would I be
-merging?"
+A second status column answering "what would I be merging?", beside the one that answers "what have
+I edited?".
 
-The mark is a small glyph beside the letter rather than a different alphabet: `↑M` reads as "an `M`
-that is going out", where a bare `M` is "an `M` sitting in my working tree". One vocabulary of
-letters, one modifier that says which side of the comparison it belongs to. A separate in/out symbol
-set was rejected — two alphabets in adjacent columns is a legend to memorise.
+```
+branch badges off                    branch badges on
+    src                     ●            src                  ⎇● ●
+    │  app.rs               M            │  app.rs            ⎇M M
+    │  input.rs                          │  input.rs          ⎇A
+    │  render.rs                         │  render.rs         ⎇M
+    │  main.rs              M            │  main.rs              M
+    README.md               A            README.md              A
+```
 
-A collapsed directory rolls its branch state up the same way it rolls up working-tree state, so a
-folded tree still shows where the branch's changes are.
+- **The local badge is outermost and never moves.** Turning branch badges on adds columns *inward*,
+  so the letter a user already reads stays in its column — the space between the two axes is what
+  guarantees it, not merely a separator.
+- **Same letters, one branch mark.** `⎇M` is "modified relative to the base"; a bare `M` is
+  "modified in the working tree". `app.rs` is both. `input.rs` is added on this branch with nothing
+  uncommitted. `main.rs` is edited but identical to the base once discarded. A separate alphabet was
+  rejected — two vocabularies in adjacent columns is a legend to memorise.
+- **`⎇`, not an arrow.** `↑` universally means "committed but not pushed"; using it for the base
+  comparison would misread. `⎇` is the branch glyph already familiar from shell prompts.
+- **Rollups as today.** A collapsed directory shows a dot per axis, so a folded tree still shows
+  where the branch's work is.
+- **Cost: the gutter grows from 2 columns to 5** when the axis is on — taken from filenames, which
+  is why it is a setting.
 
-**This costs gutter width.** Today the gutter is two columns and paints one. The branch axis needs
-two cells of its own — the modifier and the letter — so with branch badges on, the right-hand
-furniture becomes `↑M M` and the gutter grows from 2 columns to 4. That is real estate taken from
-names in a narrow side pane, which is why the axis is a setting and why it is absent whenever no
-base resolves.
+**Only the base comparison, for now.** Comparing against this branch's own remote (`↑`, committed
+but unpushed) was considered and left out: it is nearly always a subset of the base comparison —
+unpushed work almost always also differs from the base — so it repeats information for two more
+columns. Comparing against a *local* `main` was rejected outright: a pull request is opened against
+the remote, and local `main` is usually the staler of the two.
 
-**Outgoing only, in this task.** `git diff --name-status <merge-base>..HEAD` — what this branch has
-that the base does not, which is exactly "what would I be merging". The incoming direction (what the
-base gained since the branch diverged) answers a different question, needs its own modifier, and
-would take a third pair of columns; it is deferred rather than crammed in.
+### What the base is
 
-### What "main" is
+The remote's default branch: `origin/HEAD`, else `origin/main`, else `origin/master`. Not a local
+branch — the comparison exists to answer a question about a pull request, and local `main` answers
+a different one.
 
-Resolved in order, first hit wins: the branch's upstream tracking ref; then the remote's default
-branch (`origin/HEAD`); then a local `main` or `master`. When none resolves — a detached `HEAD`, a
-repository with no commits, a branch with no merge-base — **the axis is simply absent**, no badges
-and no error, exactly as `--no-git` renders. The resolved base is reported in the root row's
-annotation so the comparison is never a mystery.
+When no remote base resolves — no remote, a detached `HEAD`, a repository with no commits — **the
+axis is simply absent**: no badges, no error, the gutter back to two columns.
+
+**The base is only as fresh as the last fetch, and birch will not fetch.** A comparison can be hours
+stale with nothing on screen to say so, so the root row names the base and its age —
+`birch  ~/work/birch  (vs origin/main, fetched 2h ago)` — and the badges carry their own caveat.
 
 ### Refresh
 
@@ -115,7 +129,15 @@ unrelated file change reuses them.
 - **Config**: `branch-badges = <bool>`, default on where a base resolves.
 - **Socket**: `SettingKey::BranchBadges`, an on/off/toggle value — additive.
 
+### To verify during implementation
+
+`⎇` (U+2387) is in Miscellaneous Technical, where East Asian Width is ambiguous — the same class of
+glyph that made indent guides look misaligned in
+[`059-fix-guide-chevron-alignment`](../archive/059-fix-guide-chevron-alignment.md), where a fallback
+font rendered a PUA chevron wider than its cell. That sprint left a vhs-plus-pixel-measurement
+harness; the glyph is checked with it before it is settled, and themes whose primary font lacks it
+get a fallback.
+
 ### Open
 
-Whether the incoming direction lands in a follow-up task, and whether the base should be
-overridable per invocation (`--base <ref>`) rather than only resolved.
+Whether the base should be overridable per invocation (`--base <ref>`) rather than only resolved.
