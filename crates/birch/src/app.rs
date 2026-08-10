@@ -488,8 +488,11 @@ impl App {
                 let hit = render::hit_test(
                     &rows,
                     &self.view,
-                    &self.settings,
-                    &Theme::for_id(self.settings.theme),
+                    render::Chrome {
+                        settings: &self.settings,
+                        theme: &Theme::for_id(self.settings.theme),
+                        branch_axis: self.branch_axis(),
+                    },
                     area(terminal),
                     column,
                     row,
@@ -501,8 +504,11 @@ impl App {
                 let hit = render::hit_test(
                     &rows,
                     &self.view,
-                    &self.settings,
-                    &Theme::for_id(self.settings.theme),
+                    render::Chrome {
+                        settings: &self.settings,
+                        theme: &Theme::for_id(self.settings.theme),
+                        branch_axis: self.branch_axis(),
+                    },
                     area(terminal),
                     column,
                     row,
@@ -743,6 +749,9 @@ impl App {
                     self.git_state = None;
                     self.repo_root = None;
                 }
+            }
+            SettingKey::BranchBadges => {
+                self.settings.branch_badges = value.apply(self.settings.branch_badges);
             }
             SettingKey::Scrollbar => {
                 self.settings.scrollbar = value.apply(self.settings.scrollbar);
@@ -1218,9 +1227,15 @@ impl App {
             self.save_persisted(false);
         }
         let bottom = self.bottom_line();
+        let branch_axis = self.branch_axis();
         let theme = Theme::for_id(self.settings.theme);
         let (view, settings) = (&self.view, &self.settings);
-        terminal.draw(|frame| render::draw(frame, &rows, view, settings, &theme, &bottom))?;
+        let chrome = render::Chrome {
+            settings,
+            theme: &theme,
+            branch_axis,
+        };
+        terminal.draw(|frame| render::draw(frame, &rows, view, chrome, &bottom))?;
         Ok(())
     }
 
@@ -1336,6 +1351,10 @@ impl App {
             desired.insert(repo.join(".git"));
             desired.insert(repo.join(".git/refs"));
             desired.insert(repo.join(".git/refs/heads"));
+            // A fetch moves the base the branch column compares against, and
+            // touches nothing in the working tree (task 078).
+            desired.insert(repo.join(".git/refs/remotes"));
+            desired.insert(repo.join(".git/refs/remotes/origin"));
         }
         for row in rows {
             if !row.kind.is_dir() || row.missing || row.ignored {
@@ -1386,6 +1405,17 @@ impl App {
     /// (ADR 0024); the clamp itself stays in `FlatView`.
     fn scroll_rows(&mut self, delta: isize, viewport: usize) {
         self.view.scroll_by(self.rows_len, delta, viewport);
+    }
+
+    /// Whether the branch column is shown: the setting is on, git is on, a
+    /// repo was found, and a base resolved. Without a base there is nothing to
+    /// compare against, so the column is absent rather than blank (task 078).
+    fn branch_axis(&self) -> bool {
+        self.settings.branch_badges
+            && self
+                .git_state
+                .as_deref()
+                .is_some_and(|git| git.base().is_some())
     }
 
     fn refresh_git(&mut self) {
@@ -2604,6 +2634,22 @@ mod tests {
             assert!(!reply.ok, "{bad} should be refused");
             assert_eq!(h.app.settings.scroll_lines, 7, "{bad} changed the value");
         }
+    }
+
+    #[test]
+    fn ctl_set_branch_badges_toggles_the_column() {
+        let mut h = harness(Mode::Tree);
+        let mut req = Request::new(Verb::Set);
+        req.setting = Some(SettingKey::BranchBadges);
+        assert!(h.app.settings.branch_badges, "on by default");
+        req.value = Some("off".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert!(!h.app.settings.branch_badges);
+        // And with it off the column is gone even where a base would resolve.
+        assert!(!h.app.branch_axis());
+        req.value = Some("toggle".into());
+        assert!(h.app.ctl_response(req).0.ok);
+        assert!(h.app.settings.branch_badges);
     }
 
     #[test]

@@ -24,6 +24,9 @@ pub struct Row {
     /// Real paths of the chain members (head..=tail); empty for plain rows.
     pub chain: Vec<PathBuf>,
     pub status: Option<FileStatus>,
+    /// Whether this row is part of what the branch would merge — the file
+    /// itself, or a directory holding one (task 078).
+    pub in_branch: bool,
     pub ignored: bool,
     /// Deleted-but-tracked: rendered from git state, absent on disk.
     pub missing: bool,
@@ -267,13 +270,14 @@ pub fn visible_rows(tree: &Tree, s: &Settings, decor: Decor) -> Vec<Row> {
         loaded: root.is_loaded(),
         chain: Vec::new(),
         status: ctx.git.and_then(|git| git.dir_status(&root.path)),
+        in_branch: ctx.git.is_some_and(|git| git.in_branch(&root.path)),
         ignored: false,
         missing: false,
         live: root_live,
         matched: ctx.matched_flag(root_hit),
         pickable: root_pickable,
         match_indices: ctx.hit_indices(&root.path),
-        annotation: Some(abbreviate_home(&root.path, std::env::home_dir().as_deref())),
+        annotation: Some(root_annotation(&root.path, ctx.git, ctx.s.branch_badges)),
         guides: Vec::new(),
         last_sibling: true,
     });
@@ -310,6 +314,7 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], ro
                     loaded: false,
                     chain: Vec::new(),
                     status: Some(FileStatus::Deleted),
+                    in_branch: false,
                     ignored: false,
                     missing: true,
                     live,
@@ -420,6 +425,14 @@ fn push_node(
             Vec::new()
         },
         status,
+        // A compacted chain shows the mark if any of its members is in the
+        // branch's change set — the row stands for all of them.
+        in_branch: ctx.git.is_some_and(|git| {
+            git.in_branch(&tail_node.path)
+                || members
+                    .iter()
+                    .any(|&m| git.in_branch(&ctx.tree.get(m).path))
+        }),
         ignored: ctx.is_ignored(&node.path),
         missing: false,
         live,
@@ -437,6 +450,39 @@ fn push_node(
         let mut child_ancestors = ancestors.to_vec();
         child_ancestors.push(!last_sibling);
         push_children(ctx, tail, depth + 1, &child_ancestors, rows);
+    }
+}
+
+/// The root row's dim suffix: where the tree is, and — when a branch
+/// comparison is live — what it is measured against and how stale that is. A
+/// comparison birch cannot refresh should say how old it is (task 078).
+fn root_annotation(root: &std::path::Path, git: Option<&GitState>, branch_badges: bool) -> String {
+    let mut text = abbreviate_home(root, std::env::home_dir().as_deref());
+    // Only when the column it explains is actually drawn.
+    if let Some(base) = branch_badges
+        .then(|| git.and_then(GitState::base))
+        .flatten()
+    {
+        text.push_str("  (vs ");
+        text.push_str(&base.name);
+        if let Some(ago) = base.fetched_ago {
+            text.push_str(", fetched ");
+            text.push_str(&humanise_age(ago));
+            text.push_str(" ago");
+        }
+        text.push(')');
+    }
+    text
+}
+
+/// Coarse age for the root annotation — minutes, hours, or days.
+fn humanise_age(age: std::time::Duration) -> String {
+    let secs = age.as_secs();
+    match secs {
+        0..=90 => "moments".into(),
+        91..=5399 => format!("{}m", secs / 60),
+        5400..=172_799 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86_400),
     }
 }
 
@@ -832,6 +878,74 @@ mod tests {
         rows.iter().map(|r| r.name.as_str()).collect()
     }
 
+    // ---- 078: the branch column ----
+
+    fn with_branch(state: GitState, changed: &[&str]) -> GitState {
+        let base = birch_core::git::BranchBase {
+            name: "origin/main".into(),
+            fetched_ago: Some(std::time::Duration::from_secs(7200)),
+        };
+        state.with_branch(
+            base,
+            changed
+                .iter()
+                .map(|p| PathBuf::from("/r").join(p))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn rows_carry_whether_the_branch_would_merge_them() {
+        let mut tree = Tree::new(PathBuf::from("/r"));
+        tree.set_expanded(Path::new("/r"), true);
+        snapshot(
+            &mut tree,
+            "/r",
+            vec![
+                entry("src", NodeKind::Dir),
+                entry("README.md", NodeKind::File),
+            ],
+        );
+        tree.set_expanded(Path::new("/r/src"), true);
+        snapshot(
+            &mut tree,
+            "/r/src",
+            vec![
+                entry("app.rs", NodeKind::File),
+                entry("old.rs", NodeKind::File),
+            ],
+        );
+        let git = with_branch(git_fixture(&[]), &["src", "src/app.rs"]);
+        let rows = rows_with_git(&tree, &Settings::default(), &git);
+        let of = |name: &str| rows.iter().find(|r| r.name == name).unwrap();
+        assert!(of("app.rs").in_branch, "changed on this branch");
+        assert!(!of("old.rs").in_branch, "untouched by this branch");
+        assert!(of("src").in_branch, "a directory holding the work rolls up");
+        assert!(!of("README.md").in_branch);
+    }
+
+    #[test]
+    fn the_root_row_names_the_base_and_how_stale_it_is() {
+        let mut tree = Tree::new(PathBuf::from("/r"));
+        tree.set_expanded(Path::new("/r"), true);
+        snapshot(&mut tree, "/r", vec![entry("a.txt", NodeKind::File)]);
+        let git = with_branch(git_fixture(&[]), &[]);
+
+        let rows = rows_with_git(&tree, &Settings::default(), &git);
+        let annotation = rows[0].annotation.clone().unwrap();
+        assert!(annotation.contains("vs origin/main"), "{annotation}");
+        assert!(annotation.contains("fetched 2h ago"), "{annotation}");
+
+        // With the column off, the explanation goes too.
+        let off = Settings {
+            branch_badges: false,
+            ..Settings::default()
+        };
+        let rows = rows_with_git(&tree, &off, &git);
+        let annotation = rows[0].annotation.clone().unwrap();
+        assert!(!annotation.contains("origin/main"), "{annotation}");
+    }
+
     fn git_fixture(records: &[&str]) -> GitState {
         let joined = records.join("\0") + "\0";
         parse_porcelain_v2(joined.as_bytes(), Path::new("/r"))
@@ -1160,6 +1274,7 @@ mod tests {
                 loaded: true,
                 chain: Vec::new(),
                 status: None,
+                in_branch: false,
                 ignored: false,
                 missing: false,
                 live,

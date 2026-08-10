@@ -82,6 +82,8 @@ pub struct Settings {
     pub scrollbar: bool,
     /// Where status badges are drawn; `None` defers to the active theme.
     pub badges: Option<BadgePlacement>,
+    /// Mark files the branch would merge, beside the working-tree badge.
+    pub branch_badges: bool,
     /// Rows a single wheel tick scrolls, clamped to
     /// [`SCROLL_LINES_MIN`]..=[`SCROLL_LINES_MAX`].
     pub scroll_lines: u8,
@@ -146,6 +148,7 @@ impl Default for Settings {
             theme: ThemeId::default(),
             scrollbar: true,
             badges: None,
+            branch_badges: true,
             scroll_lines: SCROLL_LINES_DEFAULT,
         }
     }

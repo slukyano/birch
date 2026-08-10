@@ -76,6 +76,7 @@ enum SettingArg {
     Scrollbar,
     ScrollLines,
     Badges,
+    BranchBadges,
 }
 
 impl From<SettingArg> for SettingKey {
@@ -90,6 +91,7 @@ impl From<SettingArg> for SettingKey {
             SettingArg::Theme => SettingKey::Theme,
             SettingArg::Scrollbar => SettingKey::Scrollbar,
             SettingArg::Badges => SettingKey::Badges,
+            SettingArg::BranchBadges => SettingKey::BranchBadges,
             SettingArg::ScrollLines => SettingKey::ScrollLines,
         }
     }

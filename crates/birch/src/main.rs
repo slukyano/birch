@@ -107,6 +107,14 @@ struct Cli {
     #[arg(long, overrides_with = "scrollbar")]
     no_scrollbar: bool,
 
+    /// Mark files this branch would merge, beside the status badge.
+    #[arg(long, overrides_with = "no_branch_badges", hide = true)]
+    branch_badges: bool,
+
+    /// Do not mark files this branch would merge.
+    #[arg(long, overrides_with = "branch_badges")]
+    no_branch_badges: bool,
+
     /// Where git status badges sit: right, left, or none (default: the
     /// theme's choice). `none` keeps status colours and folder rollups —
     /// use --no-git to turn git off.
@@ -291,6 +299,9 @@ fn main() -> ExitCode {
     }
     if let Some(v) = flag(cli.scrollbar, cli.no_scrollbar) {
         settings.scrollbar = v;
+    }
+    if let Some(v) = flag(cli.branch_badges, cli.no_branch_badges) {
+        settings.branch_badges = v;
     }
     if let Some(placement) = cli.badges {
         settings.badges = Some(placement);

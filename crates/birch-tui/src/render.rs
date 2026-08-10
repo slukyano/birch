@@ -16,6 +16,9 @@ use crate::theme::{BadgeStyle, FolderStyle, GuideStyle, SelectionStyle, Theme};
 pub const INDENT_WIDTH: u16 = 2;
 /// Width of the right-hand git badge column.
 pub const BADGE_WIDTH: u16 = 2;
+/// Extra columns when the branch mark is shown: the mark, and a space that
+/// keeps the working-tree badge in exactly the column it had without it.
+pub const BRANCH_BADGE_WIDTH: u16 = 2;
 
 /// Width of the scrollbar column, when one is shown.
 pub const SCROLLBAR_WIDTH: u16 = 1;
@@ -89,6 +92,18 @@ fn scrollbar_shown(settings: &Settings, rows: usize, viewport: usize, width: u16
         && thumb(rows, viewport, 0).is_some()
 }
 
+/// What the frame is painted with, beyond the rows themselves: the settings,
+/// the theme they resolve against, and whether the branch column has anything
+/// to say. These three always travel together — `draw` paints from them and
+/// `hit_test` measures from them, so they cannot disagree.
+#[derive(Clone, Copy)]
+pub struct Chrome<'a> {
+    pub settings: &'a Settings,
+    pub theme: &'a Theme,
+    /// Whether a base resolved, so the branch column is drawn.
+    pub branch_axis: bool,
+}
+
 /// Where each band sits for one frame. `draw` paints from it and `hit_test`
 /// reads it, so the painted columns and the clickable ones are the same
 /// columns by construction.
@@ -100,7 +115,22 @@ struct Layout {
     viewport: usize,
 }
 
-fn layout(area: Rect, settings: &Settings, theme: &Theme, rows: usize) -> Layout {
+/// How wide the badge band is: the working-tree column, plus the branch mark
+/// and its spacer when that axis is on.
+fn badge_width(settings: &Settings, branch_axis: bool) -> u16 {
+    if settings.branch_badges && branch_axis {
+        BADGE_WIDTH + BRANCH_BADGE_WIDTH
+    } else {
+        BADGE_WIDTH
+    }
+}
+
+fn layout(area: Rect, chrome: Chrome, rows: usize) -> Layout {
+    let Chrome {
+        settings,
+        theme,
+        branch_axis,
+    } = chrome;
     let viewport = tree_viewport_height(area);
     let placement = settings.badges.unwrap_or(theme.badge_placement);
     let bar_width = if scrollbar_shown(settings, rows, viewport, area.width) {
@@ -110,9 +140,10 @@ fn layout(area: Rect, settings: &Settings, theme: &Theme, rows: usize) -> Layout
     };
     // The gutter is the badge column plus one spacer, so truncated text never
     // touches a status indicator. `None` gives the whole width back to names.
+    let badge_width = badge_width(settings, branch_axis);
     let gutter = match placement {
         BadgePlacement::None => 0,
-        _ => BADGE_WIDTH + 1,
+        _ => badge_width + 1,
     };
     let gutter = gutter.min(area.width.saturating_sub(bar_width));
     let tree_width = area.width.saturating_sub(bar_width + gutter);
@@ -129,7 +160,7 @@ fn layout(area: Rect, settings: &Settings, theme: &Theme, rows: usize) -> Layout
     };
     Layout {
         tree: band(tree_x, tree_width),
-        badges: (gutter > 0).then(|| band(badge_x, BADGE_WIDTH.min(area.width))),
+        badges: (gutter > 0).then(|| band(badge_x, badge_width.min(area.width))),
         bar: (bar_width > 0).then(|| band(area.x + area.width - SCROLLBAR_WIDTH, SCROLLBAR_WIDTH)),
         viewport,
     }
@@ -140,19 +171,17 @@ pub fn tree_viewport_height(area: Rect) -> usize {
     area.height.saturating_sub(1) as usize
 }
 
-pub fn draw(
-    frame: &mut Frame,
-    rows: &[Row],
-    view: &FlatView,
-    settings: &Settings,
-    theme: &Theme,
-    bottom_line: &str,
-) {
+pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bottom_line: &str) {
+    let Chrome {
+        settings,
+        theme,
+        branch_axis,
+    } = chrome;
     let area = frame.area();
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let geometry = layout(area, settings, theme, rows.len());
+    let geometry = layout(area, chrome, rows.len());
     let viewport = geometry.viewport;
     let bar_width = geometry.bar.map_or(0, |b| b.width);
     let tree_area = geometry.tree;
@@ -172,7 +201,7 @@ pub fn draw(
             selected_visible = Some(i as u16);
         }
         lines.push(row_line(theme, settings, row, is_selected));
-        badges.push(badge_line(theme, row));
+        badges.push(badge_line(theme, row, branch_axis));
     }
     // A theme with an app_bg (the Commander's DOS blue) paints its whole
     // canvas; the area is filled first so the badge gutter matches, and every
@@ -345,8 +374,27 @@ fn glyph_column_spans(theme: &Theme, settings: &Settings, row: &Row) -> Vec<Span
 
 /// The right-hand git badge for one row (directory rollups always use the `●`
 /// dot; files follow the theme's `BadgeStyle`).
-fn badge_line(theme: &Theme, row: &Row) -> Line<'static> {
-    match row.status {
+fn badge_line(theme: &Theme, row: &Row, branch_axis: bool) -> Line<'static> {
+    let mut spans = Vec::new();
+    if branch_axis {
+        // The branch mark sits inward of the working-tree badge, with a space
+        // between, so the badge a user already reads keeps its column (078).
+        spans.push(Span::styled(
+            if row.in_branch {
+                theme.branch_mark
+            } else {
+                " "
+            },
+            Style::default().fg(theme.palette.branch_mark),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    spans.extend(status_span(theme, row));
+    Line::from(spans)
+}
+
+fn status_span(theme: &Theme, row: &Row) -> Vec<Span<'static>> {
+    let line: Line<'static> = match row.status {
         Some(status) if row.kind.is_dir() && !row.missing => Line::from(Span::styled(
             theme.badge_dot,
             Style::default().fg(theme.palette.git.color(status)),
@@ -362,7 +410,8 @@ fn badge_line(theme: &Theme, row: &Row) -> Line<'static> {
             ))
         }
         None => Line::default(),
-    }
+    };
+    line.spans
 }
 
 /// The ancestor-indent columns (`INDENT_WIDTH` each). Renders the theme's
@@ -539,13 +588,12 @@ fn base_name_style(theme: &Theme, row: &Row) -> Style {
 pub fn hit_test(
     rows: &[Row],
     view: &FlatView,
-    settings: &Settings,
-    theme: &Theme,
+    chrome: Chrome,
     area: Rect,
     column: u16,
     row_y: u16,
 ) -> Option<(usize, bool)> {
-    let geometry = layout(area, settings, theme, rows.len());
+    let geometry = layout(area, chrome, rows.len());
     let viewport = geometry.viewport as u16;
     if row_y < area.y || row_y >= area.y + viewport {
         return None;
@@ -592,6 +640,7 @@ mod tests {
             loaded: true,
             chain: Vec::new(),
             status: None,
+            in_branch: false,
             ignored: false,
             missing: false,
             live: true,
@@ -601,6 +650,14 @@ mod tests {
             annotation: None,
             guides: Vec::new(),
             last_sibling: true,
+        }
+    }
+
+    fn chrome<'a>(settings: &'a Settings, theme: &'a Theme, branch_axis: bool) -> Chrome<'a> {
+        Chrome {
+            settings,
+            theme,
+            branch_axis,
         }
     }
 
@@ -619,19 +676,19 @@ mod tests {
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
         assert_eq!(
-            hit_test(&rows, &view, &no_bar(), &theme(), area, 0, 0),
+            hit_test(&rows, &view, chrome(&no_bar(), &theme(), false), area, 0, 0),
             Some((0, true))
         );
         assert_eq!(
-            hit_test(&rows, &view, &no_bar(), &theme(), area, 5, 0),
+            hit_test(&rows, &view, chrome(&no_bar(), &theme(), false), area, 5, 0),
             Some((0, false))
         );
         assert_eq!(
-            hit_test(&rows, &view, &no_bar(), &theme(), area, 2, 1),
+            hit_test(&rows, &view, chrome(&no_bar(), &theme(), false), area, 2, 1),
             Some((1, true))
         );
         assert_eq!(
-            hit_test(&rows, &view, &no_bar(), &theme(), area, 0, 5),
+            hit_test(&rows, &view, chrome(&no_bar(), &theme(), false), area, 0, 5),
             None
         );
     }
@@ -645,7 +702,7 @@ mod tests {
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
         assert_eq!(
-            hit_test(&rows, &view, &no_bar(), &theme(), area, 0, 0),
+            hit_test(&rows, &view, chrome(&no_bar(), &theme(), false), area, 0, 0),
             Some((0, false))
         );
     }
@@ -655,8 +712,8 @@ mod tests {
         let rows = vec![row("a", NodeKind::File, 0); 20];
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
-        assert!(hit_test(&rows, &view, &no_bar(), &theme(), area, 0, 9).is_none());
-        assert!(hit_test(&rows, &view, &no_bar(), &theme(), area, 0, 8).is_some());
+        assert!(hit_test(&rows, &view, chrome(&no_bar(), &theme(), false), area, 0, 9).is_none());
+        assert!(hit_test(&rows, &view, chrome(&no_bar(), &theme(), false), area, 0, 8).is_some());
     }
 
     #[test]
@@ -667,9 +724,11 @@ mod tests {
         let mut view = FlatView::default();
         view.scroll = 5;
         let area = Rect::new(0, 0, 40, 10);
-        let (idx, _) = hit_test(&rows, &view, &no_bar(), &theme(), area, 4, 0).unwrap();
+        let (idx, _) =
+            hit_test(&rows, &view, chrome(&no_bar(), &theme(), false), area, 4, 0).unwrap();
         assert_eq!(rows[idx].name, "f5");
-        let (idx, _) = hit_test(&rows, &view, &no_bar(), &theme(), area, 4, 8).unwrap();
+        let (idx, _) =
+            hit_test(&rows, &view, chrome(&no_bar(), &theme(), false), area, 4, 8).unwrap();
         assert_eq!(rows[idx].name, "f13");
     }
 
@@ -709,7 +768,15 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(40, 3)).unwrap();
         terminal
-            .draw(|frame| draw(frame, &rows, &view, &Settings::default(), &theme, ""))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &rows,
+                    &view,
+                    chrome(&Settings::default(), &theme, false),
+                    "",
+                )
+            })
             .unwrap();
 
         let buffer = terminal.backend().buffer();
@@ -917,7 +984,14 @@ mod tests {
             let start = 2 * INDENT_WIDTH; // depth 2
             let rows = vec![dir];
             assert_eq!(
-                hit_test(&rows, &view, &no_bar(), &theme, area, start, 0),
+                hit_test(
+                    &rows,
+                    &view,
+                    chrome(&no_bar(), &theme, false),
+                    area,
+                    start,
+                    0
+                ),
                 Some((0, true)),
                 "theme {id:?} chevron hit at depth offset"
             );
@@ -925,8 +999,7 @@ mod tests {
                 hit_test(
                     &rows,
                     &view,
-                    &no_bar(),
-                    &theme,
+                    chrome(&no_bar(), &theme, false),
                     area,
                     start.saturating_sub(1),
                     0
@@ -1148,7 +1221,7 @@ mod tests {
         // Right (today): the tree starts at the pane's left edge.
         let right = placed(Some(BadgePlacement::Right));
         assert_eq!(
-            hit_test(&rows, &view, &right, &th, area, 0, 0),
+            hit_test(&rows, &view, chrome(&right, &th, false), area, 0, 0),
             Some((0, true))
         );
 
@@ -1157,12 +1230,12 @@ mod tests {
         let left = placed(Some(BadgePlacement::Left));
         let gutter = BADGE_WIDTH + 1;
         assert_eq!(
-            hit_test(&rows, &view, &left, &th, area, 0, 0),
+            hit_test(&rows, &view, chrome(&left, &th, false), area, 0, 0),
             Some((0, false)),
             "column 0 is the gutter now, not the chevron"
         );
         assert_eq!(
-            hit_test(&rows, &view, &left, &th, area, gutter, 0),
+            hit_test(&rows, &view, chrome(&left, &th, false), area, gutter, 0),
             Some((0, true)),
             "the chevron moved with the paint"
         );
@@ -1170,7 +1243,7 @@ mod tests {
         // None: no gutter at all, so the tree is back at the edge.
         let none = placed(Some(BadgePlacement::None));
         assert_eq!(
-            hit_test(&rows, &view, &none, &th, area, 0, 0),
+            hit_test(&rows, &view, chrome(&none, &th, false), area, 0, 0),
             Some((0, true))
         );
     }
@@ -1180,8 +1253,16 @@ mod tests {
         let rows = [row("src", NodeKind::Dir, 0)];
         let area = Rect::new(0, 0, 40, 10);
         let th = theme();
-        let with = layout(area, &placed(Some(BadgePlacement::Right)), &th, rows.len());
-        let without = layout(area, &placed(Some(BadgePlacement::None)), &th, rows.len());
+        let with = layout(
+            area,
+            chrome(&placed(Some(BadgePlacement::Right)), &th, false),
+            rows.len(),
+        );
+        let without = layout(
+            area,
+            chrome(&placed(Some(BadgePlacement::None)), &th, false),
+            rows.len(),
+        );
         assert_eq!(without.tree.width, with.tree.width + BADGE_WIDTH + 1);
         assert!(without.badges.is_none(), "nothing to paint");
         assert!(with.badges.is_some());
@@ -1194,22 +1275,21 @@ mod tests {
         // JetBrains carries version state in the filename colour, no letter.
         let jetbrains = Theme::for_id(birch_core::ThemeId::Jetbrains);
         assert!(
-            layout(area, &placed(None), &jetbrains, rows.len())
+            layout(area, chrome(&placed(None), &jetbrains, false), rows.len())
                 .badges
                 .is_none()
         );
         // ...unless the user asks for one anyway.
         let forced = layout(
             area,
-            &placed(Some(BadgePlacement::Right)),
-            &jetbrains,
+            chrome(&placed(Some(BadgePlacement::Right)), &jetbrains, false),
             rows.len(),
         );
         assert!(forced.badges.is_some());
         // A theme that does want badges gets them without any setting.
         let vscode = Theme::for_id(birch_core::ThemeId::Vscode);
         assert!(
-            layout(area, &placed(None), &vscode, rows.len())
+            layout(area, chrome(&placed(None), &vscode, false), rows.len())
                 .badges
                 .is_some()
         );
@@ -1227,7 +1307,7 @@ mod tests {
                 badges: Some(placement),
                 ..Settings::default()
             };
-            let geometry = layout(area, &settings, &th, rows.len());
+            let geometry = layout(area, chrome(&settings, &th, false), rows.len());
             let bar = geometry.bar.expect("rows overflow, so a bar is shown");
             assert_eq!(
                 bar.x,
@@ -1246,6 +1326,73 @@ mod tests {
         }
     }
 
+    // ---- 078: the branch column ----
+
+    #[test]
+    fn the_branch_mark_sits_inward_and_the_local_badge_keeps_its_column() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let th = theme();
+        let mut changed = row("app.rs", NodeKind::File, 0);
+        changed.status = Some(FileStatus::Modified);
+        changed.in_branch = true;
+        let rows = vec![changed];
+        let view = FlatView::default();
+        let settings = Settings {
+            scrollbar: false,
+            ..Settings::default()
+        };
+        let (w, h) = (30u16, 3u16);
+
+        let column_of = |branch_axis: bool| {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &rows, &view, chrome(&settings, &th, branch_axis), ""))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let at = |x: u16| buffer[(x, 0)].symbol().to_string();
+            (0..w).map(at).collect::<Vec<_>>()
+        };
+
+        let without = column_of(false);
+        let with = column_of(true);
+        let local_without = without.iter().position(|s| s == "M").expect("status badge");
+        let local_with = with.iter().position(|s| s == "M").expect("status badge");
+        assert_eq!(
+            local_with, local_without,
+            "the working-tree badge does not move when the branch column appears"
+        );
+        let mark = with
+            .iter()
+            .position(|s| s == th.branch_mark)
+            .expect("branch mark");
+        assert!(mark < local_with, "the mark sits inward of the badge");
+        assert_eq!(
+            with[mark + 1],
+            " ",
+            "a space keeps them apart, and keeps the column"
+        );
+        assert!(!without.iter().any(|s| s == th.branch_mark));
+    }
+
+    #[test]
+    fn without_a_base_the_branch_column_costs_nothing() {
+        let rows = [row("src", NodeKind::Dir, 0)];
+        let area = Rect::new(0, 0, 40, 10);
+        let th = theme();
+        let settings = Settings {
+            scrollbar: false,
+            ..Settings::default()
+        };
+        let with = layout(area, chrome(&settings, &th, true), rows.len());
+        let without = layout(area, chrome(&settings, &th, false), rows.len());
+        assert_eq!(
+            without.tree.width,
+            with.tree.width + BRANCH_BADGE_WIDTH,
+            "the width goes back to names when there is nothing to compare"
+        );
+    }
+
     #[test]
     fn the_layout_holds_in_a_pane_too_narrow_for_the_furniture() {
         use ratatui::Terminal;
@@ -1261,7 +1408,15 @@ mod tests {
             for height in 1..=4u16 {
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 terminal
-                    .draw(|frame| draw(frame, &rows, &view, &Settings::default(), &theme, ""))
+                    .draw(|frame| {
+                        draw(
+                            frame,
+                            &rows,
+                            &view,
+                            chrome(&Settings::default(), &theme, false),
+                            "",
+                        )
+                    })
                     .unwrap();
             }
         }
@@ -1282,7 +1437,15 @@ mod tests {
         let (w, h) = (30u16, 4u16);
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
         terminal
-            .draw(|frame| draw(frame, &rows, &view, &Settings::default(), &theme, ""))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &rows,
+                    &view,
+                    chrome(&Settings::default(), &theme, false),
+                    "",
+                )
+            })
             .unwrap();
         let buffer = terminal.backend().buffer();
         let bar_cell = &buffer[(w - 1, 0)];
@@ -1301,10 +1464,23 @@ mod tests {
         let area = Rect::new(0, 0, 40, 10);
         let on = Settings::default();
         // The far-right column belongs to the bar, not to the row behind it.
-        assert_eq!(hit_test(&rows, &view, &on, &theme(), area, 39, 0), None);
-        assert!(hit_test(&rows, &view, &on, &theme(), area, 38, 0).is_some());
+        assert_eq!(
+            hit_test(&rows, &view, chrome(&on, &theme(), false), area, 39, 0),
+            None
+        );
+        assert!(hit_test(&rows, &view, chrome(&on, &theme(), false), area, 38, 0).is_some());
         // With the bar off, the same column selects again.
-        assert!(hit_test(&rows, &view, &no_bar(), &theme(), area, 39, 0).is_some());
+        assert!(
+            hit_test(
+                &rows,
+                &view,
+                chrome(&no_bar(), &theme(), false),
+                area,
+                39,
+                0
+            )
+            .is_some()
+        );
     }
 
     #[test]
@@ -1312,6 +1488,16 @@ mod tests {
         let rows = vec![row("only", NodeKind::File, 0)];
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
-        assert!(hit_test(&rows, &view, &Settings::default(), &theme(), area, 39, 0).is_some());
+        assert!(
+            hit_test(
+                &rows,
+                &view,
+                chrome(&Settings::default(), &theme(), false),
+                area,
+                39,
+                0
+            )
+            .is_some()
+        );
     }
 }
