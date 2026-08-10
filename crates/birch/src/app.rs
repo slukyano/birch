@@ -117,6 +117,8 @@ struct App {
     /// matches both (ADR 0025). Keyed on the real path, so a snapshot arriving
     /// between press and release cannot redirect the click.
     armed_press: Option<(PathBuf, bool)>,
+    /// When the match list was last recomputed from a *growing* index.
+    last_rematch: Option<Instant>,
     /// Row count from the last draw. A scroll needs the count and nothing
     /// else, so it is served from here instead of rebuilding every row
     /// (ADR 0024); `FlatView::reconcile` re-clamps before every draw anyway.
@@ -132,6 +134,11 @@ struct App {
 /// it degrades with the machine's speed instead of meaning different things on
 /// different hardware.
 const BATCH_BUDGET: Duration = Duration::from_millis(8);
+
+/// How often the match list is recomputed while the index is still growing
+/// (ADR 0026). Fast enough that results visibly improve, rare enough that the
+/// walk is not spent re-scanning what it has already found.
+const INDEX_REMATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Whether the batch may continue, given what the last handled event did.
 /// One rule, asked both before a batch opens and after each event inside it,
@@ -237,6 +244,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         input_paused,
         click_timer: input::ClickTimer::default(),
         armed_press: None,
+        last_rematch: None,
         rows_len: 0,
         yielded_terminal: false,
     };
@@ -302,8 +310,21 @@ impl App {
             }
             AppEvent::Fs(WatchEvent::Dirty(dirs)) => self.handle_dirty(dirs),
             AppEvent::Index(IndexEvent::Index(index)) => {
+                let complete = index.is_complete();
                 self.index = Some(index);
-                self.rematch();
+                // A growing index publishes ~100 times on a large root, and
+                // rematching on every one doubles the walk while a query is
+                // live. The match list has to keep improving, not track every
+                // chunk — so intermediate ones rematch on a cadence, and the
+                // final one always does.
+                let due = complete
+                    || self
+                        .last_rematch
+                        .is_none_or(|at| at.elapsed() >= INDEX_REMATCH_INTERVAL);
+                if due {
+                    self.last_rematch = Some(Instant::now());
+                    self.rematch();
+                }
             }
             AppEvent::Ctl(ctl) => return self.handle_ctl(terminal, events, ctl),
             AppEvent::Shutdown => return true,
@@ -1183,10 +1204,20 @@ impl App {
                 Mode::Tree => format!("search: {}", state.query),
                 Mode::Pick => format!("> {}", state.query),
             };
-            if n == 0 {
-                format!("{prompt} (no matches)")
-            } else {
-                format!("{prompt} ({}/{n})", self.anchor_index(&state.matches) + 1)
+            // Three index states, three different things to say (ADR 0026).
+            // "no matches" is a claim about the corpus, so it waits until
+            // there is a whole corpus to make it about.
+            match (&self.index, n) {
+                (None, _) => format!("{prompt} (indexing…)"),
+                (Some(index), 0) if !index.is_complete() => {
+                    format!("{prompt} (indexing…)")
+                }
+                (Some(_), 0) => format!("{prompt} (no matches)"),
+                (Some(index), _) if !index.is_complete() => format!(
+                    "{prompt} ({}/{n}, indexing…)",
+                    self.anchor_index(&state.matches) + 1
+                ),
+                _ => format!("{prompt} ({}/{n})", self.anchor_index(&state.matches) + 1),
             }
         } else if self.mode.is_pick() {
             "> type to filter, Enter picks the selection, Esc quits".into()
@@ -1507,6 +1538,7 @@ mod tests {
             input_paused: Arc::new(AtomicBool::new(false)),
             click_timer: input::ClickTimer::default(),
             armed_press: None,
+            last_rematch: None,
             rows_len: 0,
             yielded_terminal: false,
         };
@@ -1543,18 +1575,7 @@ mod tests {
     }
 
     fn index_of(entries: &[(&str, bool)]) -> Arc<SearchIndex> {
-        Arc::new(SearchIndex {
-            entries: entries
-                .iter()
-                .map(|(rel, is_dir)| {
-                    birch_core::search::IndexEntry::new(
-                        (*rel).into(),
-                        PathBuf::from("/r").join(rel),
-                        *is_dir,
-                    )
-                })
-                .collect(),
-        })
+        Arc::new(SearchIndex::from_paths(Path::new("/r"), entries))
     }
 
     #[test]
@@ -2771,6 +2792,97 @@ mod tests {
             h.app.picked.is_none(),
             "the abandoned click reset the double"
         );
+    }
+
+    // ---- ADR 0026: the index has a lifecycle, and says which state it is in ----
+
+    /// A partial index over the same paths — what a mid-walk chunk looks like.
+    fn partial_index_of(entries: &[(&str, bool)]) -> Arc<SearchIndex> {
+        Arc::new(SearchIndex::from_paths_partial(Path::new("/r"), entries))
+    }
+
+    #[test]
+    fn no_matches_is_only_claimed_once_the_index_is_complete() {
+        let mut h = harness(Mode::Pick);
+        feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
+        h.app.search_push('z');
+
+        // No index at all: birch cannot speak about the corpus.
+        h.app.index = None;
+        h.app.rematch();
+        assert!(
+            h.app.bottom_line().contains("indexing"),
+            "{}",
+            h.app.bottom_line()
+        );
+        assert!(!h.app.bottom_line().contains("no matches"));
+
+        // A partial index that holds nothing matching: still not a claim.
+        h.app.index = Some(partial_index_of(&[("a.txt", false)]));
+        h.app.rematch();
+        assert!(
+            h.app.bottom_line().contains("indexing"),
+            "{}",
+            h.app.bottom_line()
+        );
+        assert!(!h.app.bottom_line().contains("no matches"));
+
+        // Complete and holding nothing: now it is true, and said.
+        h.app.index = Some(index_of(&[("a.txt", false)]));
+        h.app.rematch();
+        assert!(
+            h.app.bottom_line().contains("no matches"),
+            "{}",
+            h.app.bottom_line()
+        );
+    }
+
+    #[test]
+    fn a_partial_index_shows_its_matches_and_says_it_is_still_growing() {
+        let mut h = harness(Mode::Pick);
+        feed(&mut h.app, "/r", &[("alpha.txt", NodeKind::File)]);
+        h.app.search_push('a');
+        h.app.index = Some(partial_index_of(&[("alpha.txt", false)]));
+        h.app.rematch();
+        let line = h.app.bottom_line();
+        assert!(line.contains("/1"), "counts what it has: {line}");
+        assert!(
+            line.contains("indexing"),
+            "and says there may be more: {line}"
+        );
+    }
+
+    #[test]
+    fn an_arriving_chunk_does_not_move_a_settled_selection() {
+        // The cursor must not walk under a reader's eyes as the index grows.
+        let mut h = harness(Mode::Pick);
+        let entries: Vec<(String, NodeKind)> = (0..6)
+            .map(|i| (format!("f{i}.txt"), NodeKind::File))
+            .collect();
+        let refs: Vec<(&str, NodeKind)> = entries.iter().map(|(n, k)| (n.as_str(), *k)).collect();
+        feed(&mut h.app, "/r", &refs);
+        h.app.index = Some(partial_index_of(&[("f3.txt", false), ("f4.txt", false)]));
+        h.app.search_push('f');
+        // Settle on the second of the two known matches.
+        h.app.cycle_match(true);
+        let settled = h.app.view.selection.clone();
+        assert!(settled.is_some());
+
+        // A chunk arrives carrying matches that sort *before* the selection.
+        h.app.index = Some(partial_index_of(&[
+            ("f0.txt", false),
+            ("f1.txt", false),
+            ("f2.txt", false),
+            ("f3.txt", false),
+            ("f4.txt", false),
+        ]));
+        h.app.rematch();
+        assert_eq!(
+            h.app.view.selection, settled,
+            "the selection stayed on the row the user had settled on"
+        );
+        // ...and the newly arrived rows are matches it can now step to.
+        assert_eq!(h.app.search.as_ref().unwrap().matches.len(), 5);
     }
 }
 
