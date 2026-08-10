@@ -107,6 +107,12 @@ struct Cli {
     #[arg(long, overrides_with = "scrollbar")]
     no_scrollbar: bool,
 
+    /// Where git status badges sit: right, left, or none (default: the
+    /// theme's choice). `none` keeps status colours and folder rollups —
+    /// use --no-git to turn git off.
+    #[arg(long, value_name = "right|left|none")]
+    badges: Option<birch_core::settings::BadgePlacement>,
+
     /// Rows one mouse-wheel tick scrolls (1-10, default 3).
     #[arg(long, value_name = "n", value_parser = clap::value_parser!(u8).range(
         birch_core::settings::SCROLL_LINES_MIN as i64..=birch_core::settings::SCROLL_LINES_MAX as i64))]
@@ -285,6 +291,9 @@ fn main() -> ExitCode {
     }
     if let Some(v) = flag(cli.scrollbar, cli.no_scrollbar) {
         settings.scrollbar = v;
+    }
+    if let Some(placement) = cli.badges {
+        settings.badges = Some(placement);
     }
     if let Some(n) = cli.scroll_lines {
         settings.scroll_lines = n;

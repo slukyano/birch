@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::settings::{Settings, ThemeId, clamp_scroll_lines};
+use crate::settings::{BadgePlacement, Settings, ThemeId, clamp_scroll_lines};
 
 /// A partial set of personal defaults parsed from the TOML config. Every field
 /// is optional — a missing key means "no opinion, use the built-in default".
@@ -28,6 +28,7 @@ pub struct Config {
     pub open_cmd: Option<String>,
     pub scroll_lines: Option<i64>,
     pub scrollbar: Option<bool>,
+    pub badges: Option<BadgePlacement>,
 }
 
 impl Config {
@@ -106,6 +107,9 @@ impl Config {
         if let Some(scrollbar) = self.scrollbar {
             s.scrollbar = scrollbar;
         }
+        if let Some(badges) = self.badges {
+            s.badges = Some(badges);
+        }
         // Out of range degrades rather than failing: a config file must never
         // block launch (ADR 0022).
         if let Some(scroll_lines) = self.scroll_lines {
@@ -136,6 +140,7 @@ mod tests {
             open-cmd = "code {}"
             scroll-lines = 5
             scrollbar = false
+            badges = "left"
         "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.theme, Some(ThemeId::Jetbrains));
@@ -149,6 +154,7 @@ mod tests {
         assert_eq!(config.open_cmd.as_deref(), Some("code {}"));
         assert_eq!(config.scroll_lines, Some(5));
         assert_eq!(config.scrollbar, Some(false));
+        assert_eq!(config.badges, Some(BadgePlacement::Left));
     }
 
     #[test]
@@ -214,6 +220,7 @@ mod tests {
             open_cmd: Some("vim {}".into()),
             scroll_lines: None,
             scrollbar: None,
+            badges: None,
         };
         let mut settings = Settings::default();
         config.apply_to(&mut settings);

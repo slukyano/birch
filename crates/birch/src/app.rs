@@ -489,6 +489,7 @@ impl App {
                     &rows,
                     &self.view,
                     &self.settings,
+                    &Theme::for_id(self.settings.theme),
                     area(terminal),
                     column,
                     row,
@@ -501,6 +502,7 @@ impl App {
                     &rows,
                     &self.view,
                     &self.settings,
+                    &Theme::for_id(self.settings.theme),
                     area(terminal),
                     column,
                     row,
@@ -676,6 +678,21 @@ impl App {
         // key parses. The redraw at the end of the loop applies it live.
         // Numeric settings are parsed before SettingValue, as Theme is: their
         // value is not on/off/toggle.
+        if let SettingKey::Badges = key {
+            // `auto` hands the choice back to the theme.
+            return if value.trim().eq_ignore_ascii_case("auto") {
+                self.settings.badges = None;
+                Response::ok(None)
+            } else {
+                match value.parse::<settings::BadgePlacement>() {
+                    Ok(placement) => {
+                        self.settings.badges = Some(placement);
+                        Response::ok(None)
+                    }
+                    Err(e) => Response::err(e),
+                }
+            };
+        }
         if let SettingKey::ScrollLines = key {
             return match value.parse::<u8>() {
                 Ok(n) if (settings::SCROLL_LINES_MIN..=settings::SCROLL_LINES_MAX).contains(&n) => {
@@ -730,7 +747,7 @@ impl App {
             SettingKey::Scrollbar => {
                 self.settings.scrollbar = value.apply(self.settings.scrollbar);
             }
-            SettingKey::Theme | SettingKey::ScrollLines => {
+            SettingKey::Theme | SettingKey::ScrollLines | SettingKey::Badges => {
                 return Response::err("handled before value parsing");
             }
         }
@@ -2587,6 +2604,31 @@ mod tests {
             assert!(!reply.ok, "{bad} should be refused");
             assert_eq!(h.app.settings.scroll_lines, 7, "{bad} changed the value");
         }
+    }
+
+    #[test]
+    fn ctl_set_badges_takes_a_word_and_auto_returns_to_the_theme() {
+        let mut h = harness(Mode::Tree);
+        let mut req = Request::new(Verb::Set);
+        req.setting = Some(SettingKey::Badges);
+        assert_eq!(h.app.settings.badges, None, "the theme decides by default");
+
+        req.value = Some("left".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert_eq!(h.app.settings.badges, Some(settings::BadgePlacement::Left));
+
+        req.value = Some("none".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert_eq!(h.app.settings.badges, Some(settings::BadgePlacement::None));
+
+        // `auto` hands the choice back rather than pinning a value.
+        req.value = Some("auto".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert_eq!(h.app.settings.badges, None);
+
+        req.value = Some("sideways".into());
+        assert!(!h.app.ctl_response(req).0.ok, "not a placement");
+        assert_eq!(h.app.settings.badges, None, "a refusal changes nothing");
     }
 
     #[test]

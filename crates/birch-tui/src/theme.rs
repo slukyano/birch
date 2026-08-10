@@ -4,6 +4,7 @@
 //! like" lives here, so `birch-core` stays ratatui-free and only *names* the
 //! theme.
 
+use birch_core::settings::BadgePlacement;
 use birch_core::{FileStatus, ThemeId};
 use ratatui::style::Color;
 
@@ -137,6 +138,9 @@ pub struct Theme {
     pub guides: GuideStyle,
     pub selection: SelectionStyle,
     pub badges: BadgeStyle,
+    /// Where the badge gutter sits by default for this theme. The `badges`
+    /// setting overrides it.
+    pub badge_placement: BadgePlacement,
     pub icons: IconSet,
     /// Directory names are rendered bold.
     pub bold_dirs: bool,
@@ -189,6 +193,7 @@ impl Theme {
     fn birch() -> Theme {
         Theme {
             id: ThemeId::Birch,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: Some(Color::Rgb(0xb0, 0xb4, 0xab)),
@@ -236,6 +241,7 @@ impl Theme {
     fn vscode() -> Theme {
         Theme {
             id: ThemeId::Vscode,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 // Measured from VS Code Dark Modern: files and dirs share the
@@ -280,6 +286,7 @@ impl Theme {
     fn jetbrains() -> Theme {
         Theme {
             id: ThemeId::Jetbrains,
+            badge_placement: BadgePlacement::None,
             palette: Palette {
                 app_bg: None,
                 // Measured from IDEA New UI dark: cool greys, dirs not bold.
@@ -324,6 +331,7 @@ impl Theme {
     fn xcode() -> Theme {
         Theme {
             id: ThemeId::Xcode,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: Some(Color::Rgb(0xe5, 0xea, 0xf0)),
@@ -367,6 +375,7 @@ impl Theme {
     fn mocha() -> Theme {
         Theme {
             id: ThemeId::Mocha,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: None,
@@ -409,6 +418,7 @@ impl Theme {
     fn tokyonight() -> Theme {
         Theme {
             id: ThemeId::Tokyonight,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: None,
@@ -451,6 +461,7 @@ impl Theme {
     fn gruvbox() -> Theme {
         Theme {
             id: ThemeId::Gruvbox,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: Some(Color::Rgb(0xeb, 0xdb, 0xb2)), // fg1
@@ -492,6 +503,7 @@ impl Theme {
     fn nord() -> Theme {
         Theme {
             id: ThemeId::Nord,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: Some(Color::Rgb(0xd8, 0xde, 0xe9)), // nord4 (snow storm)
@@ -534,6 +546,7 @@ impl Theme {
     fn rosepine() -> Theme {
         Theme {
             id: ThemeId::Rosepine,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: Some(Color::Rgb(0xe0, 0xde, 0xf4)), // text
@@ -576,6 +589,7 @@ impl Theme {
     fn retro() -> Theme {
         Theme {
             id: ThemeId::Retro,
+            badge_placement: BadgePlacement::None,
             palette: Palette {
                 // The DOS blue field — the one theme that paints its canvas.
                 app_bg: Some(Color::Rgb(0x00, 0x00, 0xaa)),
@@ -619,6 +633,7 @@ impl Theme {
     fn plain() -> Theme {
         Theme {
             id: ThemeId::Plain,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: None,

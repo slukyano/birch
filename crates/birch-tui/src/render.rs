@@ -1,6 +1,7 @@
 //! Painting: rows → terminal. Everything here is a pure function of the
 //! view-model state; hit-testing mirrors the same geometry.
 
+use birch_core::settings::BadgePlacement;
 use birch_core::{FileStatus, Settings};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -88,6 +89,52 @@ fn scrollbar_shown(settings: &Settings, rows: usize, viewport: usize, width: u16
         && thumb(rows, viewport, 0).is_some()
 }
 
+/// Where each band sits for one frame. `draw` paints from it and `hit_test`
+/// reads it, so the painted columns and the clickable ones are the same
+/// columns by construction.
+#[derive(Clone, Copy, Debug)]
+struct Layout {
+    tree: Rect,
+    badges: Option<Rect>,
+    bar: Option<Rect>,
+    viewport: usize,
+}
+
+fn layout(area: Rect, settings: &Settings, theme: &Theme, rows: usize) -> Layout {
+    let viewport = tree_viewport_height(area);
+    let placement = settings.badges.unwrap_or(theme.badge_placement);
+    let bar_width = if scrollbar_shown(settings, rows, viewport, area.width) {
+        SCROLLBAR_WIDTH
+    } else {
+        0
+    };
+    // The gutter is the badge column plus one spacer, so truncated text never
+    // touches a status indicator. `None` gives the whole width back to names.
+    let gutter = match placement {
+        BadgePlacement::None => 0,
+        _ => BADGE_WIDTH + 1,
+    };
+    let gutter = gutter.min(area.width.saturating_sub(bar_width));
+    let tree_width = area.width.saturating_sub(bar_width + gutter);
+    let (tree_x, badge_x) = match placement {
+        // Right: names, spacer, badges, then the bar outside everything.
+        BadgePlacement::Left => (area.x + gutter, area.x),
+        _ => (area.x, area.x + tree_width + 1),
+    };
+    let band = |x: u16, width: u16| Rect {
+        x,
+        width,
+        height: viewport as u16,
+        ..area
+    };
+    Layout {
+        tree: band(tree_x, tree_width),
+        badges: (gutter > 0).then(|| band(badge_x, BADGE_WIDTH.min(area.width))),
+        bar: (bar_width > 0).then(|| band(area.x + area.width - SCROLLBAR_WIDTH, SCROLLBAR_WIDTH)),
+        viewport,
+    }
+}
+
 /// The tree gets everything above the one-line status bar.
 pub fn tree_viewport_height(area: Rect) -> usize {
     area.height.saturating_sub(1) as usize
@@ -105,29 +152,10 @@ pub fn draw(
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let viewport = tree_viewport_height(area);
-    let badge_width = BADGE_WIDTH.min(area.width);
-    // The scrollbar takes the far-right column, pushing the badges left, and
-    // only while it is shown — a blank reserved column is real estate paid for
-    // nothing in a narrow pane.
-    let bar_width = if scrollbar_shown(settings, rows.len(), viewport, area.width) {
-        SCROLLBAR_WIDTH
-    } else {
-        0
-    };
-    // One gutter column before the badges so truncated text never touches
-    // a status indicator.
-    let tree_area = Rect {
-        width: area.width - bar_width - badge_width - 1.min(area.width - bar_width - badge_width),
-        height: viewport as u16,
-        ..area
-    };
-    let badge_area = Rect {
-        x: area.x + area.width - bar_width - badge_width,
-        width: badge_width,
-        height: viewport as u16,
-        ..area
-    };
+    let geometry = layout(area, settings, theme, rows.len());
+    let viewport = geometry.viewport;
+    let bar_width = geometry.bar.map_or(0, |b| b.width);
+    let tree_area = geometry.tree;
     let status_area = Rect {
         y: area.y + area.height.saturating_sub(1),
         height: 1,
@@ -157,7 +185,9 @@ pub fn draw(
         frame.buffer_mut().set_style(area, canvas);
     }
     frame.render_widget(Paragraph::new(lines).style(canvas), tree_area);
-    frame.render_widget(Paragraph::new(badges).style(canvas), badge_area);
+    if let Some(badge_area) = geometry.badges {
+        frame.render_widget(Paragraph::new(badges).style(canvas), badge_area);
+    }
     if bar_width > 0
         && let Some(Thumb { start, len }) = thumb(rows.len(), viewport, view.scroll)
     {
@@ -510,25 +540,27 @@ pub fn hit_test(
     rows: &[Row],
     view: &FlatView,
     settings: &Settings,
+    theme: &Theme,
     area: Rect,
     column: u16,
     row_y: u16,
 ) -> Option<(usize, bool)> {
-    let viewport = tree_viewport_height(area) as u16;
+    let geometry = layout(area, settings, theme, rows.len());
+    let viewport = geometry.viewport as u16;
     if row_y < area.y || row_y >= area.y + viewport {
         return None;
     }
     // While the scrollbar is shown its column is inert: a pure indicator must
     // not double as a selection surface, and this reserves the gesture for a
     // future drag-to-scroll.
-    if scrollbar_shown(settings, rows.len(), viewport as usize, area.width)
-        && column >= area.x + area.width - SCROLLBAR_WIDTH
-    {
+    if geometry.bar.is_some_and(|bar| column >= bar.x) {
         return None;
     }
     let idx = view.scroll + (row_y - area.y) as usize;
     let row = rows.get(idx)?;
-    let chevron_start = area.x + row.depth as u16 * INDENT_WIDTH;
+    // The chevron zone is measured from where the tree actually starts, so a
+    // left-hand gutter moves the clickable columns with the painted ones.
+    let chevron_start = geometry.tree.x + row.depth as u16 * INDENT_WIDTH;
     // Missing dirs render no chevron, so their chevron zone must not act
     // like one (it would activate on a single click).
     let on_chevron = row.kind.is_dir()
@@ -587,18 +619,21 @@ mod tests {
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
         assert_eq!(
-            hit_test(&rows, &view, &no_bar(), area, 0, 0),
+            hit_test(&rows, &view, &no_bar(), &theme(), area, 0, 0),
             Some((0, true))
         );
         assert_eq!(
-            hit_test(&rows, &view, &no_bar(), area, 5, 0),
+            hit_test(&rows, &view, &no_bar(), &theme(), area, 5, 0),
             Some((0, false))
         );
         assert_eq!(
-            hit_test(&rows, &view, &no_bar(), area, 2, 1),
+            hit_test(&rows, &view, &no_bar(), &theme(), area, 2, 1),
             Some((1, true))
         );
-        assert_eq!(hit_test(&rows, &view, &no_bar(), area, 0, 5), None);
+        assert_eq!(
+            hit_test(&rows, &view, &no_bar(), &theme(), area, 0, 5),
+            None
+        );
     }
 
     #[test]
@@ -610,7 +645,7 @@ mod tests {
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
         assert_eq!(
-            hit_test(&rows, &view, &no_bar(), area, 0, 0),
+            hit_test(&rows, &view, &no_bar(), &theme(), area, 0, 0),
             Some((0, false))
         );
     }
@@ -620,8 +655,8 @@ mod tests {
         let rows = vec![row("a", NodeKind::File, 0); 20];
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
-        assert!(hit_test(&rows, &view, &no_bar(), area, 0, 9).is_none());
-        assert!(hit_test(&rows, &view, &no_bar(), area, 0, 8).is_some());
+        assert!(hit_test(&rows, &view, &no_bar(), &theme(), area, 0, 9).is_none());
+        assert!(hit_test(&rows, &view, &no_bar(), &theme(), area, 0, 8).is_some());
     }
 
     #[test]
@@ -632,9 +667,9 @@ mod tests {
         let mut view = FlatView::default();
         view.scroll = 5;
         let area = Rect::new(0, 0, 40, 10);
-        let (idx, _) = hit_test(&rows, &view, &no_bar(), area, 4, 0).unwrap();
+        let (idx, _) = hit_test(&rows, &view, &no_bar(), &theme(), area, 4, 0).unwrap();
         assert_eq!(rows[idx].name, "f5");
-        let (idx, _) = hit_test(&rows, &view, &no_bar(), area, 4, 8).unwrap();
+        let (idx, _) = hit_test(&rows, &view, &no_bar(), &theme(), area, 4, 8).unwrap();
         assert_eq!(rows[idx].name, "f13");
     }
 
@@ -882,12 +917,20 @@ mod tests {
             let start = 2 * INDENT_WIDTH; // depth 2
             let rows = vec![dir];
             assert_eq!(
-                hit_test(&rows, &view, &no_bar(), area, start, 0),
+                hit_test(&rows, &view, &no_bar(), &theme, area, start, 0),
                 Some((0, true)),
                 "theme {id:?} chevron hit at depth offset"
             );
             assert_eq!(
-                hit_test(&rows, &view, &no_bar(), area, start.saturating_sub(1), 0),
+                hit_test(
+                    &rows,
+                    &view,
+                    &no_bar(),
+                    &theme,
+                    area,
+                    start.saturating_sub(1),
+                    0
+                ),
                 Some((0, false)),
                 "theme {id:?} just left of the chevron is not the chevron"
             );
@@ -1085,6 +1128,124 @@ mod tests {
         assert_eq!(bottom.start + bottom.len, viewport);
     }
 
+    // ---- 064: where the badges sit ----
+
+    fn placed(placement: Option<BadgePlacement>) -> Settings {
+        Settings {
+            scrollbar: false,
+            badges: placement,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn placement_moves_the_painted_columns_and_the_clickable_ones_together() {
+        let rows = [row("src", NodeKind::Dir, 0)];
+        let view = FlatView::default();
+        let area = Rect::new(0, 0, 40, 10);
+        let th = theme();
+
+        // Right (today): the tree starts at the pane's left edge.
+        let right = placed(Some(BadgePlacement::Right));
+        assert_eq!(
+            hit_test(&rows, &view, &right, &th, area, 0, 0),
+            Some((0, true))
+        );
+
+        // Left: the gutter takes the first columns, so the chevron — and the
+        // click that hits it — move right by the same amount.
+        let left = placed(Some(BadgePlacement::Left));
+        let gutter = BADGE_WIDTH + 1;
+        assert_eq!(
+            hit_test(&rows, &view, &left, &th, area, 0, 0),
+            Some((0, false)),
+            "column 0 is the gutter now, not the chevron"
+        );
+        assert_eq!(
+            hit_test(&rows, &view, &left, &th, area, gutter, 0),
+            Some((0, true)),
+            "the chevron moved with the paint"
+        );
+
+        // None: no gutter at all, so the tree is back at the edge.
+        let none = placed(Some(BadgePlacement::None));
+        assert_eq!(
+            hit_test(&rows, &view, &none, &th, area, 0, 0),
+            Some((0, true))
+        );
+    }
+
+    #[test]
+    fn none_gives_the_gutter_width_back_to_names() {
+        let rows = [row("src", NodeKind::Dir, 0)];
+        let area = Rect::new(0, 0, 40, 10);
+        let th = theme();
+        let with = layout(area, &placed(Some(BadgePlacement::Right)), &th, rows.len());
+        let without = layout(area, &placed(Some(BadgePlacement::None)), &th, rows.len());
+        assert_eq!(without.tree.width, with.tree.width + BADGE_WIDTH + 1);
+        assert!(without.badges.is_none(), "nothing to paint");
+        assert!(with.badges.is_some());
+    }
+
+    #[test]
+    fn a_theme_chooses_the_default_and_the_setting_overrides_it() {
+        let rows = [row("src", NodeKind::Dir, 0)];
+        let area = Rect::new(0, 0, 40, 10);
+        // JetBrains carries version state in the filename colour, no letter.
+        let jetbrains = Theme::for_id(birch_core::ThemeId::Jetbrains);
+        assert!(
+            layout(area, &placed(None), &jetbrains, rows.len())
+                .badges
+                .is_none()
+        );
+        // ...unless the user asks for one anyway.
+        let forced = layout(
+            area,
+            &placed(Some(BadgePlacement::Right)),
+            &jetbrains,
+            rows.len(),
+        );
+        assert!(forced.badges.is_some());
+        // A theme that does want badges gets them without any setting.
+        let vscode = Theme::for_id(birch_core::ThemeId::Vscode);
+        assert!(
+            layout(area, &placed(None), &vscode, rows.len())
+                .badges
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn the_scrollbar_stays_outside_the_gutter_under_either_placement() {
+        let rows: Vec<Row> = (0..50)
+            .map(|i| row(&format!("f{i}"), NodeKind::File, 0))
+            .collect();
+        let area = Rect::new(0, 0, 40, 10);
+        let th = theme();
+        for placement in [BadgePlacement::Right, BadgePlacement::Left] {
+            let settings = Settings {
+                badges: Some(placement),
+                ..Settings::default()
+            };
+            let geometry = layout(area, &settings, &th, rows.len());
+            let bar = geometry.bar.expect("rows overflow, so a bar is shown");
+            assert_eq!(
+                bar.x,
+                area.x + area.width - SCROLLBAR_WIDTH,
+                "{placement:?}"
+            );
+            let badges = geometry.badges.unwrap();
+            assert!(
+                badges.x + badges.width <= bar.x,
+                "{placement:?}: gutter clear of the bar"
+            );
+            assert!(
+                geometry.tree.x + geometry.tree.width <= bar.x,
+                "{placement:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_layout_holds_in_a_pane_too_narrow_for_the_furniture() {
         use ratatui::Terminal;
@@ -1140,10 +1301,10 @@ mod tests {
         let area = Rect::new(0, 0, 40, 10);
         let on = Settings::default();
         // The far-right column belongs to the bar, not to the row behind it.
-        assert_eq!(hit_test(&rows, &view, &on, area, 39, 0), None);
-        assert!(hit_test(&rows, &view, &on, area, 38, 0).is_some());
+        assert_eq!(hit_test(&rows, &view, &on, &theme(), area, 39, 0), None);
+        assert!(hit_test(&rows, &view, &on, &theme(), area, 38, 0).is_some());
         // With the bar off, the same column selects again.
-        assert!(hit_test(&rows, &view, &no_bar(), area, 39, 0).is_some());
+        assert!(hit_test(&rows, &view, &no_bar(), &theme(), area, 39, 0).is_some());
     }
 
     #[test]
@@ -1151,6 +1312,6 @@ mod tests {
         let rows = vec![row("only", NodeKind::File, 0)];
         let view = FlatView::default();
         let area = Rect::new(0, 0, 40, 10);
-        assert!(hit_test(&rows, &view, &Settings::default(), area, 39, 0).is_some());
+        assert!(hit_test(&rows, &view, &Settings::default(), &theme(), area, 39, 0).is_some());
     }
 }
