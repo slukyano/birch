@@ -26,6 +26,7 @@ okf_version: "0.1"
 * [Sprint 016 — Navigation & search feel](sprints/sprint-016.md) - Done.
 * [Sprint 017 — Pointer feel](sprints/sprint-017.md) - Done.
 * [Sprint 018 — Branch state, and critical fixes](sprints/sprint-018.md) - Done.
+* [Sprint 019 — The cmux integration, finished](sprints/sprint-019.md) - Scoped.
 
 # Tasks
 
@@ -50,6 +51,8 @@ okf_version: "0.1"
 * [Add the Project View source](tasks/033-add-project-view-source.md) - A curated/virtual tree source, reusing the source-as-delta-stream interface.
 * [Add "Open with…" to the context menu](tasks/034-add-open-with.md) - Choose an alternative open command for the selected node.
 * [Verify the herdr integration live](tasks/035-verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
+* [A preview opens in the workspace you are in](tasks/079-preview-opens-in-current-workspace.md) - The cmux adapter targets the window's first terminal pane, usually a different workspace than the selected one.
+* [Verify the cmux integration live](tasks/080-verify-cmux-integration-live.md) - Sidebar, follow-the-workspace, and preview targeting, checked end to end against a separate cmux instance.
 
 # Publication
 
