@@ -131,8 +131,16 @@ impl SearchIndex {
     /// first. One reused buffer serves a whole scan — nothing is materialised
     /// per entry.
     fn rel_into(&self, global: u32, buf: &mut String) {
-        buf.clear();
         let mut parts: Vec<&str> = Vec::new();
+        self.rel_into_with(global, buf, &mut parts);
+    }
+
+    /// As [`SearchIndex::rel_into`], but reusing the caller's component buffer
+    /// too — a scan reconstructs every candidate, and a fresh `Vec` per entry
+    /// is 800k allocations on a home-sized root.
+    fn rel_into_with<'a>(&'a self, global: u32, buf: &mut String, parts: &mut Vec<&'a str>) {
+        buf.clear();
+        parts.clear();
         let mut cursor = Some(global);
         while let Some(idx) = cursor {
             let Some((chunk, node)) = self.node(idx) else {
@@ -375,13 +383,14 @@ pub fn search(index: &SearchIndex, query: &str) -> Vec<Match> {
     // candidate is reconstructed into it and discarded, and only hits are
     // materialised into an `IndexEntry` (ADR 0026).
     let mut path = String::new();
+    let mut parts: Vec<&str> = Vec::new();
     let mut scored: Vec<(u32, Match)> = Vec::new();
     for global in 0..index.len {
         let Some((chunk, node)) = index.node(global) else {
             continue;
         };
         let haystack: &str = if by_path {
-            index.rel_into(global, &mut path);
+            index.rel_into_with(global, &mut path, &mut parts);
             &path
         } else {
             SearchIndex::name_in(chunk, node)

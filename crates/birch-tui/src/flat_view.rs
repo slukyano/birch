@@ -885,6 +885,7 @@ mod tests {
     fn with_branch(state: GitState, changed: &[&str]) -> GitState {
         let base = birch_core::git::BranchBase {
             name: "origin/main".into(),
+            refname: "refs/remotes/origin/main".into(),
             fetched_ago: Some(std::time::Duration::from_secs(7200)),
         };
         state.with_branch(

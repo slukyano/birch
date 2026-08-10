@@ -61,6 +61,10 @@ pub struct GitState {
 pub struct BranchBase {
     /// The ref name, for the root row: `origin/main`.
     pub name: String,
+    /// The same ref, fully qualified: `refs/remotes/origin/main`. Everything
+    /// that asks git about the base uses this — the shorthand would happily
+    /// resolve a *tag* or a local branch of that name instead.
+    pub refname: String,
     /// Age of the ref's last update — the comparison is only as fresh as the
     /// last fetch, and birch does not fetch.
     pub fetched_ago: Option<Duration>,
@@ -287,9 +291,18 @@ fn resolve_base(repo_root: &Path) -> Option<BranchBase> {
     let name = git(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).or_else(|| {
         ["origin/main", "origin/master"]
             .into_iter()
-            .find(|candidate| git(&["rev-parse", "--verify", "--quiet", candidate]).is_some())
+            .find(|candidate| {
+                git(&[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/remotes/{candidate}"),
+                ])
+                .is_some()
+            })
             .map(str::to_string)
     })?;
+    let refname = format!("refs/remotes/{name}");
     // How stale the comparison is. FETCH_HEAD is written by every fetch, even
     // one that brings nothing — unlike the ref file, which only moves when the
     // base does, and which does not exist at all once refs are packed.
@@ -304,17 +317,21 @@ fn resolve_base(repo_root: &Path) -> Option<BranchBase> {
         })
         .and_then(|path| std::fs::metadata(path).ok()?.modified().ok())
         .and_then(|at| SystemTime::now().duration_since(at).ok());
-    Some(BranchBase { name, fetched_ago })
+    Some(BranchBase {
+        name,
+        refname,
+        fetched_ago,
+    })
 }
 
 /// Files this branch changes relative to `base`, plus every directory holding
 /// one so a collapsed row can show that the work is inside.
-fn branch_changes(repo_root: &Path, base: &str) -> HashSet<PathBuf> {
+fn branch_changes(repo_root: &Path, base_ref: &str) -> HashSet<PathBuf> {
     let mut changed = HashSet::new();
     let Ok(out) = Command::new("git")
         .arg("-C")
         .arg(repo_root)
-        .args(["diff", "--name-only", "-z", &format!("{base}...HEAD")])
+        .args(["diff", "--name-only", "-z", &format!("{base_ref}...HEAD")])
         .output()
     else {
         return changed;
@@ -386,7 +403,7 @@ fn run_status(repo_root: &Path, cache: &mut Option<BranchCache>) -> Option<GitSt
                 .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
         };
         let head = rev("HEAD");
-        let base_commit = rev(&format!("refs/remotes/{}", base.name));
+        let base_commit = rev(&base.refname);
         let reusable = cache.as_ref().is_some_and(|c| {
             c.repo == repo_root
                 && Some(&c.head) == head.as_ref()
@@ -401,7 +418,7 @@ fn run_status(repo_root: &Path, cache: &mut Option<BranchCache>) -> Option<GitSt
                 ..hit.base.clone()
             });
         } else {
-            let changed = branch_changes(repo_root, &base.name);
+            let changed = branch_changes(repo_root, &base.refname);
             if let (Some(head), Some(base_commit)) = (head, base_commit) {
                 *cache = Some(BranchCache {
                     repo: repo_root.to_path_buf(),

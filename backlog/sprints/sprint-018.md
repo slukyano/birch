@@ -104,7 +104,9 @@ So does birch now.
 modifier, then a single mark — each simplification came from the maintainer, and each removed
 something the user would have had to learn. The glyph outlasted the design: `⎇` was withdrawn after
 its coverage was measured, because it renders on macOS only by borrowing from a proportional system
-font — the same substitution that sheared the indent guides in `059`.
+font — the same substitution that sheared the indent guides in `059`. The mark now follows
+`--icons`: the **codicon git-branch** where a Nerd Font is already presumed, and **`∆`** (`U+2206`)
+otherwise, which every common terminal font contains at Neutral width.
 
 **The independent review found a crash this sprint introduced.** A pane one to three columns wide
 killed birch, and the guard test written for exactly that case missed it because its rows painted
@@ -116,7 +118,7 @@ nothing in the gutter. The lesson is in the test now: it paints.
 |---|---|---|
 | [`076-search-unusable-on-large-roots`](../archive/076-search-unusable-on-large-roots.md) | **major** | Search works from a home-sized root: first results in ~300 ms rather than never, and "no matches" is only said once there is a complete corpus to say it about. Planned as a faster walk; measurement redirected it to a smaller index published as it grows. |
 | [`077-quit-swallowed-during-terminal-handover`](../archive/077-quit-swallowed-during-terminal-handover.md) | minor | Quitting while a file is open in an editor now quits. Delivered as designed. |
-| [`064-configurable-badge-placement`](../archive/064-configurable-badge-placement.md) | mid | Status badges sit right, left, or nowhere, per theme and overridable. Delivered as designed. |
+| [`064-configurable-badge-placement`](../archive/064-configurable-badge-placement.md) | mid | Status badges sit right, left, or nowhere, per theme and overridable. **Two themes change what they draw**: `jetbrains` and `retro` now default to no badge gutter, matching the editors they imitate — IDEA carries version state in the filename colour and never drew a letter. Anyone on those themes loses the gutter on upgrade and gets the width back for names; `--badges right` restores it. Delivered as designed. |
 | [`078-add-branch-diff-badges`](../archive/078-add-branch-diff-badges.md) | mid | A column marking what this branch would merge. Filed as in/out badges with status letters; settled on one mark in one column, outgoing only, after four rounds of maintainer simplification. |
 
 # Public-surface delta
@@ -143,8 +145,8 @@ By the **independent review** — four majors, three verified by execution:
 
 - **A pane 1–3 columns wide panicked and killed birch.** The badge band was placed past the buffer
   once the gutter had been clamped. The guard test missed it because its rows painted nothing;
-  it now paints a status and a mark and sweeps both placements and both axis states, and was
-  verified to panic against the previous commit.
+  it now paints a status and a mark and sweeps every placement with the branch column both on and
+  off, and was verified to panic against the previous commit.
 - **A rebuild threw away every published chunk** and restarted at zero, so under filesystem churn
   the index never reached complete — defeating the one claim ADR 0026 exists to make. The walk now
   always finishes.
@@ -154,13 +156,16 @@ By the **independent review** — four majors, three verified by execution:
 
 Nine minors: a non-UTF-8 name silently reparenting its whole subtree; an index from a previous root
 adopted and called complete; three vocabularies for `badges`; `resolve_base` able to resolve a *tag*
-named `origin/main`; the "fetched" age reading a file that does not exist once refs are packed; the
+named `origin/main` — reported fixed once before it actually was, and now fixed for both the
+resolution and the diff by asking about `refs/remotes/…`, verified in a repository where the tag and
+the remote ref deliberately disagree; the "fetched" age reading a file that does not exist once refs are packed; the
 repo root always carrying the mark; a file the branch *deletes* never marked; the branch diff
 re-running on every status refresh, now cached against the two commits it compares; and the missing
 CHANGELOG entries.
 
 Found while implementing: re-matching on every published chunk **doubled the walk** while a query
-was live (10.1 s against 5.2 s idle), fixed with a 250 ms cadence. And a nested `Option` made clap
+was live (10.1 s against 5.2 s idle); a 250 ms cadence roughly halved the overhead rather than
+removing it — see the limitation below. And a nested `Option` made clap
 panic on every `--badges` invocation — missed first time because the check used `--help`, which
 exits before values are read.
 
@@ -170,12 +175,22 @@ exits before values are read.
   disk, so the tree has nothing to draw. The column answers "what would I merge, of what exists".
 - **The branch comparison is only as fresh as the last fetch**, and birch does not fetch. The root
   row says how stale it is.
-- **A path-mode query** (one containing `/`) reconstructs each candidate's path and allocates while
-  doing so; the default name-mode reads the slab and allocates only for hits.
+- **A path-mode query** (one containing `/`) reconstructs every candidate's path into a reused
+  buffer, so it copies where the default name-mode simply reads the slab. Both allocate only for
+  hits.
 - **The index walk is unchanged in duration** — streaming makes it stop mattering, not stop taking
   seconds. With a query live throughout it is ~8 s on a home directory against ~5 s idle.
 - **`⎇` is unusable** as a branch mark and the reasons are recorded in `078`: no common terminal
   font has it.
+
+# Also visible
+
+- **The search prompt gained a live counter while indexing** — `> query (12/340, indexing…)` — so a
+  growing corpus is legible rather than merely disclaimed.
+- **The root row's annotation changed for anyone with a resolvable base**, gaining
+  `(vs origin/main, fetched 2h ago)`.
+- **The watcher gained two paths**, `.git/refs/remotes` and its `origin` directory, so a fetch
+  refreshes the branch column; branch moves touch nothing in the working tree.
 
 # Verification
 
@@ -185,6 +200,9 @@ exits before values are read.
   43.7 MB); `ctl quit` during a real editor handover, with the fix reverted to confirm the bug
   reproduces; all three badge placements and both icon modes on screen; the branch column checked
   against `git diff origin/main...HEAD`; every `--badges` value run rather than `--help`-ed.
+- The tag-ambiguity fix verified in a scratch repository where a tag named `origin/main` and
+  `refs/remotes/origin/main` point at different commits: git's shorthand reports 0 changed files,
+  birch reports the correct 2.
 - Glyph coverage and advance widths measured from the `cmap` and `hmtx` tables of Menlo, SF Mono,
   JetBrains Mono, Courier New, Andale Mono and the JetBrains Nerd Font variants.
 

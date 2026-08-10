@@ -1548,21 +1548,35 @@ mod tests {
             .collect();
         let view = FlatView::default();
         // Every pane from one cell wide upward must draw without panicking on
-        // the u16 arithmetic that reserves the bar and badge columns.
+        // the u16 arithmetic that reserves the bar and badge columns — under
+        // every placement, and with the branch column both on and off, since
+        // each moves where the bands sit.
         for width in 1..=12u16 {
             for height in 1..=4u16 {
-                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-                terminal
-                    .draw(|frame| {
-                        draw(
-                            frame,
-                            &rows,
-                            &view,
-                            chrome(&Settings::default(), &theme, false),
-                            "",
-                        )
-                    })
-                    .unwrap();
+                for branch_axis in [false, true] {
+                    for placement in [
+                        BadgePlacement::Right,
+                        BadgePlacement::Left,
+                        BadgePlacement::None,
+                    ] {
+                        let settings = Settings {
+                            badges: Some(placement),
+                            ..Settings::default()
+                        };
+                        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                        terminal
+                            .draw(|frame| {
+                                draw(
+                                    frame,
+                                    &rows,
+                                    &view,
+                                    chrome(&settings, &theme, branch_axis),
+                                    "",
+                                )
+                            })
+                            .unwrap();
+                    }
+                }
             }
         }
     }
