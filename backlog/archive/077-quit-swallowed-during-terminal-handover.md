@@ -2,7 +2,7 @@
 type: Task
 title: A quit arriving during a terminal handover is swallowed
 description: The stale-event drain that runs after a child returns the tty discards the quit flag, so a SIGHUP or ctl quit delivered while the child was running is answered and then ignored.
-status: Designed
+status: Done
 priority: medium
 ---
 

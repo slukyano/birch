@@ -25,7 +25,7 @@ okf_version: "0.1"
 * [Sprint 015 — Visual design: earn "beautiful"](sprints/sprint-015.md) - Done.
 * [Sprint 016 — Navigation & search feel](sprints/sprint-016.md) - Done.
 * [Sprint 017 — Pointer feel](sprints/sprint-017.md) - Done.
-* [Sprint 018 — Branch state, and critical fixes](sprints/sprint-018.md) - Implementing.
+* [Sprint 018 — Branch state, and critical fixes](sprints/sprint-018.md) - Done.
 
 # Tasks
 
@@ -33,12 +33,8 @@ okf_version: "0.1"
 * [Support user-authored themes](tasks/056-add-user-themes.md) - Future: load custom themes from disk (~/.config/birch/themes/*.toml) beyond the built-in catalog.
 * [Adapt themes to the terminal color scheme](tasks/058-adapt-themes-to-terminal-palette.md) - Themes assume black bg; make them respect the terminal palette (light/dark, base16).
 * [Highlight the active folder's indent guide](tasks/061-active-path-indent-guide.md) - Opt-in theme axis: dim all guides except the current folder's column, which brightens; indent lines and connectors.
-* [Make git badge placement configurable](tasks/064-configurable-badge-placement.md) - Theme axis + setting: right / left / none, with a fitting default per built-in theme.
 * [Add a "random" theme](tasks/065-random-theme.md) - --theme random resolves to a randomly chosen built-in theme at launch.
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
-* [Add in/out badges for branch changes](tasks/078-add-branch-diff-badges.md) - Mark files whose changes are committed on this branch but not on main, and the reverse.
-* [A quit arriving during a terminal handover is swallowed](tasks/077-quit-swallowed-during-terminal-handover.md) - perform_open's stale-event drain discards the quit flag, so SIGHUP or ctl quit is answered and ignored.
-* [Search is unusable on a large root](tasks/076-search-unusable-on-large-roots.md) - From $HOME the index never lands and the status line claims "no matches"; both modes, not just --pick.
 * [Show how much a filter actually matches](tasks/070-show-filter-match-counts.md) - Per-folder or total match counts, so a filtered browse knows where to go.
 * [Add the context menu](tasks/071-add-context-menu.md) - The right-click action surface, split out of the 0.5 bundle so it can land before the ops it hosts.
 * [Move files and folders by dragging](tasks/072-drag-to-move.md) - Drag a row onto a directory to move it; blocked on a scope-fence amendment, since drag-and-drop move is on the permanent out-of-scope list.
@@ -119,5 +115,9 @@ so outside the `docs/design.md` scope fence.
 * [Make scroll speed configurable](archive/075-configurable-scroll-speed.md) - Rows per wheel tick as a setting (1-10, default 3), across flag, config key, and ctl set.
 * [Select on mouse release, not on press](archive/067-select-on-mouse-up.md) - A click is a press and a release on the same row and zone, acting on the release (ADR 0025).
 * [Add a scrollbar](archive/068-add-scrollbar.md) - One inert column at the right edge, shown only when the rows overflow.
+* [Search is unusable on a large root](archive/076-search-unusable-on-large-roots.md) - Fixed: a tree-shaped index published as it is built; first results in ~300 ms from $HOME (ADR 0026).
+* [A quit arriving during a terminal handover is swallowed](archive/077-quit-swallowed-during-terminal-handover.md) - Fixed: the quit is carried out of the post-handover drain and exits through the normal path.
+* [Make git badge placement configurable](archive/064-configurable-badge-placement.md) - Right, left, or none — per theme, and overridable by flag, config, and ctl set.
+* [Add in/out badges for branch changes](archive/078-add-branch-diff-badges.md) - One column marking what this branch would merge, vs the remote base.
 
 # Dropped

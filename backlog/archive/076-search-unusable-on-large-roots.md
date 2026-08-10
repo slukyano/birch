@@ -2,7 +2,7 @@
 type: Task
 title: Search is unusable on a large root
 description: On a root the size of a home directory the index never arrives, and the status line reports "no matches" — a claim it cannot make while no index exists.
-status: Designed
+status: Done
 priority: high
 ---
 
