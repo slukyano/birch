@@ -16,6 +16,15 @@ use crate::theme::{BadgeStyle, FolderStyle, GuideStyle, SelectionStyle, Theme};
 pub const INDENT_WIDTH: u16 = 2;
 /// Width of the right-hand git badge column.
 pub const BADGE_WIDTH: u16 = 2;
+/// The mark for a row the branch would merge (task 078), with icons on: the
+/// codicon git-branch, matching the icon family the rest of the tree draws.
+/// Every Nerd Font carries it, and it advances exactly one cell.
+pub const BRANCH_MARK_ICON: &str = "\u{ea68}";
+/// The same mark without a Nerd Font. `∆` says "difference", is present in
+/// Menlo, SF Mono, JetBrains Mono, Courier New and Andale Mono alike, and is
+/// Neutral width — so it needs no font substitution to render.
+pub const BRANCH_MARK_PLAIN: &str = "\u{2206}";
+
 /// Extra columns when the branch mark is shown: the mark, and a space that
 /// keeps the working-tree badge in exactly the column it had without it.
 pub const BRANCH_BADGE_WIDTH: u16 = 2;
@@ -208,7 +217,13 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
             selected_visible = Some(i as u16);
         }
         lines.push(row_line(theme, settings, row, is_selected));
-        badges.push(badge_line(theme, row, branch_axis, placement));
+        badges.push(badge_line(
+            theme,
+            row,
+            branch_axis,
+            placement,
+            settings.icons,
+        ));
     }
     // A theme with an app_bg (the Commander's DOS blue) paints its whole
     // canvas; the area is filled first so the badge gutter matches, and every
@@ -386,6 +401,7 @@ fn badge_line(
     row: &Row,
     branch_axis: bool,
     placement: BadgePlacement,
+    icons: bool,
 ) -> Line<'static> {
     let status = status_span(theme, row);
     if !branch_axis {
@@ -397,7 +413,11 @@ fn badge_line(
     // sits (078, 064).
     let mark = Span::styled(
         if row.in_branch {
-            theme.branch_mark
+            if icons {
+                BRANCH_MARK_ICON
+            } else {
+                BRANCH_MARK_PLAIN
+            }
         } else {
             " "
         },
@@ -1366,6 +1386,7 @@ mod tests {
         let view = FlatView::default();
         let settings = Settings {
             scrollbar: false,
+            icons: false,
             ..Settings::default()
         };
         let (w, h) = (30u16, 3u16);
@@ -1390,7 +1411,7 @@ mod tests {
         );
         let mark = with
             .iter()
-            .position(|s| s == th.branch_mark)
+            .position(|s| s == BRANCH_MARK_PLAIN)
             .expect("branch mark");
         assert!(mark < local_with, "the mark sits inward of the badge");
         assert_eq!(
@@ -1398,7 +1419,7 @@ mod tests {
             " ",
             "a space keeps them apart, and keeps the column"
         );
-        assert!(!without.iter().any(|s| s == th.branch_mark));
+        assert!(!without.iter().any(|s| s == BRANCH_MARK_PLAIN));
     }
 
     #[test]
@@ -1416,6 +1437,7 @@ mod tests {
         for placement in [BadgePlacement::Right, BadgePlacement::Left] {
             let settings = Settings {
                 scrollbar: false,
+                icons: false,
                 badges: Some(placement),
                 ..Settings::default()
             };
@@ -1441,7 +1463,7 @@ mod tests {
             );
             let mark = with
                 .iter()
-                .position(|s| s == th.branch_mark)
+                .position(|s| s == BRANCH_MARK_PLAIN)
                 .expect("branch mark");
             // Inward means "nearer the name", which is the other side under
             // each placement.
@@ -1456,6 +1478,38 @@ mod tests {
                 ),
             }
         }
+    }
+
+    #[test]
+    fn the_mark_is_a_branch_icon_with_icons_and_a_plain_glyph_without() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let th = theme();
+        let mut changed = row("app.rs", NodeKind::File, 0);
+        changed.in_branch = true;
+        let rows = vec![changed];
+        let view = FlatView::default();
+        let drawn = |icons: bool| {
+            let settings = Settings {
+                scrollbar: false,
+                icons,
+                ..Settings::default()
+            };
+            let mut terminal = Terminal::new(TestBackend::new(30, 3)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &rows, &view, chrome(&settings, &th, true), ""))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..30u16)
+                .map(|x| buffer[(x, 0)].symbol().to_string())
+                .collect::<Vec<_>>()
+        };
+        // A Nerd Font is a prerequisite for the icon, so it follows --icons.
+        assert!(drawn(true).iter().any(|s| s == BRANCH_MARK_ICON));
+        assert!(!drawn(true).iter().any(|s| s == BRANCH_MARK_PLAIN));
+        // Without one, a glyph every common terminal font actually contains.
+        assert!(drawn(false).iter().any(|s| s == BRANCH_MARK_PLAIN));
+        assert!(!drawn(false).iter().any(|s| s == BRANCH_MARK_ICON));
     }
 
     #[test]

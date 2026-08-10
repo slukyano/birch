@@ -156,9 +156,6 @@ pub struct Theme {
     /// colour toward `floor` as depth increases (clamped, never dimmer).
     /// `None` keeps a uniform guide colour.
     pub guide_fade: Option<Color>,
-    /// The mark for a row the branch would merge (task 078). A branch glyph
-    /// rather than an arrow: an arrow already means committed-not-pushed.
-    pub branch_mark: &'static str,
     /// The directory-rollup badge glyph (`●` everywhere modern; the Commander
     /// uses a CP437 `•` to keep the 1989 conceit).
     pub badge_dot: &'static str,
@@ -198,7 +195,6 @@ impl Theme {
     fn birch() -> Theme {
         Theme {
             id: ThemeId::Birch,
-            branch_mark: "\u{2387}",
             badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
@@ -248,7 +244,6 @@ impl Theme {
     fn vscode() -> Theme {
         Theme {
             id: ThemeId::Vscode,
-            branch_mark: "\u{2387}",
             badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
@@ -295,7 +290,6 @@ impl Theme {
     fn jetbrains() -> Theme {
         Theme {
             id: ThemeId::Jetbrains,
-            branch_mark: "\u{2387}",
             badge_placement: BadgePlacement::None,
             palette: Palette {
                 app_bg: None,
@@ -342,7 +336,6 @@ impl Theme {
     fn xcode() -> Theme {
         Theme {
             id: ThemeId::Xcode,
-            branch_mark: "\u{2387}",
             badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
@@ -388,7 +381,6 @@ impl Theme {
     fn mocha() -> Theme {
         Theme {
             id: ThemeId::Mocha,
-            branch_mark: "\u{2387}",
             badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
@@ -433,7 +425,6 @@ impl Theme {
     fn tokyonight() -> Theme {
         Theme {
             id: ThemeId::Tokyonight,
-            branch_mark: "\u{2387}",
             badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
@@ -478,7 +469,6 @@ impl Theme {
     fn gruvbox() -> Theme {
         Theme {
             id: ThemeId::Gruvbox,
-            branch_mark: "\u{2387}",
             badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
@@ -522,7 +512,6 @@ impl Theme {
     fn nord() -> Theme {
         Theme {
             id: ThemeId::Nord,
-            branch_mark: "\u{2387}",
             badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
@@ -567,7 +556,6 @@ impl Theme {
     fn rosepine() -> Theme {
         Theme {
             id: ThemeId::Rosepine,
-            branch_mark: "\u{2387}",
             badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
@@ -612,7 +600,6 @@ impl Theme {
     fn retro() -> Theme {
         Theme {
             id: ThemeId::Retro,
-            branch_mark: "~",
             badge_placement: BadgePlacement::None,
             palette: Palette {
                 // The DOS blue field — the one theme that paints its canvas.
@@ -658,7 +645,6 @@ impl Theme {
     fn plain() -> Theme {
         Theme {
             id: ThemeId::Plain,
-            branch_mark: "~",
             badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,

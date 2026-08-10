@@ -10,7 +10,9 @@ All notable changes to birch are documented here, following
 - **Branch badges**: a column marking the files this branch would merge —
   everything that differs from the remote base (`origin/HEAD`, else
   `origin/main`, else `origin/master`). Collapsed folders roll it up, so a
-  folded tree still shows where the branch's work is, and the root row names
+  folded tree still shows where the branch's work is. The mark is a branch icon
+  with `--icons` and `∆` without one, so it needs no font it cannot count on.
+  The root row names
   the base and how long ago you last fetched, since birch does not fetch for
   you. Off with `--no-branch-badges`, the `branch-badges` config key, or
   `birch ctl set branch-badges off`.
