@@ -107,6 +107,20 @@ struct Cli {
     #[arg(long, overrides_with = "scrollbar")]
     no_scrollbar: bool,
 
+    /// Mark files this branch would merge, beside the status badge.
+    #[arg(long, overrides_with = "no_branch_badges", hide = true)]
+    branch_badges: bool,
+
+    /// Do not mark files this branch would merge.
+    #[arg(long, overrides_with = "branch_badges")]
+    no_branch_badges: bool,
+
+    /// Where git status badges sit: right, left, or none (default: the
+    /// theme's choice). `none` keeps status colours and folder rollups —
+    /// use --no-git to turn git off.
+    #[arg(long, value_name = "right|left|none|auto", value_parser = validate_badges)]
+    badges: Option<String>,
+
     /// Rows one mouse-wheel tick scrolls (1-10, default 3).
     #[arg(long, value_name = "n", value_parser = clap::value_parser!(u8).range(
         birch_core::settings::SCROLL_LINES_MIN as i64..=birch_core::settings::SCROLL_LINES_MAX as i64))]
@@ -151,6 +165,13 @@ struct Cli {
     /// host-adapter open commands; terminal editors must not use this.
     #[arg(long, requires = "open_cmd")]
     open_detached: bool,
+}
+
+/// One `badges` vocabulary for every surface — see `settings::parse_badges`.
+/// Validated here so a bad word is a message before the TUI starts; the value
+/// itself is resolved once, below.
+fn validate_badges(s: &str) -> Result<String, String> {
+    birch_core::settings::parse_badges(s).map(|_| s.to_string())
 }
 
 /// Launch-flag mirror of `birch_core::ThemeId` (core stays clap-free).
@@ -285,6 +306,13 @@ fn main() -> ExitCode {
     }
     if let Some(v) = flag(cli.scrollbar, cli.no_scrollbar) {
         settings.scrollbar = v;
+    }
+    if let Some(v) = flag(cli.branch_badges, cli.no_branch_badges) {
+        settings.branch_badges = v;
+    }
+    if let Some(badges) = cli.badges.as_deref() {
+        settings.badges =
+            birch_core::settings::parse_badges(badges).expect("validated by the value parser");
     }
     if let Some(n) = cli.scroll_lines {
         settings.scroll_lines = n;

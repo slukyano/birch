@@ -28,6 +28,8 @@ pub struct Config {
     pub open_cmd: Option<String>,
     pub scroll_lines: Option<i64>,
     pub scrollbar: Option<bool>,
+    pub badges: Option<String>,
+    pub branch_badges: Option<bool>,
 }
 
 impl Config {
@@ -106,6 +108,16 @@ impl Config {
         if let Some(scrollbar) = self.scrollbar {
             s.scrollbar = scrollbar;
         }
+        // Tolerant, like the rest of the config: an unrecognised word is
+        // ignored rather than blocking launch (ADR 0022).
+        if let Some(badges) = self.badges.as_deref()
+            && let Ok(parsed) = crate::settings::parse_badges(badges)
+        {
+            s.badges = parsed;
+        }
+        if let Some(branch_badges) = self.branch_badges {
+            s.branch_badges = branch_badges;
+        }
         // Out of range degrades rather than failing: a config file must never
         // block launch (ADR 0022).
         if let Some(scroll_lines) = self.scroll_lines {
@@ -136,6 +148,8 @@ mod tests {
             open-cmd = "code {}"
             scroll-lines = 5
             scrollbar = false
+            badges = "left"
+            branch-badges = false
         "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.theme, Some(ThemeId::Jetbrains));
@@ -149,6 +163,8 @@ mod tests {
         assert_eq!(config.open_cmd.as_deref(), Some("code {}"));
         assert_eq!(config.scroll_lines, Some(5));
         assert_eq!(config.scrollbar, Some(false));
+        assert_eq!(config.badges.as_deref(), Some("left"));
+        assert_eq!(config.branch_badges, Some(false));
     }
 
     #[test]
@@ -214,6 +230,8 @@ mod tests {
             open_cmd: Some("vim {}".into()),
             scroll_lines: None,
             scrollbar: None,
+            badges: None,
+            branch_badges: None,
         };
         let mut settings = Settings::default();
         config.apply_to(&mut settings);

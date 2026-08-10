@@ -2,7 +2,7 @@
 type: Task
 title: Add in/out badges for branch changes
 description: Badges in the git gutter marking files whose changes are committed on this branch but not on main, and the reverse.
-status: Designed
+status: Done
 priority: medium
 ---
 
@@ -83,8 +83,16 @@ branch badges off                    branch badges on
   between the two keeps the letter a user already reads in exactly its column.
 - **Rollups as today.** A collapsed directory carries the mark if anything beneath it is in scope,
   so a folded tree still shows where the branch's work is.
-- **`⎇`, not an arrow.** `↑` universally means "committed but not pushed"; `⎇` is the branch glyph
-  already familiar from shell prompts.
+- **A branch icon where one exists, a plain glyph where it does not.** With `--icons` the mark is
+  the **codicon git-branch** (`U+EA68`), matching the icon family the rest of the tree draws;
+  without icons it is **`∆`** (`U+2206`), which says "difference". `⎇` (`U+2387`) was the first
+  choice and was withdrawn: measured against the `cmap` tables of Menlo, SF Mono, JetBrains Mono,
+  Courier New and Andale Mono, **no common terminal font contains it** — it renders on macOS only
+  because CoreText silently borrows it from a proportional system font, which is the substitution
+  that sheared the indent guides in
+  [`059-fix-guide-chevron-alignment`](../archive/059-fix-guide-chevron-alignment.md), and on a bare
+  Linux box it is a tofu box. An arrow was never a candidate: `↑` universally means "committed but
+  not pushed".
 - **Cost: two columns**, taken from filenames — which is why it is a setting.
 
 **One thing it cannot show.** A file *deleted* on this branch has no row to mark: it is absent from
@@ -130,14 +138,17 @@ unrelated file change reuses them.
 - **Config**: `branch-badges = <bool>`, default on where a base resolves.
 - **Socket**: `SettingKey::BranchBadges`, an on/off/toggle value — additive.
 
-### To verify during implementation
+### Glyph coverage, measured
 
-`⎇` (U+2387) is in Miscellaneous Technical, where East Asian Width is ambiguous — the same class of
-glyph that made indent guides look misaligned in
-[`059-fix-guide-chevron-alignment`](../archive/059-fix-guide-chevron-alignment.md), where a fallback
-font rendered a PUA chevron wider than its cell. That sprint left a vhs-plus-pixel-measurement
-harness; the glyph is checked with it before it is settled, and themes whose primary font lacks it
-get a fallback.
+The `cmap` tables of Menlo, SF Mono, JetBrains Mono, Courier New and Andale Mono were parsed
+directly, and the candidates' advance widths read from `hmtx` against the font's own cell:
+
+- **No branch-shaped glyph is in any of them** — `⎇` U+2387, `⋔` U+22D4, `⑂` U+2442 all absent.
+- **The codicon git-branch (U+EA68) advances exactly one cell** (600/1000 em, the same as `M`) in
+  both the Mono and standard JetBrains Nerd Font variants, as do the octicon, devicon and powerline
+  branch glyphs. It is therefore safe wherever a Nerd Font is in use — which `--icons` already
+  presumes.
+- **`∆` U+2206 is in all five**, is Neutral width, and needs no substitution.
 
 ### Open
 

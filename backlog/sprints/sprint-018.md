@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Branch state, and critical fixes
-status: Implementing
+status: Done
 branch: sprint/018
 tasks:
 - 076-search-unusable-on-large-roots
@@ -79,14 +79,132 @@ reproduction and diagnosis are already recorded in the task.
 
 # Checklist
 
-- [ ] 076-search-unusable-on-large-roots
-- [ ] 077-quit-swallowed-during-terminal-handover
-- [ ] 064-configurable-badge-placement
-- [ ] 078-add-branch-diff-badges
+- [x] 076-search-unusable-on-large-roots
+- [x] 077-quit-swallowed-during-terminal-handover
+- [x] 064-configurable-badge-placement
+- [x] 078-add-branch-diff-badges
 
 # Open questions
 
 _(none yet)_
+
+# Sprint summary
+
+Search became usable on a real machine, and the tree learned to say what a branch would merge.
+
+**`076` was measured before it was designed, and the measurement changed the design.** The task
+proposed parallelising the index walk. Timing it said otherwise: parallelising is 1.66× once entries
+are actually constructed, which leaves the same symptom. What mattered was that nothing was
+searchable until a walk of 825,782 entries finished, and that the index was ten times larger than
+the data needed — 263 MB where a parent-plus-name representation measures 25 MB. fzf was the
+reference point, and instructive: it is not frugal either, and has no faster walk. It *streams*.
+So does birch now.
+
+**`078` went through four shapes before settling.** Letters against the base, then letters with a
+modifier, then a single mark — each simplification came from the maintainer, and each removed
+something the user would have had to learn. The glyph outlasted the design: `⎇` was withdrawn after
+its coverage was measured, because it renders on macOS only by borrowing from a proportional system
+font — the same substitution that sheared the indent guides in `059`. The mark now follows
+`--icons`: the **codicon git-branch** where a Nerd Font is already presumed, and **`∆`** (`U+2206`)
+otherwise, which every common terminal font contains at Neutral width.
+
+**The independent review found a crash this sprint introduced.** A pane one to three columns wide
+killed birch, and the guard test written for exactly that case missed it because its rows painted
+nothing in the gutter. The lesson is in the test now: it paints.
+
+# Task ledger
+
+| Task | Weight | What changed |
+|---|---|---|
+| [`076-search-unusable-on-large-roots`](../archive/076-search-unusable-on-large-roots.md) | **major** | Search works from a home-sized root: first results in ~300 ms rather than never, and "no matches" is only said once there is a complete corpus to say it about. Planned as a faster walk; measurement redirected it to a smaller index published as it grows. |
+| [`077-quit-swallowed-during-terminal-handover`](../archive/077-quit-swallowed-during-terminal-handover.md) | minor | Quitting while a file is open in an editor now quits. Delivered as designed. |
+| [`064-configurable-badge-placement`](../archive/064-configurable-badge-placement.md) | mid | Status badges sit right, left, or nowhere, per theme and overridable. **Two themes change what they draw**: `jetbrains` and `retro` now default to no badge gutter, matching the editors they imitate — IDEA carries version state in the filename colour and never drew a letter. Anyone on those themes loses the gutter on upgrade and gets the width back for names; `--badges right` restores it. Delivered as designed. |
+| [`078-add-branch-diff-badges`](../archive/078-add-branch-diff-badges.md) | mid | A column marking what this branch would merge. Filed as in/out badges with status letters; settled on one mark in one column, outgoing only, after four rounds of maintainer simplification. |
+
+# Public-surface delta
+
+| Surface | Addition |
+|---|---|
+| CLI | `--badges <right\|left\|none\|auto>`, `--no-branch-badges` (and hidden `--branch-badges`) |
+| Config | `badges`, `branch-badges` |
+| Socket | `SettingKey::Badges`, `SettingKey::BranchBadges` — additive only |
+| `birch ctl` | `set badges <right\|left\|none\|auto>`, `set branch-badges <on\|off\|toggle>` |
+
+`076` and `077` add none. No breaking changes. One vocabulary for `badges` across all three
+surfaces, checked deliberately after the review found three.
+
+# Architectural decisions
+
+- **[ADR 0026](../../docs/adr/0026-the-index-is-a-tree-published-progressively.md)** — the search
+  index is a tree of parent-plus-name entries, published in immutable chunks while the walk runs,
+  with absent / building / complete states so `(no matches)` is a claim birch may make.
+
+# Bugs found & fixed
+
+By the **independent review** — four majors, three verified by execution:
+
+- **A pane 1–3 columns wide panicked and killed birch.** The badge band was placed past the buffer
+  once the gutter had been clamped. The guard test missed it because its rows painted nothing;
+  it now paints a status and a mark and sweeps every placement with the branch column both on and
+  off, and was verified to panic against the previous commit.
+- **A rebuild threw away every published chunk** and restarted at zero, so under filesystem churn
+  the index never reached complete — defeating the one claim ADR 0026 exists to make. The walk now
+  always finishes.
+- **Left-hand placement put the branch mark outermost**, breaking both of `078`'s invariants.
+- **An arriving chunk moved the cursor** whenever the selection was not itself a match — legal
+  under ADR 0023 — up to four times a second for the length of the walk.
+
+Nine minors: a non-UTF-8 name silently reparenting its whole subtree; an index from a previous root
+adopted and called complete; three vocabularies for `badges`; `resolve_base` able to resolve a *tag*
+named `origin/main` — reported fixed once before it actually was, and now fixed for both the
+resolution and the diff by asking about `refs/remotes/…`, verified in a repository where the tag and
+the remote ref deliberately disagree; the "fetched" age reading a file that does not exist once refs are packed; the
+repo root always carrying the mark; a file the branch *deletes* never marked; the branch diff
+re-running on every status refresh, now cached against the two commits it compares; and the missing
+CHANGELOG entries.
+
+Found while implementing: re-matching on every published chunk **doubled the walk** while a query
+was live (10.1 s against 5.2 s idle); a 250 ms cadence roughly halved the overhead rather than
+removing it — see the limitation below. And a nested `Option` made clap
+panic on every `--badges` invocation — missed first time because the check used `--help`, which
+exits before values are read.
+
+# Remaining limitations & highlights
+
+- **A file the branch deletes has no row to mark** unless git still reports it: it is absent from
+  disk, so the tree has nothing to draw. The column answers "what would I merge, of what exists".
+- **The branch comparison is only as fresh as the last fetch**, and birch does not fetch. The root
+  row says how stale it is.
+- **A path-mode query** (one containing `/`) reconstructs every candidate's path into a reused
+  buffer, so it copies where the default name-mode simply reads the slab. Both allocate only for
+  hits.
+- **The index walk is unchanged in duration** — streaming makes it stop mattering, not stop taking
+  seconds. With a query live throughout it is ~8 s on a home directory against ~5 s idle.
+- **`⎇` is unusable** as a branch mark and the reasons are recorded in `078`: no common terminal
+  font has it.
+
+# Also visible
+
+- **The search prompt gained a live counter while indexing** — `> query (12/340, indexing…)` — so a
+  growing corpus is legible rather than merely disclaimed.
+- **The root row's annotation changed for anyone with a resolvable base**, gaining
+  `(vs origin/main, fetched 2h ago)`.
+- **The watcher gained two paths**, `.git/refs/remotes` and its `origin` directory, so a fetch
+  refreshes the branch column; branch moves touch nothing in the working tree.
+
+# Verification
+
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` — green;
+  **230 tests** (66 + 70 + 94).
+- Hands-on: search from `$HOME` (203 matches at 0.6 s, 1,176 at completion, peak RSS 316 MB →
+  43.7 MB); `ctl quit` during a real editor handover, with the fix reverted to confirm the bug
+  reproduces; all three badge placements and both icon modes on screen; the branch column checked
+  against `git diff origin/main...HEAD`; every `--badges` value run rather than `--help`-ed.
+- The tag-ambiguity fix verified in a scratch repository where a tag named `origin/main` and
+  `refs/remotes/origin/main` point at different commits: git's shorthand reports 0 changed files,
+  birch reports the correct 2.
+- Glyph coverage and advance widths measured from the `cmap` and `hmtx` tables of Menlo, SF Mono,
+  JetBrains Mono, Courier New, Andale Mono and the JetBrains Nerd Font variants.
 
 # Session log
 
@@ -101,3 +219,9 @@ _(none yet)_
   immovable; the remote-branch comparison was dropped as a near-subset of the base one.
 - Design approved: ADR 0026 `Proposed → Accepted`; the four tasks `Draft → Designed`; the sprint
   `Designing → Implementing`. Design merge to `main`.
+- Implementation: `076` (ADR 0026 — a tree-shaped index published in chunks), `077` (the quit
+  propagated out of the handover drain), `064` (badge placement as a theme axis and a setting),
+  `078` (the branch column). Independent review: four majors — a narrow-pane panic, a rebuild that
+  discarded published chunks, the mark outermost under left placement, and a cursor that moved as
+  chunks arrived — plus nine minors, all fixed. The branch glyph was withdrawn and replaced after
+  its font coverage was measured. Closed out; gates green.

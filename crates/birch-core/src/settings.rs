@@ -80,9 +80,42 @@ pub struct Settings {
     /// Scroll indicator on the pane's right edge, shown only when the rows
     /// overflow the viewport.
     pub scrollbar: bool,
+    /// Where status badges are drawn; `None` defers to the active theme.
+    pub badges: Option<BadgePlacement>,
+    /// Mark files the branch would merge, beside the working-tree badge.
+    pub branch_badges: bool,
     /// Rows a single wheel tick scrolls, clamped to
     /// [`SCROLL_LINES_MIN`]..=[`SCROLL_LINES_MAX`].
     pub scroll_lines: u8,
+}
+
+/// Where the git status badges are drawn. A theme states a default; this
+/// overrides it when the user has an opinion.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BadgePlacement {
+    /// A gutter at the pane's right edge — today's behaviour.
+    Right,
+    /// A gutter at the pane's left edge; the tree starts after it.
+    Left,
+    /// No gutter. Status still colours names and rolls up to folders — that is
+    /// `--no-git`'s job, not this one.
+    None,
+}
+
+/// Parses the `badges` setting from any of its three surfaces — the flag, the
+/// config file, and `ctl set` — so they cannot drift into three vocabularies.
+/// `auto` means "whatever the theme says", which is the absence of a setting.
+pub fn parse_badges(s: &str) -> Result<Option<BadgePlacement>, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok(None),
+        "right" => Ok(Some(BadgePlacement::Right)),
+        "left" => Ok(Some(BadgePlacement::Left)),
+        "none" => Ok(Some(BadgePlacement::None)),
+        other => Err(format!(
+            "badges must be right, left, none, or auto: {other}"
+        )),
+    }
 }
 
 /// Fewest rows one wheel tick may scroll: a tick that moves nothing is a tick
@@ -116,6 +149,8 @@ impl Default for Settings {
             compact: true,
             theme: ThemeId::default(),
             scrollbar: true,
+            badges: None,
+            branch_badges: true,
             scroll_lines: SCROLL_LINES_DEFAULT,
         }
     }

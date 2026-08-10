@@ -45,6 +45,10 @@ pub enum SettingKey {
     /// theme-id string (`birch`, `plain`, …), not a `SettingValue`.
     Theme,
     Scrollbar,
+    /// Where the status badges sit. Like `Theme`, its value is a word rather
+    /// than a `SettingValue`.
+    Badges,
+    BranchBadges,
     /// Rows per wheel tick. Like `Theme`, its value is not a `SettingValue`
     /// but a number, and out-of-range values are refused.
     ScrollLines,

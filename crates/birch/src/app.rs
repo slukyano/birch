@@ -117,6 +117,8 @@ struct App {
     /// matches both (ADR 0025). Keyed on the real path, so a snapshot arriving
     /// between press and release cannot redirect the click.
     armed_press: Option<(PathBuf, bool)>,
+    /// When the match list was last recomputed from a *growing* index.
+    last_rematch: Option<Instant>,
     /// Row count from the last draw. A scroll needs the count and nothing
     /// else, so it is served from here instead of rebuilding every row
     /// (ADR 0024); `FlatView::reconcile` re-clamps before every draw anyway.
@@ -132,6 +134,11 @@ struct App {
 /// it degrades with the machine's speed instead of meaning different things on
 /// different hardware.
 const BATCH_BUDGET: Duration = Duration::from_millis(8);
+
+/// How often the match list is recomputed while the index is still growing
+/// (ADR 0026). Fast enough that results visibly improve, rare enough that the
+/// walk is not spent re-scanning what it has already found.
+const INDEX_REMATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Whether the batch may continue, given what the last handled event did.
 /// One rule, asked both before a batch opens and after each event inside it,
@@ -168,13 +175,18 @@ enum BatchStop {
 
 /// Handles every event already queued, in order, until the channel is empty or
 /// `deadline` passes. Never blocks: only what has *already* arrived joins the
-/// batch, so an idle birch still draws one frame per event.
-fn drain_batch<F>(events: &Receiver<AppEvent>, deadline: Instant, mut handle: F) -> BatchStop
+/// batch, so an idle birch still draws one frame per event. `None` drains the
+/// queue outright — the post-handover drain must leave nothing behind.
+fn drain_batch<F>(
+    events: &Receiver<AppEvent>,
+    deadline: Option<Instant>,
+    mut handle: F,
+) -> BatchStop
 where
     F: FnMut(AppEvent) -> BatchStep,
 {
     loop {
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|at| Instant::now() >= at) {
             return BatchStop::Budget;
         }
         let Ok(event) = events.try_recv() else {
@@ -237,6 +249,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         input_paused,
         click_timer: input::ClickTimer::default(),
         armed_press: None,
+        last_rematch: None,
         rows_len: 0,
         yielded_terminal: false,
     };
@@ -263,7 +276,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         // A hand-off in the event just handled ends the batch before it starts
         // — nothing may run behind a child that owned the tty (decision 4).
         let stopped = if batch_step(false, app.yielded_terminal) == BatchStep::Continue {
-            drain_batch(&events, Instant::now() + BATCH_BUDGET, |event| {
+            drain_batch(&events, Some(Instant::now() + BATCH_BUDGET), |event| {
                 let quit = app.handle(terminal, &events, event);
                 batch_step(quit, app.yielded_terminal)
             })
@@ -302,8 +315,29 @@ impl App {
             }
             AppEvent::Fs(WatchEvent::Dirty(dirs)) => self.handle_dirty(dirs),
             AppEvent::Index(IndexEvent::Index(index)) => {
+                // A walk started for a previous root keeps publishing after a
+                // re-root; adopting it would describe the wrong corpus, and
+                // claim to be complete about it.
+                if index.root() != self.root {
+                    return false;
+                }
+                let complete = index.is_complete();
                 self.index = Some(index);
-                self.rematch();
+                // A growing index publishes ~100 times on a large root, and
+                // rematching on every one doubles the walk while a query is
+                // live. The match list has to keep improving, not track every
+                // chunk — so intermediate ones rematch on a cadence, and the
+                // final one always does.
+                let due = complete
+                    || self
+                        .last_rematch
+                        .is_none_or(|at| at.elapsed() >= INDEX_REMATCH_INTERVAL);
+                if due {
+                    self.last_rematch = Some(Instant::now());
+                    // The corpus grew; the query did not change. New matches
+                    // become steppable, but the cursor stays where it is.
+                    self.rematch_keeping_selection();
+                }
             }
             AppEvent::Ctl(ctl) => return self.handle_ctl(terminal, events, ctl),
             AppEvent::Shutdown => return true,
@@ -462,7 +496,11 @@ impl App {
                 let hit = render::hit_test(
                     &rows,
                     &self.view,
-                    &self.settings,
+                    render::Chrome {
+                        settings: &self.settings,
+                        theme: &Theme::for_id(self.settings.theme),
+                        branch_axis: self.branch_axis(),
+                    },
                     area(terminal),
                     column,
                     row,
@@ -474,7 +512,11 @@ impl App {
                 let hit = render::hit_test(
                     &rows,
                     &self.view,
-                    &self.settings,
+                    render::Chrome {
+                        settings: &self.settings,
+                        theme: &Theme::for_id(self.settings.theme),
+                        branch_axis: self.branch_axis(),
+                    },
                     area(terminal),
                     column,
                     row,
@@ -512,8 +554,8 @@ impl App {
                     // Unreachable by construction (activate picks first in
                     // picker mode), kept as a guard: never exec in a picker.
                     self.picked = Some(path);
-                } else {
-                    self.perform_open(terminal, events, &path);
+                } else if self.perform_open(terminal, events, &path) {
+                    return true;
                 }
             }
         }
@@ -522,26 +564,36 @@ impl App {
 
     /// The one open execution path — hotkeys, mouse, and the socket verb all
     /// land here (the action layer is shared by design).
+    /// Returns true when a quit arrived while the child owned the terminal —
+    /// a `ctl quit` or a signal must not be answered and then forgotten.
     fn perform_open(
         &mut self,
         terminal: &mut term::Term,
         events: &Receiver<AppEvent>,
         path: &Path,
-    ) {
+    ) -> bool {
         match self.open_cmd.mode {
-            OpenMode::Detached => self.open_detached(path),
+            OpenMode::Detached => {
+                self.open_detached(path);
+                false
+            }
             OpenMode::Terminal => {
                 self.open_in_terminal(terminal, path);
-                // Events read before the handover completed are stale:
-                // apply everything except old input.
-                while let Ok(pending) = events.try_recv() {
-                    match pending {
-                        AppEvent::Input(_) => {}
-                        other => {
-                            self.handle(terminal, events, other);
+                // Events read before the handover completed are stale: apply
+                // everything except old input. One drain helper, so this and
+                // the loop's batch cannot diverge on what "handled" means —
+                // and, as there, nothing runs behind a quit (ADR 0024).
+                let stop = drain_batch(events, None, |pending| match pending {
+                    AppEvent::Input(_) => BatchStep::Continue,
+                    other => {
+                        if self.handle(terminal, events, other) {
+                            BatchStep::Quit
+                        } else {
+                            BatchStep::Continue
                         }
                     }
-                }
+                });
+                stop == BatchStop::Quit
             }
         }
     }
@@ -562,10 +614,7 @@ impl App {
         match effect {
             CtlEffect::None => false,
             CtlEffect::Quit => true,
-            CtlEffect::Open(path) => {
-                self.perform_open(terminal, events, &path);
-                false
-            }
+            CtlEffect::Open(path) => self.perform_open(terminal, events, &path),
         }
     }
 
@@ -643,6 +692,15 @@ impl App {
         // key parses. The redraw at the end of the loop applies it live.
         // Numeric settings are parsed before SettingValue, as Theme is: their
         // value is not on/off/toggle.
+        if let SettingKey::Badges = key {
+            return match settings::parse_badges(value) {
+                Ok(placement) => {
+                    self.settings.badges = placement;
+                    Response::ok(None)
+                }
+                Err(e) => Response::err(e),
+            };
+        }
         if let SettingKey::ScrollLines = key {
             return match value.parse::<u8>() {
                 Ok(n) if (settings::SCROLL_LINES_MIN..=settings::SCROLL_LINES_MAX).contains(&n) => {
@@ -694,10 +752,13 @@ impl App {
                     self.repo_root = None;
                 }
             }
+            SettingKey::BranchBadges => {
+                self.settings.branch_badges = value.apply(self.settings.branch_badges);
+            }
             SettingKey::Scrollbar => {
                 self.settings.scrollbar = value.apply(self.settings.scrollbar);
             }
-            SettingKey::Theme | SettingKey::ScrollLines => {
+            SettingKey::Theme | SettingKey::ScrollLines | SettingKey::Badges => {
                 return Response::err("handled before value parsing");
             }
         }
@@ -944,6 +1005,18 @@ impl App {
     /// therefore never moves, and narrowing a query never drags the pane
     /// backwards.
     fn rematch(&mut self) {
+        self.rematch_inner(true);
+    }
+
+    /// Recompute matches without moving the cursor. Used when the *corpus*
+    /// grew rather than the query changing: a chunk arriving from the index
+    /// walk may hold matches that sort before wherever the user has settled,
+    /// and the cursor must not travel under a reader's eyes (ADR 0026).
+    fn rematch_keeping_selection(&mut self) {
+        self.rematch_inner(false);
+    }
+
+    fn rematch_inner(&mut self, may_reveal: bool) {
         let Some(query) = self.search.as_ref().map(|s| s.query.clone()) else {
             return;
         };
@@ -991,6 +1064,7 @@ impl App {
         // undo whatever the wheel just did, and overwriting a pending reveal
         // would swallow the keystroke that started it.
         if let Some(target) = target
+            && may_reveal
             && self.pending_reveal.is_none()
             && self.view.selection.as_deref() != Some(target.as_path())
         {
@@ -1168,9 +1242,15 @@ impl App {
             self.save_persisted(false);
         }
         let bottom = self.bottom_line();
+        let branch_axis = self.branch_axis();
         let theme = Theme::for_id(self.settings.theme);
         let (view, settings) = (&self.view, &self.settings);
-        terminal.draw(|frame| render::draw(frame, &rows, view, settings, &theme, &bottom))?;
+        let chrome = render::Chrome {
+            settings,
+            theme: &theme,
+            branch_axis,
+        };
+        terminal.draw(|frame| render::draw(frame, &rows, view, chrome, &bottom))?;
         Ok(())
     }
 
@@ -1183,10 +1263,20 @@ impl App {
                 Mode::Tree => format!("search: {}", state.query),
                 Mode::Pick => format!("> {}", state.query),
             };
-            if n == 0 {
-                format!("{prompt} (no matches)")
-            } else {
-                format!("{prompt} ({}/{n})", self.anchor_index(&state.matches) + 1)
+            // Three index states, three different things to say (ADR 0026).
+            // "no matches" is a claim about the corpus, so it waits until
+            // there is a whole corpus to make it about.
+            match (&self.index, n) {
+                (None, _) => format!("{prompt} (indexing…)"),
+                (Some(index), 0) if !index.is_complete() => {
+                    format!("{prompt} (indexing…)")
+                }
+                (Some(_), 0) => format!("{prompt} (no matches)"),
+                (Some(index), _) if !index.is_complete() => format!(
+                    "{prompt} ({}/{n}, indexing…)",
+                    self.anchor_index(&state.matches) + 1
+                ),
+                _ => format!("{prompt} ({}/{n})", self.anchor_index(&state.matches) + 1),
             }
         } else if self.mode.is_pick() {
             "> type to filter, Enter picks the selection, Esc quits".into()
@@ -1276,6 +1366,10 @@ impl App {
             desired.insert(repo.join(".git"));
             desired.insert(repo.join(".git/refs"));
             desired.insert(repo.join(".git/refs/heads"));
+            // A fetch moves the base the branch column compares against, and
+            // touches nothing in the working tree (task 078).
+            desired.insert(repo.join(".git/refs/remotes"));
+            desired.insert(repo.join(".git/refs/remotes/origin"));
         }
         for row in rows {
             if !row.kind.is_dir() || row.missing || row.ignored {
@@ -1326,6 +1420,17 @@ impl App {
     /// (ADR 0024); the clamp itself stays in `FlatView`.
     fn scroll_rows(&mut self, delta: isize, viewport: usize) {
         self.view.scroll_by(self.rows_len, delta, viewport);
+    }
+
+    /// Whether the branch column is shown: the setting is on, git is on, a
+    /// repo was found, and a base resolved. Without a base there is nothing to
+    /// compare against, so the column is absent rather than blank (task 078).
+    fn branch_axis(&self) -> bool {
+        self.settings.branch_badges
+            && self
+                .git_state
+                .as_deref()
+                .is_some_and(|git| git.base().is_some())
     }
 
     fn refresh_git(&mut self) {
@@ -1507,6 +1612,7 @@ mod tests {
             input_paused: Arc::new(AtomicBool::new(false)),
             click_timer: input::ClickTimer::default(),
             armed_press: None,
+            last_rematch: None,
             rows_len: 0,
             yielded_terminal: false,
         };
@@ -1543,18 +1649,7 @@ mod tests {
     }
 
     fn index_of(entries: &[(&str, bool)]) -> Arc<SearchIndex> {
-        Arc::new(SearchIndex {
-            entries: entries
-                .iter()
-                .map(|(rel, is_dir)| {
-                    birch_core::search::IndexEntry::new(
-                        (*rel).into(),
-                        PathBuf::from("/r").join(rel),
-                        *is_dir,
-                    )
-                })
-                .collect(),
-        })
+        Arc::new(SearchIndex::from_paths(Path::new("/r"), entries))
     }
 
     #[test]
@@ -2455,7 +2550,7 @@ mod tests {
             tx.send(AppEvent::Shutdown).unwrap();
         }
         let mut seen = 0;
-        let stop = drain_batch(&rx, Instant::now() + Duration::from_secs(5), |_| {
+        let stop = drain_batch(&rx, Some(Instant::now() + Duration::from_secs(5)), |_| {
             seen += 1;
             BatchStep::Continue
         });
@@ -2470,7 +2565,7 @@ mod tests {
         // budget.
         let (_tx, rx) = mpsc::channel::<AppEvent>();
         let started = Instant::now();
-        let stop = drain_batch(&rx, started + Duration::from_secs(30), |_| {
+        let stop = drain_batch(&rx, Some(started + Duration::from_secs(30)), |_| {
             BatchStep::Continue
         });
         assert_eq!(stop, BatchStop::Drained);
@@ -2485,7 +2580,7 @@ mod tests {
         }
         let mut seen = 0;
         // A budget already spent draws before consuming anything more.
-        let stop = drain_batch(&rx, Instant::now(), |_| {
+        let stop = drain_batch(&rx, Some(Instant::now()), |_| {
             seen += 1;
             BatchStep::Continue
         });
@@ -2504,7 +2599,7 @@ mod tests {
                 tx.send(AppEvent::Shutdown).unwrap();
             }
             let mut seen = 0;
-            let stop = drain_batch(&rx, Instant::now() + Duration::from_secs(5), |_| {
+            let stop = drain_batch(&rx, Some(Instant::now() + Duration::from_secs(5)), |_| {
                 seen += 1;
                 step
             });
@@ -2554,6 +2649,47 @@ mod tests {
             assert!(!reply.ok, "{bad} should be refused");
             assert_eq!(h.app.settings.scroll_lines, 7, "{bad} changed the value");
         }
+    }
+
+    #[test]
+    fn ctl_set_branch_badges_toggles_the_column() {
+        let mut h = harness(Mode::Tree);
+        let mut req = Request::new(Verb::Set);
+        req.setting = Some(SettingKey::BranchBadges);
+        assert!(h.app.settings.branch_badges, "on by default");
+        req.value = Some("off".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert!(!h.app.settings.branch_badges);
+        // And with it off the column is gone even where a base would resolve.
+        assert!(!h.app.branch_axis());
+        req.value = Some("toggle".into());
+        assert!(h.app.ctl_response(req).0.ok);
+        assert!(h.app.settings.branch_badges);
+    }
+
+    #[test]
+    fn ctl_set_badges_takes_a_word_and_auto_returns_to_the_theme() {
+        let mut h = harness(Mode::Tree);
+        let mut req = Request::new(Verb::Set);
+        req.setting = Some(SettingKey::Badges);
+        assert_eq!(h.app.settings.badges, None, "the theme decides by default");
+
+        req.value = Some("left".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert_eq!(h.app.settings.badges, Some(settings::BadgePlacement::Left));
+
+        req.value = Some("none".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert_eq!(h.app.settings.badges, Some(settings::BadgePlacement::None));
+
+        // `auto` hands the choice back rather than pinning a value.
+        req.value = Some("auto".into());
+        assert!(h.app.ctl_response(req.clone()).0.ok);
+        assert_eq!(h.app.settings.badges, None);
+
+        req.value = Some("sideways".into());
+        assert!(!h.app.ctl_response(req).0.ok, "not a placement");
+        assert_eq!(h.app.settings.badges, None, "a refusal changes nothing");
     }
 
     #[test]
@@ -2771,6 +2907,178 @@ mod tests {
             h.app.picked.is_none(),
             "the abandoned click reset the double"
         );
+    }
+
+    // ---- ADR 0026: the index has a lifecycle, and says which state it is in ----
+
+    /// A partial index over the same paths — what a mid-walk chunk looks like.
+    fn partial_index_of(entries: &[(&str, bool)]) -> Arc<SearchIndex> {
+        Arc::new(SearchIndex::from_paths_partial(Path::new("/r"), entries))
+    }
+
+    #[test]
+    fn no_matches_is_only_claimed_once_the_index_is_complete() {
+        let mut h = harness(Mode::Pick);
+        feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
+        h.app.search_push('z');
+
+        // No index at all: birch cannot speak about the corpus.
+        h.app.index = None;
+        h.app.rematch();
+        assert!(
+            h.app.bottom_line().contains("indexing"),
+            "{}",
+            h.app.bottom_line()
+        );
+        assert!(!h.app.bottom_line().contains("no matches"));
+
+        // A partial index that holds nothing matching: still not a claim.
+        h.app.index = Some(partial_index_of(&[("a.txt", false)]));
+        h.app.rematch();
+        assert!(
+            h.app.bottom_line().contains("indexing"),
+            "{}",
+            h.app.bottom_line()
+        );
+        assert!(!h.app.bottom_line().contains("no matches"));
+
+        // Complete and holding nothing: now it is true, and said.
+        h.app.index = Some(index_of(&[("a.txt", false)]));
+        h.app.rematch();
+        assert!(
+            h.app.bottom_line().contains("no matches"),
+            "{}",
+            h.app.bottom_line()
+        );
+    }
+
+    #[test]
+    fn a_partial_index_shows_its_matches_and_says_it_is_still_growing() {
+        let mut h = harness(Mode::Pick);
+        feed(&mut h.app, "/r", &[("alpha.txt", NodeKind::File)]);
+        h.app.search_push('a');
+        h.app.index = Some(partial_index_of(&[("alpha.txt", false)]));
+        h.app.rematch();
+        let line = h.app.bottom_line();
+        assert!(line.contains("/1"), "counts what it has: {line}");
+        assert!(
+            line.contains("indexing"),
+            "and says there may be more: {line}"
+        );
+    }
+
+    #[test]
+    fn an_arriving_chunk_leaves_a_non_matching_selection_alone() {
+        // ADR 0023 lets the pane keep its tree under a search, so the user may
+        // have arrowed onto a row that is not a match. A chunk arriving from
+        // the index walk must not yank the cursor back to a match.
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("aaa.txt", NodeKind::File),
+                ("mmm.txt", NodeKind::File),
+                ("zzz.txt", NodeKind::File),
+            ],
+        );
+        h.app.index = Some(partial_index_of(&[("aaa.txt", false)]));
+        h.app.search_push('a');
+        // Settle deliberately on a row the query does not match.
+        h.app.view.selection = Some(PathBuf::from("/r/zzz.txt"));
+
+        // A later chunk brings another match, sorting before the selection.
+        h.app.index = Some(partial_index_of(&[("aaa.txt", false), ("mmm.txt", false)]));
+        h.app.rematch_keeping_selection();
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/zzz.txt")),
+            "the cursor stayed where the user put it"
+        );
+
+        // Typing, by contrast, is the user asking to be taken somewhere.
+        h.app.rematch();
+        assert_ne!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/zzz.txt"))
+        );
+    }
+
+    #[test]
+    fn an_arriving_chunk_does_not_move_a_settled_selection() {
+        // The cursor must not walk under a reader's eyes as the index grows.
+        let mut h = harness(Mode::Pick);
+        let entries: Vec<(String, NodeKind)> = (0..6)
+            .map(|i| (format!("f{i}.txt"), NodeKind::File))
+            .collect();
+        let refs: Vec<(&str, NodeKind)> = entries.iter().map(|(n, k)| (n.as_str(), *k)).collect();
+        feed(&mut h.app, "/r", &refs);
+        h.app.index = Some(partial_index_of(&[("f3.txt", false), ("f4.txt", false)]));
+        h.app.search_push('f');
+        // Settle on the second of the two known matches.
+        h.app.cycle_match(true);
+        let settled = h.app.view.selection.clone();
+        assert!(settled.is_some());
+
+        // A chunk arrives carrying matches that sort *before* the selection.
+        h.app.index = Some(partial_index_of(&[
+            ("f0.txt", false),
+            ("f1.txt", false),
+            ("f2.txt", false),
+            ("f3.txt", false),
+            ("f4.txt", false),
+        ]));
+        h.app.rematch();
+        assert_eq!(
+            h.app.view.selection, settled,
+            "the selection stayed on the row the user had settled on"
+        );
+        // ...and the newly arrived rows are matches it can now step to.
+        assert_eq!(h.app.search.as_ref().unwrap().matches.len(), 5);
+    }
+
+    // ---- 077: a quit during a terminal handover is not swallowed ----
+
+    #[test]
+    fn the_post_handover_drain_reports_a_quit() {
+        // The drain that discards stale input after an editor exits must still
+        // carry a quit out: ctl quit and SIGHUP both arrive as events, and
+        // both were answered and then ignored.
+        let (tx, rx) = mpsc::channel();
+        tx.send(AppEvent::Input(crossterm::event::Event::FocusGained))
+            .unwrap();
+        tx.send(AppEvent::Shutdown).unwrap();
+        tx.send(AppEvent::Input(crossterm::event::Event::FocusLost))
+            .unwrap();
+
+        let mut handled = 0;
+        let stop = drain_batch(&rx, None, |pending| match pending {
+            AppEvent::Input(_) => BatchStep::Continue,
+            _ => {
+                handled += 1;
+                BatchStep::Quit
+            }
+        });
+        assert_eq!(stop, BatchStop::Quit);
+        assert_eq!(handled, 1, "the quit stopped the drain");
+    }
+
+    #[test]
+    fn the_post_handover_drain_empties_the_queue() {
+        // It has no time budget: every event queued while the child owned the
+        // tty is stale, and leaving any behind defeats the drain.
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..500 {
+            tx.send(AppEvent::Input(crossterm::event::Event::FocusGained))
+                .unwrap();
+        }
+        let mut seen = 0;
+        let stop = drain_batch(&rx, None, |_| {
+            seen += 1;
+            BatchStep::Continue
+        });
+        assert_eq!(stop, BatchStop::Drained);
+        assert_eq!(seen, 500);
     }
 }
 

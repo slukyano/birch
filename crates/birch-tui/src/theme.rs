@@ -4,6 +4,7 @@
 //! like" lives here, so `birch-core` stays ratatui-free and only *names* the
 //! theme.
 
+use birch_core::settings::BadgePlacement;
 use birch_core::{FileStatus, ThemeId};
 use ratatui::style::Color;
 
@@ -120,6 +121,8 @@ pub struct Palette {
     pub selection_accent: Color,
     /// Indent-guide line color.
     pub guide: Color,
+    /// Colour of the branch-change mark (task 078).
+    pub branch_mark: Color,
     pub chevron: Color,
     pub separator: Color,
     pub ignored: Color,
@@ -137,6 +140,9 @@ pub struct Theme {
     pub guides: GuideStyle,
     pub selection: SelectionStyle,
     pub badges: BadgeStyle,
+    /// Where the badge gutter sits by default for this theme. The `badges`
+    /// setting overrides it.
+    pub badge_placement: BadgePlacement,
     pub icons: IconSet,
     /// Directory names are rendered bold.
     pub bold_dirs: bool,
@@ -189,6 +195,7 @@ impl Theme {
     fn birch() -> Theme {
         Theme {
             id: ThemeId::Birch,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: Some(Color::Rgb(0xb0, 0xb4, 0xab)),
@@ -200,6 +207,7 @@ impl Theme {
                 // The one gold stroke — the single most saturated element.
                 selection_accent: Color::Rgb(0xd9, 0xa6, 0x48),
                 guide: Color::Rgb(0x45, 0x48, 0x3f),
+                branch_mark: Color::Rgb(0x45, 0x48, 0x3f),
                 chevron: Color::Rgb(0x8a, 0x9a, 0x5b),
                 separator: Color::Rgb(0x8a, 0x9a, 0x5b),
                 ignored: Color::Rgb(0x5f, 0x66, 0x5c),
@@ -236,6 +244,7 @@ impl Theme {
     fn vscode() -> Theme {
         Theme {
             id: ThemeId::Vscode,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 // Measured from VS Code Dark Modern: files and dirs share the
@@ -246,7 +255,8 @@ impl Theme {
                 selection_bg: Color::Rgb(0x04, 0x39, 0x5e),
                 selection_fg: None,
                 selection_accent: Color::Rgb(0x00, 0x7a, 0xcc),
-                guide: Color::Rgb(0x58, 0x58, 0x58),   // measured
+                guide: Color::Rgb(0x58, 0x58, 0x58), // measured
+                branch_mark: Color::Rgb(0x58, 0x58, 0x58),
                 chevron: Color::Rgb(0x8c, 0x8c, 0x8c), // measured
                 separator: Color::Rgb(0x6a, 0x73, 0x7d),
                 ignored: Color::Rgb(0x6a, 0x6a, 0x6a),
@@ -280,6 +290,7 @@ impl Theme {
     fn jetbrains() -> Theme {
         Theme {
             id: ThemeId::Jetbrains,
+            badge_placement: BadgePlacement::None,
             palette: Palette {
                 app_bg: None,
                 // Measured from IDEA New UI dark: cool greys, dirs not bold.
@@ -290,6 +301,7 @@ impl Theme {
                 selection_fg: None,
                 selection_accent: Color::Rgb(0xd9, 0x97, 0x5a),
                 guide: Color::Rgb(0x4b, 0x4b, 0x48),
+                branch_mark: Color::Rgb(0x4b, 0x4b, 0x48),
                 chevron: Color::Rgb(0xb5, 0xb8, 0xbe), // measured
                 separator: Color::Rgb(0x80, 0x7a, 0x70),
                 ignored: Color::Rgb(0x6f, 0x73, 0x7a),
@@ -324,6 +336,7 @@ impl Theme {
     fn xcode() -> Theme {
         Theme {
             id: ThemeId::Xcode,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: Some(Color::Rgb(0xe5, 0xea, 0xf0)),
@@ -333,6 +346,7 @@ impl Theme {
                 selection_fg: None,
                 selection_accent: Color::Rgb(0x3f, 0x7a, 0xf6),
                 guide: Color::Rgb(0x3a, 0x41, 0x4b),
+                branch_mark: Color::Rgb(0x3a, 0x41, 0x4b),
                 chevron: Color::Rgb(0xa7, 0xa6, 0xa7), // measured
                 separator: Color::Rgb(0x8a, 0x92, 0x9c),
                 ignored: Color::Rgb(0x6c, 0x75, 0x80),
@@ -367,6 +381,7 @@ impl Theme {
     fn mocha() -> Theme {
         Theme {
             id: ThemeId::Mocha,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: None,
@@ -375,7 +390,8 @@ impl Theme {
                 selection_fg: None,
                 selection_accent: Color::Rgb(0xb4, 0xbe, 0xfe), // lavender
                 guide: Color::Rgb(0x45, 0x47, 0x5a),            // surface1
-                chevron: Color::Rgb(0x7f, 0x84, 0x9c),          // overlay1
+                branch_mark: Color::Rgb(0x45, 0x47, 0x5a),
+                chevron: Color::Rgb(0x7f, 0x84, 0x9c), // overlay1
                 separator: Color::Rgb(0x7f, 0x84, 0x9c),
                 ignored: Color::Rgb(0x6c, 0x70, 0x86), // overlay0
                 match_bg: Color::Rgb(0xf9, 0xe2, 0xaf), // yellow
@@ -409,6 +425,7 @@ impl Theme {
     fn tokyonight() -> Theme {
         Theme {
             id: ThemeId::Tokyonight,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: None,
@@ -417,6 +434,7 @@ impl Theme {
                 selection_fg: None,
                 selection_accent: Color::Rgb(0x7a, 0xa2, 0xf7),
                 guide: Color::Rgb(0x3b, 0x42, 0x61),
+                branch_mark: Color::Rgb(0x3b, 0x42, 0x61),
                 chevron: Color::Rgb(0x56, 0x5f, 0x89), // comment
                 separator: Color::Rgb(0x56, 0x5f, 0x89),
                 ignored: Color::Rgb(0x56, 0x5f, 0x89),
@@ -451,6 +469,7 @@ impl Theme {
     fn gruvbox() -> Theme {
         Theme {
             id: ThemeId::Gruvbox,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: Some(Color::Rgb(0xeb, 0xdb, 0xb2)), // fg1
@@ -459,7 +478,8 @@ impl Theme {
                 selection_fg: None,
                 selection_accent: Color::Rgb(0xfe, 0x80, 0x19), // bright orange
                 guide: Color::Rgb(0x50, 0x49, 0x45),            // bg2
-                chevron: Color::Rgb(0x92, 0x83, 0x74),          // gray
+                branch_mark: Color::Rgb(0x50, 0x49, 0x45),
+                chevron: Color::Rgb(0x92, 0x83, 0x74), // gray
                 separator: Color::Rgb(0x92, 0x83, 0x74),
                 ignored: Color::Rgb(0x92, 0x83, 0x74),
                 match_bg: Color::Rgb(0xfa, 0xbd, 0x2f), // bright yellow
@@ -492,6 +512,7 @@ impl Theme {
     fn nord() -> Theme {
         Theme {
             id: ThemeId::Nord,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: Some(Color::Rgb(0xd8, 0xde, 0xe9)), // nord4 (snow storm)
@@ -500,7 +521,8 @@ impl Theme {
                 selection_fg: None,
                 selection_accent: Color::Rgb(0x88, 0xc0, 0xd0), // nord8
                 guide: Color::Rgb(0x4c, 0x56, 0x6a),            // nord3
-                chevron: Color::Rgb(0x61, 0x6e, 0x88),          // nord3 bright (comments)
+                branch_mark: Color::Rgb(0x4c, 0x56, 0x6a),
+                chevron: Color::Rgb(0x61, 0x6e, 0x88), // nord3 bright (comments)
                 separator: Color::Rgb(0x61, 0x6e, 0x88),
                 ignored: Color::Rgb(0x61, 0x6e, 0x88),
                 match_bg: Color::Rgb(0xeb, 0xcb, 0x8b), // nord13 (yellow)
@@ -534,6 +556,7 @@ impl Theme {
     fn rosepine() -> Theme {
         Theme {
             id: ThemeId::Rosepine,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: Some(Color::Rgb(0xe0, 0xde, 0xf4)), // text
@@ -542,7 +565,8 @@ impl Theme {
                 selection_fg: None,
                 selection_accent: Color::Rgb(0xeb, 0xbc, 0xba), // rose
                 guide: Color::Rgb(0x40, 0x3d, 0x52),            // highlight med
-                chevron: Color::Rgb(0x90, 0x8c, 0xaa),          // subtle
+                branch_mark: Color::Rgb(0x40, 0x3d, 0x52),
+                chevron: Color::Rgb(0x90, 0x8c, 0xaa), // subtle
                 separator: Color::Rgb(0x90, 0x8c, 0xaa),
                 ignored: Color::Rgb(0x6e, 0x6a, 0x86),  // muted
                 match_bg: Color::Rgb(0xf6, 0xc1, 0x77), // gold
@@ -576,6 +600,7 @@ impl Theme {
     fn retro() -> Theme {
         Theme {
             id: ThemeId::Retro,
+            badge_placement: BadgePlacement::None,
             palette: Palette {
                 // The DOS blue field — the one theme that paints its canvas.
                 app_bg: Some(Color::Rgb(0x00, 0x00, 0xaa)),
@@ -586,6 +611,7 @@ impl Theme {
                 selection_fg: Some(Color::Rgb(0x00, 0x00, 0x00)),
                 selection_accent: Color::Rgb(0xff, 0xff, 0x55),
                 guide: Color::Rgb(0x55, 0x55, 0xff),
+                branch_mark: Color::Rgb(0x55, 0x55, 0xff),
                 chevron: Color::Rgb(0xff, 0xff, 0x55),
                 separator: Color::Rgb(0x55, 0x55, 0xff),
                 ignored: Color::Rgb(0x55, 0x55, 0xff),
@@ -619,6 +645,7 @@ impl Theme {
     fn plain() -> Theme {
         Theme {
             id: ThemeId::Plain,
+            badge_placement: BadgePlacement::Right,
             palette: Palette {
                 app_bg: None,
                 name_fg: None,
@@ -627,6 +654,7 @@ impl Theme {
                 selection_fg: None,
                 selection_accent: Color::Gray,
                 guide: Color::DarkGray,
+                branch_mark: Color::DarkGray,
                 chevron: Color::Gray,
                 separator: Color::DarkGray,
                 ignored: Color::DarkGray,

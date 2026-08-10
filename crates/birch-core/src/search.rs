@@ -4,6 +4,7 @@
 //! reports the matched character positions. One engine, one behaviour: the
 //! pane keeps its tree and steps over the matches, in the picker too (ADR 0023).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
@@ -52,15 +53,262 @@ pub struct Match {
     pub by_path: bool,
 }
 
-#[derive(Default, Debug)]
-pub struct SearchIndex {
-    pub entries: Vec<IndexEntry>,
+/// A node stores only what is not derivable: which entry holds it, and where
+/// its own name lives in the chunk's slab. Relative and absolute paths are
+/// reconstructed by walking parents (ADR 0026) — storing them per entry cost
+/// ten times this on a home-sized root.
+#[derive(Clone, Copy, Debug)]
+struct Node {
+    /// Global index of the parent entry; `NO_PARENT` for a child of the root.
+    parent: u32,
+    name_start: u32,
+    name_len: u32,
+    is_dir: bool,
 }
 
-/// Builds the index synchronously: gitignore-aware, never descending into
-/// ignored dirs, always skipping noise, honoring the hidden-files setting.
-pub fn build_index(root: &Path, show_hidden: bool) -> SearchIndex {
-    let mut entries = Vec::new();
+const NO_PARENT: u32 = u32::MAX;
+
+/// A published slice of the index. Immutable once built, so the walk can keep
+/// growing the index without rewriting what search is already reading.
+#[derive(Debug)]
+struct Chunk {
+    /// Basenames, concatenated; nodes slice into this.
+    names: String,
+    nodes: Vec<Node>,
+    /// Global index of `nodes[0]`.
+    start: u32,
+}
+
+/// The search corpus. Chunked and append-only: a snapshot shares its chunks
+/// with the builder rather than copying them, so publishing while the walk
+/// runs is cheap and a snapshot never changes underfoot (ADR 0026).
+#[derive(Default, Debug, Clone)]
+pub struct SearchIndex {
+    root: PathBuf,
+    chunks: Vec<Arc<Chunk>>,
+    len: u32,
+    complete: bool,
+}
+
+impl SearchIndex {
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Whether the walk that produced these chunks ran to the end. A partial
+    /// index is searchable; it simply cannot support "no matches" as a claim.
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    /// The root this index was built for. A walk in flight when the root
+    /// changes keeps publishing; the consumer checks this before adopting a
+    /// snapshot, so a complete index for the old corpus is never mistaken for
+    /// one describing the new.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn node(&self, global: u32) -> Option<(&Chunk, &Node)> {
+        let chunk = self.chunks.get(
+            self.chunks
+                .partition_point(|c| c.start <= global)
+                .checked_sub(1)?,
+        )?;
+        let node = chunk.nodes.get((global - chunk.start) as usize)?;
+        Some((chunk, node))
+    }
+
+    fn name_in<'a>(chunk: &'a Chunk, node: &Node) -> &'a str {
+        &chunk.names[node.name_start as usize..(node.name_start + node.name_len) as usize]
+    }
+
+    /// Writes the root-relative path of `global` into `buf`, which is cleared
+    /// first. One reused buffer serves a whole scan — nothing is materialised
+    /// per entry.
+    fn rel_into(&self, global: u32, buf: &mut String) {
+        let mut parts: Vec<&str> = Vec::new();
+        self.rel_into_with(global, buf, &mut parts);
+    }
+
+    /// As [`SearchIndex::rel_into`], but reusing the caller's component buffer
+    /// too — a scan reconstructs every candidate, and a fresh `Vec` per entry
+    /// is 800k allocations on a home-sized root.
+    fn rel_into_with<'a>(&'a self, global: u32, buf: &mut String, parts: &mut Vec<&'a str>) {
+        buf.clear();
+        parts.clear();
+        let mut cursor = Some(global);
+        while let Some(idx) = cursor {
+            let Some((chunk, node)) = self.node(idx) else {
+                break;
+            };
+            parts.push(Self::name_in(chunk, node));
+            cursor = (node.parent != NO_PARENT).then_some(node.parent);
+        }
+        for (i, part) in parts.iter().rev().enumerate() {
+            if i > 0 {
+                buf.push('/');
+            }
+            buf.push_str(part);
+        }
+    }
+
+    /// The materialised entry for one node — built for search hits only.
+    fn entry_at(&self, global: u32, buf: &mut String) -> Option<IndexEntry> {
+        let (_, node) = self.node(global)?;
+        self.rel_into(global, buf);
+        Some(IndexEntry::new(
+            buf.clone(),
+            self.root.join(&*buf),
+            node.is_dir,
+        ))
+    }
+
+    /// Every entry's root-relative path. Materialises the whole corpus, so it
+    /// is for tests and diagnostics — search never calls it.
+    pub fn rel_paths(&self) -> Vec<String> {
+        let mut buf = String::new();
+        (0..self.len)
+            .map(|global| {
+                self.rel_into(global, &mut buf);
+                buf.clone()
+            })
+            .collect()
+    }
+
+    /// As [`SearchIndex::from_paths`], but marked incomplete — the shape a
+    /// mid-walk snapshot has.
+    pub fn from_paths_partial(root: &Path, paths: &[(&str, bool)]) -> Self {
+        let mut index = Self::from_paths(root, paths);
+        index.complete = false;
+        index
+    }
+
+    /// Builds an index from root-relative paths, creating ancestors as needed.
+    /// For tests and for callers that already know the corpus.
+    pub fn from_paths(root: &Path, paths: &[(&str, bool)]) -> Self {
+        let mut builder = IndexBuilder::new(root.to_path_buf());
+        let mut seen: HashMap<String, u32> = HashMap::new();
+        for (rel, is_dir) in paths {
+            let mut parent = NO_PARENT;
+            let mut prefix = String::new();
+            let count = rel.split('/').count();
+            for (i, part) in rel.split('/').enumerate() {
+                if !prefix.is_empty() {
+                    prefix.push('/');
+                }
+                prefix.push_str(part);
+                let last = i + 1 == count;
+                if let Some(&existing) = seen.get(&prefix) {
+                    parent = existing;
+                    continue;
+                }
+                let idx = builder.push(parent, part, if last { *is_dir } else { true });
+                seen.insert(prefix.clone(), idx);
+                parent = idx;
+            }
+        }
+        builder.finish()
+    }
+}
+
+/// Accumulates nodes into chunks, handing out immutable snapshots as it goes.
+struct IndexBuilder {
+    root: PathBuf,
+    chunks: Vec<Arc<Chunk>>,
+    names: String,
+    nodes: Vec<Node>,
+    start: u32,
+    chunk_size: usize,
+}
+
+/// Entries per published chunk. Small enough that the first results appear
+/// almost immediately, large enough that a home-sized root publishes ~100
+/// times rather than thousands.
+const CHUNK_ENTRIES: usize = 8192;
+
+impl IndexBuilder {
+    fn new(root: PathBuf) -> Self {
+        Self::with_chunk_size(root, CHUNK_ENTRIES)
+    }
+
+    fn with_chunk_size(root: PathBuf, chunk_size: usize) -> Self {
+        Self {
+            root,
+            chunks: Vec::new(),
+            names: String::new(),
+            nodes: Vec::new(),
+            start: 0,
+            chunk_size,
+        }
+    }
+
+    fn push(&mut self, parent: u32, name: &str, is_dir: bool) -> u32 {
+        let node = Node {
+            parent,
+            name_start: self.names.len() as u32,
+            name_len: name.len() as u32,
+            is_dir,
+        };
+        self.names.push_str(name);
+        self.nodes.push(node);
+        self.start + self.nodes.len() as u32 - 1
+    }
+
+    fn full(&self) -> bool {
+        self.nodes.len() >= self.chunk_size
+    }
+
+    /// Seals the open chunk. A no-op when nothing has accumulated.
+    fn seal(&mut self) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let nodes = std::mem::take(&mut self.nodes);
+        let names = std::mem::take(&mut self.names);
+        let start = self.start;
+        self.start += nodes.len() as u32;
+        self.chunks.push(Arc::new(Chunk {
+            names,
+            nodes,
+            start,
+        }));
+    }
+
+    /// A snapshot of everything sealed so far. Cheap: it clones a vector of
+    /// `Arc`s, never the entries themselves.
+    fn snapshot(&self, complete: bool) -> SearchIndex {
+        SearchIndex {
+            root: self.root.clone(),
+            chunks: self.chunks.clone(),
+            len: self.start,
+            complete,
+        }
+    }
+
+    fn finish(mut self) -> SearchIndex {
+        self.seal();
+        self.snapshot(true)
+    }
+}
+
+/// Walks the root, publishing the index as it grows: gitignore-aware, never
+/// descending into ignored dirs, always skipping noise, honoring the
+/// hidden-files setting. `publish` is called with each snapshot, and returning
+/// `false` from it abandons the walk (the root changed, or birch is exiting).
+pub fn build_index_streaming(
+    root: &Path,
+    show_hidden: bool,
+    mut publish: impl FnMut(SearchIndex) -> bool,
+) -> SearchIndex {
+    let mut builder = IndexBuilder::new(root.to_path_buf());
+    // The serial walker is depth-first and yields a parent before its
+    // children, so the most recent entry one level up *is* the parent.
+    let mut last_at_depth: Vec<u32> = Vec::new();
     let walker = ignore::WalkBuilder::new(root)
         .hidden(!show_hidden)
         .filter_entry(|entry| {
@@ -72,13 +320,17 @@ pub fn build_index(root: &Path, show_hidden: bool) -> SearchIndex {
         .build();
     for entry in walker.flatten() {
         let abs = entry.path();
-        if abs == root {
+        let depth = entry.depth();
+        if depth == 0 || abs == root {
             continue;
         }
-        let Ok(rel_path) = abs.strip_prefix(root) else {
-            continue;
-        };
-        let rel = rel_path.to_string_lossy().replace('\\', "/");
+        // Every entry must be recorded, even one whose name is not UTF-8:
+        // skipping it would leave its children pointing at the previous
+        // sibling, naming paths that do not exist.
+        let name = abs
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         // The walker does not follow links, so a symlinked directory reports
         // as a symlink here while the tree calls it a directory. Resolve it, or
         // tree ordering, the forward anchor, and the filter each disagree with
@@ -86,9 +338,29 @@ pub fn build_index(root: &Path, show_hidden: bool) -> SearchIndex {
         let file_type = entry.file_type();
         let is_dir = file_type.is_some_and(|t| t.is_dir())
             || (file_type.is_some_and(|t| t.is_symlink()) && abs.is_dir());
-        entries.push(IndexEntry::new(rel, abs.to_path_buf(), is_dir));
+        let parent = if depth <= 1 {
+            NO_PARENT
+        } else {
+            last_at_depth.get(depth - 2).copied().unwrap_or(NO_PARENT)
+        };
+        let idx = builder.push(parent, &name, is_dir);
+        if last_at_depth.len() < depth {
+            last_at_depth.resize(depth, NO_PARENT);
+        }
+        last_at_depth[depth - 1] = idx;
+        if builder.full() {
+            builder.seal();
+            if !publish(builder.snapshot(false)) {
+                return builder.snapshot(false);
+            }
+        }
     }
-    SearchIndex { entries }
+    builder.finish()
+}
+
+/// Builds the index in one go, without publishing intermediate snapshots.
+pub fn build_index(root: &Path, show_hidden: bool) -> SearchIndex {
+    build_index_streaming(root, show_hidden, |_| true)
 }
 
 /// Scores `query` against the index, best first, with matched character
@@ -107,30 +379,46 @@ pub fn search(index: &SearchIndex, query: &str) -> Vec<Match> {
     };
     let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
     let mut buf = Vec::new();
-    let mut scored: Vec<(u32, Match)> = index
-        .entries
-        .iter()
-        .filter_map(|entry| {
-            let haystack = if by_path { &entry.rel } else { &entry.name };
-            let mut indices = Vec::new();
-            let score = pattern.indices(
-                Utf32Str::new(haystack, &mut buf),
-                &mut matcher,
-                &mut indices,
-            )?;
-            indices.sort_unstable();
-            indices.dedup();
-            let indices = to_char_indices(haystack, &indices);
-            Some((
-                score,
-                Match {
-                    entry: entry.clone(),
-                    indices,
-                    by_path,
-                },
-            ))
-        })
-        .collect();
+    // One reused path buffer for the whole scan: under a path query every
+    // candidate is reconstructed into it and discarded, and only hits are
+    // materialised into an `IndexEntry` (ADR 0026).
+    let mut path = String::new();
+    let mut parts: Vec<&str> = Vec::new();
+    let mut scored: Vec<(u32, Match)> = Vec::new();
+    for global in 0..index.len {
+        let Some((chunk, node)) = index.node(global) else {
+            continue;
+        };
+        let haystack: &str = if by_path {
+            index.rel_into_with(global, &mut path, &mut parts);
+            &path
+        } else {
+            SearchIndex::name_in(chunk, node)
+        };
+        let mut indices = Vec::new();
+        let Some(score) = pattern.indices(
+            Utf32Str::new(haystack, &mut buf),
+            &mut matcher,
+            &mut indices,
+        ) else {
+            continue;
+        };
+        indices.sort_unstable();
+        indices.dedup();
+        let indices = to_char_indices(haystack, &indices);
+        let mut entry_buf = String::new();
+        let Some(entry) = index.entry_at(global, &mut entry_buf) else {
+            continue;
+        };
+        scored.push((
+            score,
+            Match {
+                entry,
+                indices,
+                by_path,
+            },
+        ));
+    }
     scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score)); // stable: ties keep index order
     scored.into_iter().map(|(_, m)| m).collect()
 }
@@ -227,11 +515,11 @@ impl IndexWorker {
             .name("search-index".into())
             .spawn(move || {
                 let mut last_build: Option<Instant> = None;
-                while let Ok(IndexCmd::Rebuild {
-                    mut root,
-                    mut show_hidden,
-                }) = commands.recv()
-                {
+                loop {
+                    let (mut root, mut show_hidden) = match commands.recv() {
+                        Ok(IndexCmd::Rebuild { root, show_hidden }) => (root, show_hidden),
+                        Err(_) => return,
+                    };
                     let collapse = |root: &mut PathBuf, show_hidden: &mut bool| {
                         while let Ok(IndexCmd::Rebuild {
                             root: r,
@@ -252,9 +540,17 @@ impl IndexWorker {
                             collapse(&mut root, &mut show_hidden);
                         }
                     }
-                    let index = Arc::new(build_index(&root, show_hidden));
+                    // Publish as the walk grows the index (ADR 0026). The walk
+                    // always runs to the end: abandoning it for a newer request
+                    // throws away every chunk already published and restarts at
+                    // zero, so under filesystem churn the index would never
+                    // reach `complete` and "no matches" could never be said.
+                    // A queued rebuild simply runs next.
+                    let index = build_index_streaming(&root, show_hidden, |snapshot| {
+                        events.send(IndexEvent::Index(Arc::new(snapshot))).is_ok()
+                    });
                     last_build = Some(Instant::now());
-                    if events.send(IndexEvent::Index(index)).is_err() {
+                    if events.send(IndexEvent::Index(Arc::new(index))).is_err() {
                         return;
                     }
                 }
@@ -287,34 +583,123 @@ mod tests {
     fn index_skips_ignored_noise_and_honors_hidden() {
         let root = fixture_root("index");
         let index = build_index(&root, true);
-        let rels: Vec<&str> = index.entries.iter().map(|e| e.rel.as_str()).collect();
-        assert!(rels.contains(&"src/main.rs"));
+        let rels: Vec<String> = index.rel_paths();
+        assert!(rels.iter().any(|r| r == "src/main.rs"));
         assert!(
-            rels.contains(&".env"),
+            rels.iter().any(|r| r == ".env"),
             "hidden shown when enabled: {rels:?}"
         );
-        assert!(rels.contains(&".gitignore"));
+        assert!(rels.iter().any(|r| r == ".gitignore"));
         assert!(
             !rels.iter().any(|r| r.starts_with("target")),
             "ignored dirs are never descended into: {rels:?}"
         );
-        assert!(!rels.iter().any(|r| r.starts_with(".git/") || *r == ".git"));
+        assert!(!rels.iter().any(|r| r.starts_with(".git/") || r == ".git"));
 
         let index = build_index(&root, false);
-        let rels: Vec<&str> = index.entries.iter().map(|e| e.rel.as_str()).collect();
-        assert!(!rels.contains(&".env"), "hidden skipped when disabled");
+        let rels: Vec<String> = index.rel_paths();
+        assert!(
+            !rels.iter().any(|r| r == ".env"),
+            "hidden skipped when disabled"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    // ---- ADR 0026: a tree-shaped index, published while it is built ----
+
+    #[test]
+    fn paths_are_reconstructed_by_walking_parents() {
+        // Nothing stores a path: each node knows its parent and its own name.
+        let index = SearchIndex::from_paths(
+            Path::new("/r"),
+            &[("a/b/c/deep.rs", false), ("a/other.rs", false)],
+        );
+        let rels = index.rel_paths();
+        assert!(rels.iter().any(|r| r == "a/b/c/deep.rs"));
+        assert!(rels.iter().any(|r| r == "a/other.rs"));
+        // Ancestors exist as entries in their own right.
+        assert!(rels.iter().any(|r| r == "a"));
+        assert!(rels.iter().any(|r| r == "a/b"));
+        assert!(rels.iter().any(|r| r == "a/b/c"));
+        // And a hit carries the absolute path, derived from the root.
+        let hit = &search(&index, "deep")[0];
+        assert_eq!(hit.entry.rel, "a/b/c/deep.rs");
+        assert_eq!(hit.entry.abs, PathBuf::from("/r/a/b/c/deep.rs"));
+        assert_eq!(hit.entry.name, "deep.rs");
+    }
+
+    #[test]
+    fn a_parent_in_an_earlier_chunk_still_resolves() {
+        // The chunk boundary is invisible to lookup: a node's parent may live
+        // in a chunk sealed long before it.
+        let mut builder = IndexBuilder::with_chunk_size(PathBuf::from("/r"), 2);
+        let a = builder.push(NO_PARENT, "a", true);
+        let b = builder.push(a, "b", true); // seals after this pair
+        builder.seal();
+        let c = builder.push(b, "c", true);
+        let deep = builder.push(c, "deep.rs", false);
+        let index = builder.finish();
+        assert_eq!(index.len(), 4);
+        let mut buf = String::new();
+        index.rel_into(deep, &mut buf);
+        assert_eq!(buf, "a/b/c/deep.rs");
+        // And search spans chunks.
+        assert_eq!(search(&index, "deep")[0].entry.rel, "a/b/c/deep.rs");
+    }
+
+    #[test]
+    fn snapshots_are_searchable_before_the_walk_completes() {
+        let mut builder = IndexBuilder::with_chunk_size(PathBuf::from("/r"), 2);
+        builder.push(NO_PARENT, "early.rs", false);
+        builder.push(NO_PARENT, "second.rs", false);
+        builder.seal();
+        let partial = builder.snapshot(false);
+        assert!(!partial.is_complete(), "a growing index is not complete");
+        assert_eq!(partial.len(), 2);
+        assert_eq!(search(&partial, "early")[0].entry.rel, "early.rs");
+
+        builder.push(NO_PARENT, "late.rs", false);
+        let full = builder.finish();
+        assert!(full.is_complete());
+        assert_eq!(full.len(), 3);
+        // The earlier snapshot is untouched by the growth.
+        assert_eq!(partial.len(), 2);
+        assert!(search(&partial, "late").is_empty());
+        assert_eq!(search(&full, "late")[0].entry.rel, "late.rs");
+    }
+
+    #[test]
+    fn a_streaming_walk_publishes_and_finishes_complete() {
+        let root = std::env::temp_dir().join(format!("birch-stream-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("sub")).unwrap();
+        for i in 0..5 {
+            fs::write(root.join("sub").join(format!("f{i}.txt")), "").unwrap();
+        }
+        let mut seen = 0;
+        let index = build_index_streaming(&root, true, |snapshot| {
+            assert!(!snapshot.is_complete(), "mid-walk snapshots are partial");
+            seen += 1;
+            true
+        });
+        assert!(index.is_complete());
+        let rels = index.rel_paths();
+        assert!(rels.iter().any(|r| r == "sub/f0.txt"));
+        // Too few entries to fill a chunk, so nothing was published early.
+        assert_eq!(seen, 0);
         fs::remove_dir_all(&root).unwrap();
     }
 
     fn fixture_index() -> SearchIndex {
-        SearchIndex {
-            entries: vec![
-                IndexEntry::new("src/main.rs".into(), "/r/src/main.rs".into(), false),
-                IndexEntry::new("src".into(), "/r/src".into(), true),
-                IndexEntry::new("docs/manual.md".into(), "/r/docs/manual.md".into(), false),
-                IndexEntry::new("lib/FooBar.ts".into(), "/r/lib/FooBar.ts".into(), false),
+        SearchIndex::from_paths(
+            Path::new("/r"),
+            &[
+                ("src/main.rs", false),
+                ("src", true),
+                ("docs/manual.md", false),
+                ("lib/FooBar.ts", false),
             ],
-        }
+        )
     }
 
     /// Builds matches for arbitrary `(rel, is_dir)` pairs — the ordering
@@ -439,22 +824,14 @@ mod tests {
         // macOS filesystems store accented names in NFD; nucleo matches such
         // strings over raw bytes, so the mapping back to chars is load-
         // bearing for highlighting.
-        let index = SearchIndex {
-            entries: vec![IndexEntry::new(
-                "cafe\u{301}.txt".into(),
-                "/r/cafe.txt".into(),
-                false,
-            )],
-        };
+        let index = SearchIndex::from_paths(Path::new("/r"), &[("cafe\u{301}.txt", false)]);
         let hits = search(&index, "txt");
         let hit = &hits[0];
         // Chars: c(0) a(1) f(2) e(3) combining(4) .(5) t(6) x(7) t(8).
         assert_eq!(hit.indices, [6, 7, 8]);
 
         // Fully non-ASCII graphemes go through the grapheme mapping.
-        let index = SearchIndex {
-            entries: vec![IndexEntry::new("день.txt".into(), "/r/d.txt".into(), false)],
-        };
+        let index = SearchIndex::from_paths(Path::new("/r"), &[("день.txt", false)]);
         let hits = search(&index, "txt");
         assert_eq!(hits[0].indices, [5, 6, 7]); // д(0)е(1)н(2)ь(3).(4)t(5)x(6)t(7)
     }

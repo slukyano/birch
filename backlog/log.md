@@ -226,3 +226,24 @@
   line claims "no matches" whenever the index is merely absent; `077` — a quit arriving during a
   terminal handover is swallowed, found by the independent review in code outside the diff.
 
+## 2026-08-10 (sprint 018)
+
+* **Search stopped being broken on a real machine.** From a home directory the picker had reported
+  "no matches" forever: nothing was searchable until a walk of 825,782 entries finished, and the
+  index weighed 263 MB. Measuring first killed the obvious fix — parallelising the walk is 1.66×
+  once entries are constructed — and pointed at the representation instead. The index is now a tree
+  of parent-plus-name entries published in immutable chunks as the walk runs
+  ([ADR 0026](../docs/adr/0026-the-index-is-a-tree-published-progressively.md)): first results in
+  ~300 ms, ~25 MB at rest, and `(no matches)` reserved for a corpus that is actually complete.
+* **The tree says what a branch would merge.** One column marks files differing from the remote
+  base, rolled up to collapsed folders, with the base and its fetch age named in the root row. The
+  design was simplified four times — from status letters against the base, to letters with a
+  modifier, to a single mark — and the glyph was withdrawn after measurement: `⎇` is in no common
+  terminal font and renders on macOS only by borrowing from a proportional one. The mark now
+  follows `--icons`.
+* **Badge placement became a setting** — right, left, or none, per theme and overridable — and a
+  quit asked for while an editor is open now actually quits.
+* **The independent review caught a crash this sprint introduced**: a pane one to three columns wide
+  killed birch, and the guard test written for that exact case missed it because its rows painted
+  nothing in the gutter.
+

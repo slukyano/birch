@@ -8,6 +8,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, SystemTime};
 
 /// Per-file status, declared in badge-severity order: when a dir rolls up its
 /// descendants, the smallest discriminant wins.
@@ -45,6 +46,28 @@ pub struct GitState {
     /// Ignored files and dirs as reported (dirs collapse their subtrees).
     ignored: HashSet<PathBuf>,
     repo_root: PathBuf,
+    /// Files this branch changes relative to its base — what a merge would
+    /// carry — plus the ancestors that hold them, so a collapsed directory can
+    /// say the work is in there (task 078).
+    branch_changed: HashSet<PathBuf>,
+    /// The base being compared against, and how stale the comparison is.
+    base: Option<BranchBase>,
+}
+
+/// What this branch is measured against. `origin/HEAD`, else `origin/main`,
+/// else `origin/master` — never a local branch, since a pull request is opened
+/// against the remote.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchBase {
+    /// The ref name, for the root row: `origin/main`.
+    pub name: String,
+    /// The same ref, fully qualified: `refs/remotes/origin/main`. Everything
+    /// that asks git about the base uses this — the shorthand would happily
+    /// resolve a *tag* or a local branch of that name instead.
+    pub refname: String,
+    /// Age of the ref's last update — the comparison is only as fresh as the
+    /// last fetch, and birch does not fetch.
+    pub fetched_ago: Option<Duration>,
 }
 
 impl GitState {
@@ -60,6 +83,25 @@ impl GitState {
     /// Names of deleted-but-tracked files directly under `dir`.
     pub fn deleted_in(&self, dir: &Path) -> &[String] {
         self.deleted.get(dir).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Whether this path is part of what the branch would merge — the file
+    /// itself, or a directory holding one.
+    pub fn in_branch(&self, path: &Path) -> bool {
+        self.branch_changed.contains(path)
+    }
+
+    /// Attaches a branch comparison to a status snapshot. For tests and for
+    /// callers that compute the comparison separately.
+    pub fn with_branch(mut self, base: BranchBase, changed: HashSet<PathBuf>) -> Self {
+        self.branch_changed = changed;
+        self.base = Some(base);
+        self
+    }
+
+    /// The base this branch is compared against, when one resolves.
+    pub fn base(&self) -> Option<&BranchBase> {
+        self.base.as_ref()
     }
 
     /// True when the path or any ancestor (up to the repo root) is ignored.
@@ -212,11 +254,15 @@ impl GitWorker {
         thread::Builder::new()
             .name("git-status".into())
             .spawn(move || {
+                // The branch comparison depends only on which two commits are
+                // being compared, so it is recomputed when they move — not on
+                // every filesystem event that triggers a status refresh.
+                let mut cache: Option<BranchCache> = None;
                 while let Ok(GitCmd::Refresh { mut repo }) = commands.recv() {
                     while let Ok(GitCmd::Refresh { repo: r }) = commands.try_recv() {
                         repo = r;
                     }
-                    let state = run_status(&repo).map(Arc::new);
+                    let state = run_status(&repo, &mut cache).map(Arc::new);
                     if events.send(GitEvent::State(state)).is_err() {
                         return;
                     }
@@ -226,7 +272,103 @@ impl GitWorker {
     }
 }
 
-fn run_status(repo_root: &Path) -> Option<GitState> {
+/// The remote default branch, first that resolves: `origin/HEAD`, then
+/// `origin/main`, then `origin/master`. Never a local branch — the comparison
+/// answers a question about a pull request.
+fn resolve_base(repo_root: &Path) -> Option<BranchBase> {
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args(args)
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let name = git(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).or_else(|| {
+        ["origin/main", "origin/master"]
+            .into_iter()
+            .find(|candidate| {
+                git(&[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/remotes/{candidate}"),
+                ])
+                .is_some()
+            })
+            .map(str::to_string)
+    })?;
+    let refname = format!("refs/remotes/{name}");
+    // How stale the comparison is. FETCH_HEAD is written by every fetch, even
+    // one that brings nothing — unlike the ref file, which only moves when the
+    // base does, and which does not exist at all once refs are packed.
+    let fetched_ago = git(&["rev-parse", "--git-path", "FETCH_HEAD"])
+        .map(|p| {
+            let path = PathBuf::from(&p);
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root.join(path)
+            }
+        })
+        .and_then(|path| std::fs::metadata(path).ok()?.modified().ok())
+        .and_then(|at| SystemTime::now().duration_since(at).ok());
+    Some(BranchBase {
+        name,
+        refname,
+        fetched_ago,
+    })
+}
+
+/// Files this branch changes relative to `base`, plus every directory holding
+/// one so a collapsed row can show that the work is inside.
+fn branch_changes(repo_root: &Path, base_ref: &str) -> HashSet<PathBuf> {
+    let mut changed = HashSet::new();
+    let Ok(out) = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["diff", "--name-only", "-z", &format!("{base_ref}...HEAD")])
+        .output()
+    else {
+        return changed;
+    };
+    if !out.status.success() {
+        return changed;
+    }
+    for rel in out.stdout.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+        let rel = String::from_utf8_lossy(rel);
+        let path = repo_root.join(rel.as_ref());
+        // Every ancestor up to the repo root carries the rollup.
+        let mut cursor = path.parent();
+        while let Some(dir) = cursor {
+            // Stop at the repo root rather than marking it: every branch with
+            // any change would carry the mark, which says nothing.
+            if dir == repo_root || !changed.insert(dir.to_path_buf()) {
+                break;
+            }
+            cursor = dir.parent();
+        }
+        changed.insert(path);
+    }
+    changed
+}
+
+/// What the last branch comparison was computed from, so an unchanged pair of
+/// commits reuses it instead of re-running the diff.
+#[derive(Clone, Debug)]
+struct BranchCache {
+    repo: PathBuf,
+    head: String,
+    base_commit: String,
+    base: BranchBase,
+    changed: HashSet<PathBuf>,
+}
+
+fn run_status(repo_root: &Path, cache: &mut Option<BranchCache>) -> Option<GitState> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root)
@@ -245,7 +387,52 @@ fn run_status(repo_root: &Path) -> Option<GitState> {
     if !output.status.success() {
         return None;
     }
-    Some(parse_porcelain_v2(&output.stdout, repo_root))
+    let mut state = parse_porcelain_v2(&output.stdout, repo_root);
+    // The branch comparison is a second question, asked of the same repo: what
+    // would a merge carry (task 078)?
+    if let Some(base) = resolve_base(repo_root) {
+        let rev = |r: &str| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(repo_root)
+                .args(["rev-parse", r])
+                .output()
+                .ok()?;
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        let head = rev("HEAD");
+        let base_commit = rev(&base.refname);
+        let reusable = cache.as_ref().is_some_and(|c| {
+            c.repo == repo_root
+                && Some(&c.head) == head.as_ref()
+                && Some(&c.base_commit) == base_commit.as_ref()
+        });
+        if reusable {
+            let hit = cache.as_ref().expect("checked just above");
+            state.branch_changed = hit.changed.clone();
+            state.base = Some(BranchBase {
+                // The commits are the same; only the freshness moves on.
+                fetched_ago: base.fetched_ago,
+                ..hit.base.clone()
+            });
+        } else {
+            let changed = branch_changes(repo_root, &base.refname);
+            if let (Some(head), Some(base_commit)) = (head, base_commit) {
+                *cache = Some(BranchCache {
+                    repo: repo_root.to_path_buf(),
+                    head,
+                    base_commit,
+                    base: base.clone(),
+                    changed: changed.clone(),
+                });
+            }
+            state.branch_changed = changed;
+            state.base = Some(base);
+        }
+    }
+    Some(state)
 }
 
 #[cfg(test)]
@@ -407,7 +594,7 @@ mod tests {
         std::fs::create_dir_all(tmp.join("target/debug")).unwrap(); // ignored dir
         std::fs::write(tmp.join("target/debug/out.o"), "obj\n").unwrap();
 
-        let state = run_status(&tmp).expect("git status runs");
+        let state = run_status(&tmp, &mut None).expect("git status runs");
         assert_eq!(
             state.status_of(&tmp.join("src/main.rs")),
             Some(FileStatus::Modified)
