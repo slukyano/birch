@@ -7,6 +7,37 @@ All notable changes to birch are documented here, following
 
 ### Added
 
+- **Branch badges**: a column marking the files this branch would merge —
+  everything that differs from the remote base (`origin/HEAD`, else
+  `origin/main`, else `origin/master`). Collapsed folders roll it up, so a
+  folded tree still shows where the branch's work is, and the root row names
+  the base and how long ago you last fetched, since birch does not fetch for
+  you. Off with `--no-branch-badges`, the `branch-badges` config key, or
+  `birch ctl set branch-badges off`.
+- **Badge placement** is now yours: `--badges right|left|none|auto`, the
+  `badges` config key, and `birch ctl set badges left`. Each theme picks a
+  default — JetBrains and the Commander show none, matching what they actually
+  do — and `auto` hands the choice back to the theme. `none` is not
+  `--no-git`: names keep their status colours and folders keep their rollups,
+  and the freed width returns to filenames.
+
+### Fixed
+
+- **Search now works from a large root.** Opening the picker in a home
+  directory used to report "no matches" forever: nothing was searchable until
+  a walk of every entry finished. Results now appear in well under a second
+  and keep improving as the walk continues, and the status line distinguishes
+  "still indexing" from "nothing matched" — so "no matches" is only said when
+  it is true. On an 800,000-entry home directory, first results arrive in
+  ~300 ms instead of never, and the index rests at a fraction of its former
+  size ([ADR 0026](docs/adr/0026-the-index-is-a-tree-published-progressively.md)).
+- **Quitting while a file is open in an editor now quits.** `birch ctl quit`
+  replied "ok" and kept running, and closing the pane was ignored the same
+  way; both now exit properly, saving state and restoring the terminal, and
+  the editor is left to finish.
+
+### Added
+
 - **Configurable scroll speed**: `--scroll-lines <n>` (1–10, default 3), the `scroll-lines` config
   key, and `birch ctl set scroll-lines <n>` at runtime. Out of range is refused by the flag and by
   the socket, and clamped by the config file, which never blocks launch.

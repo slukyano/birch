@@ -103,16 +103,18 @@ pub enum BadgePlacement {
     None,
 }
 
-impl std::str::FromStr for BadgePlacement {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "right" => Ok(BadgePlacement::Right),
-            "left" => Ok(BadgePlacement::Left),
-            "none" | "off" => Ok(BadgePlacement::None),
-            other => Err(format!("badges must be right, left, or none: {other}")),
-        }
+/// Parses the `badges` setting from any of its three surfaces — the flag, the
+/// config file, and `ctl set` — so they cannot drift into three vocabularies.
+/// `auto` means "whatever the theme says", which is the absence of a setting.
+pub fn parse_badges(s: &str) -> Result<Option<BadgePlacement>, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok(None),
+        "right" => Ok(Some(BadgePlacement::Right)),
+        "left" => Ok(Some(BadgePlacement::Left)),
+        "none" => Ok(Some(BadgePlacement::None)),
+        other => Err(format!(
+            "badges must be right, left, none, or auto: {other}"
+        )),
     }
 }
 

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::settings::{BadgePlacement, Settings, ThemeId, clamp_scroll_lines};
+use crate::settings::{Settings, ThemeId, clamp_scroll_lines};
 
 /// A partial set of personal defaults parsed from the TOML config. Every field
 /// is optional — a missing key means "no opinion, use the built-in default".
@@ -28,7 +28,7 @@ pub struct Config {
     pub open_cmd: Option<String>,
     pub scroll_lines: Option<i64>,
     pub scrollbar: Option<bool>,
-    pub badges: Option<BadgePlacement>,
+    pub badges: Option<String>,
     pub branch_badges: Option<bool>,
 }
 
@@ -108,8 +108,12 @@ impl Config {
         if let Some(scrollbar) = self.scrollbar {
             s.scrollbar = scrollbar;
         }
-        if let Some(badges) = self.badges {
-            s.badges = Some(badges);
+        // Tolerant, like the rest of the config: an unrecognised word is
+        // ignored rather than blocking launch (ADR 0022).
+        if let Some(badges) = self.badges.as_deref()
+            && let Ok(parsed) = crate::settings::parse_badges(badges)
+        {
+            s.badges = parsed;
         }
         if let Some(branch_badges) = self.branch_badges {
             s.branch_badges = branch_badges;
@@ -159,7 +163,7 @@ mod tests {
         assert_eq!(config.open_cmd.as_deref(), Some("code {}"));
         assert_eq!(config.scroll_lines, Some(5));
         assert_eq!(config.scrollbar, Some(false));
-        assert_eq!(config.badges, Some(BadgePlacement::Left));
+        assert_eq!(config.badges.as_deref(), Some("left"));
         assert_eq!(config.branch_badges, Some(false));
     }
 

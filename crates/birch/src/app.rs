@@ -315,6 +315,12 @@ impl App {
             }
             AppEvent::Fs(WatchEvent::Dirty(dirs)) => self.handle_dirty(dirs),
             AppEvent::Index(IndexEvent::Index(index)) => {
+                // A walk started for a previous root keeps publishing after a
+                // re-root; adopting it would describe the wrong corpus, and
+                // claim to be complete about it.
+                if index.root() != self.root {
+                    return false;
+                }
                 let complete = index.is_complete();
                 self.index = Some(index);
                 // A growing index publishes ~100 times on a large root, and
@@ -328,7 +334,9 @@ impl App {
                         .is_none_or(|at| at.elapsed() >= INDEX_REMATCH_INTERVAL);
                 if due {
                     self.last_rematch = Some(Instant::now());
-                    self.rematch();
+                    // The corpus grew; the query did not change. New matches
+                    // become steppable, but the cursor stays where it is.
+                    self.rematch_keeping_selection();
                 }
             }
             AppEvent::Ctl(ctl) => return self.handle_ctl(terminal, events, ctl),
@@ -685,18 +693,12 @@ impl App {
         // Numeric settings are parsed before SettingValue, as Theme is: their
         // value is not on/off/toggle.
         if let SettingKey::Badges = key {
-            // `auto` hands the choice back to the theme.
-            return if value.trim().eq_ignore_ascii_case("auto") {
-                self.settings.badges = None;
-                Response::ok(None)
-            } else {
-                match value.parse::<settings::BadgePlacement>() {
-                    Ok(placement) => {
-                        self.settings.badges = Some(placement);
-                        Response::ok(None)
-                    }
-                    Err(e) => Response::err(e),
+            return match settings::parse_badges(value) {
+                Ok(placement) => {
+                    self.settings.badges = placement;
+                    Response::ok(None)
                 }
+                Err(e) => Response::err(e),
             };
         }
         if let SettingKey::ScrollLines = key {
@@ -1003,6 +1005,18 @@ impl App {
     /// therefore never moves, and narrowing a query never drags the pane
     /// backwards.
     fn rematch(&mut self) {
+        self.rematch_inner(true);
+    }
+
+    /// Recompute matches without moving the cursor. Used when the *corpus*
+    /// grew rather than the query changing: a chunk arriving from the index
+    /// walk may hold matches that sort before wherever the user has settled,
+    /// and the cursor must not travel under a reader's eyes (ADR 0026).
+    fn rematch_keeping_selection(&mut self) {
+        self.rematch_inner(false);
+    }
+
+    fn rematch_inner(&mut self, may_reveal: bool) {
         let Some(query) = self.search.as_ref().map(|s| s.query.clone()) else {
             return;
         };
@@ -1050,6 +1064,7 @@ impl App {
         // undo whatever the wheel just did, and overwriting a pending reveal
         // would swallow the keystroke that started it.
         if let Some(target) = target
+            && may_reveal
             && self.pending_reveal.is_none()
             && self.view.selection.as_deref() != Some(target.as_path())
         {
@@ -2949,6 +2964,43 @@ mod tests {
         assert!(
             line.contains("indexing"),
             "and says there may be more: {line}"
+        );
+    }
+
+    #[test]
+    fn an_arriving_chunk_leaves_a_non_matching_selection_alone() {
+        // ADR 0023 lets the pane keep its tree under a search, so the user may
+        // have arrowed onto a row that is not a match. A chunk arriving from
+        // the index walk must not yank the cursor back to a match.
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("aaa.txt", NodeKind::File),
+                ("mmm.txt", NodeKind::File),
+                ("zzz.txt", NodeKind::File),
+            ],
+        );
+        h.app.index = Some(partial_index_of(&[("aaa.txt", false)]));
+        h.app.search_push('a');
+        // Settle deliberately on a row the query does not match.
+        h.app.view.selection = Some(PathBuf::from("/r/zzz.txt"));
+
+        // A later chunk brings another match, sorting before the selection.
+        h.app.index = Some(partial_index_of(&[("aaa.txt", false), ("mmm.txt", false)]));
+        h.app.rematch_keeping_selection();
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/zzz.txt")),
+            "the cursor stayed where the user put it"
+        );
+
+        // Typing, by contrast, is the user asking to be taken somewhere.
+        h.app.rematch();
+        assert_ne!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/zzz.txt"))
         );
     }
 

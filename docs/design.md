@@ -65,7 +65,7 @@ birch ctl <verb> [...]    # control a running instance (see Control socket)
 | Theme | `birch` | `--theme <id>` |
 | Scroll lines per wheel tick | 3 (range 1–10) | `--scroll-lines <n>` |
 | Scrollbar | on (shown only when rows overflow) | `--no-scrollbar` |
-| Badge placement | the theme's choice | `--badges <right\|left\|none>` |
+| Badge placement | the theme's choice | `--badges <right\|left\|none\|auto>` |
 | Branch badges (vs the remote base) | on where a base resolves | `--no-branch-badges` |
 
 Directories always sort before files. Defaults persist in the config file

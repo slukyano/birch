@@ -250,11 +250,15 @@ impl GitWorker {
         thread::Builder::new()
             .name("git-status".into())
             .spawn(move || {
+                // The branch comparison depends only on which two commits are
+                // being compared, so it is recomputed when they move — not on
+                // every filesystem event that triggers a status refresh.
+                let mut cache: Option<BranchCache> = None;
                 while let Ok(GitCmd::Refresh { mut repo }) = commands.recv() {
                     while let Ok(GitCmd::Refresh { repo: r }) = commands.try_recv() {
                         repo = r;
                     }
-                    let state = run_status(&repo).map(Arc::new);
+                    let state = run_status(&repo, &mut cache).map(Arc::new);
                     if events.send(GitEvent::State(state)).is_err() {
                         return;
                     }
@@ -286,9 +290,10 @@ fn resolve_base(repo_root: &Path) -> Option<BranchBase> {
             .find(|candidate| git(&["rev-parse", "--verify", "--quiet", candidate]).is_some())
             .map(str::to_string)
     })?;
-    // How stale the comparison is: the ref file's mtime is when the fetch that
-    // moved it landed.
-    let fetched_ago = git(&["rev-parse", "--git-path", &format!("refs/remotes/{name}")])
+    // How stale the comparison is. FETCH_HEAD is written by every fetch, even
+    // one that brings nothing — unlike the ref file, which only moves when the
+    // base does, and which does not exist at all once refs are packed.
+    let fetched_ago = git(&["rev-parse", "--git-path", "FETCH_HEAD"])
         .map(|p| {
             let path = PathBuf::from(&p);
             if path.is_absolute() {
@@ -323,7 +328,9 @@ fn branch_changes(repo_root: &Path, base: &str) -> HashSet<PathBuf> {
         // Every ancestor up to the repo root carries the rollup.
         let mut cursor = path.parent();
         while let Some(dir) = cursor {
-            if !changed.insert(dir.to_path_buf()) || dir == repo_root {
+            // Stop at the repo root rather than marking it: every branch with
+            // any change would carry the mark, which says nothing.
+            if dir == repo_root || !changed.insert(dir.to_path_buf()) {
                 break;
             }
             cursor = dir.parent();
@@ -333,7 +340,18 @@ fn branch_changes(repo_root: &Path, base: &str) -> HashSet<PathBuf> {
     changed
 }
 
-fn run_status(repo_root: &Path) -> Option<GitState> {
+/// What the last branch comparison was computed from, so an unchanged pair of
+/// commits reuses it instead of re-running the diff.
+#[derive(Clone, Debug)]
+struct BranchCache {
+    repo: PathBuf,
+    head: String,
+    base_commit: String,
+    base: BranchBase,
+    changed: HashSet<PathBuf>,
+}
+
+fn run_status(repo_root: &Path, cache: &mut Option<BranchCache>) -> Option<GitState> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root)
@@ -356,8 +374,46 @@ fn run_status(repo_root: &Path) -> Option<GitState> {
     // The branch comparison is a second question, asked of the same repo: what
     // would a merge carry (task 078)?
     if let Some(base) = resolve_base(repo_root) {
-        state.branch_changed = branch_changes(repo_root, &base.name);
-        state.base = Some(base);
+        let rev = |r: &str| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(repo_root)
+                .args(["rev-parse", r])
+                .output()
+                .ok()?;
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        let head = rev("HEAD");
+        let base_commit = rev(&format!("refs/remotes/{}", base.name));
+        let reusable = cache.as_ref().is_some_and(|c| {
+            c.repo == repo_root
+                && Some(&c.head) == head.as_ref()
+                && Some(&c.base_commit) == base_commit.as_ref()
+        });
+        if reusable {
+            let hit = cache.as_ref().expect("checked just above");
+            state.branch_changed = hit.changed.clone();
+            state.base = Some(BranchBase {
+                // The commits are the same; only the freshness moves on.
+                fetched_ago: base.fetched_ago,
+                ..hit.base.clone()
+            });
+        } else {
+            let changed = branch_changes(repo_root, &base.name);
+            if let (Some(head), Some(base_commit)) = (head, base_commit) {
+                *cache = Some(BranchCache {
+                    repo: repo_root.to_path_buf(),
+                    head,
+                    base_commit,
+                    base: base.clone(),
+                    changed: changed.clone(),
+                });
+            }
+            state.branch_changed = changed;
+            state.base = Some(base);
+        }
     }
     Some(state)
 }
@@ -521,7 +577,7 @@ mod tests {
         std::fs::create_dir_all(tmp.join("target/debug")).unwrap(); // ignored dir
         std::fs::write(tmp.join("target/debug/out.o"), "obj\n").unwrap();
 
-        let state = run_status(&tmp).expect("git status runs");
+        let state = run_status(&tmp, &mut None).expect("git status runs");
         assert_eq!(
             state.status_of(&tmp.join("src/main.rs")),
             Some(FileStatus::Modified)

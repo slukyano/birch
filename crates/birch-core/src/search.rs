@@ -105,6 +105,14 @@ impl SearchIndex {
         self.complete
     }
 
+    /// The root this index was built for. A walk in flight when the root
+    /// changes keeps publishing; the consumer checks this before adopting a
+    /// snapshot, so a complete index for the old corpus is never mistaken for
+    /// one describing the new.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     fn node(&self, global: u32) -> Option<(&Chunk, &Node)> {
         let chunk = self.chunks.get(
             self.chunks
@@ -308,9 +316,13 @@ pub fn build_index_streaming(
         if depth == 0 || abs == root {
             continue;
         }
-        let Some(name) = abs.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
+        // Every entry must be recorded, even one whose name is not UTF-8:
+        // skipping it would leave its children pointing at the previous
+        // sibling, naming paths that do not exist.
+        let name = abs
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         // The walker does not follow links, so a symlinked directory reports
         // as a symlink here while the tree calls it a directory. Resolve it, or
         // tree ordering, the forward anchor, and the filter each disagree with
@@ -323,7 +335,7 @@ pub fn build_index_streaming(
         } else {
             last_at_depth.get(depth - 2).copied().unwrap_or(NO_PARENT)
         };
-        let idx = builder.push(parent, name, is_dir);
+        let idx = builder.push(parent, &name, is_dir);
         if last_at_depth.len() < depth {
             last_at_depth.resize(depth, NO_PARENT);
         }
@@ -494,14 +506,10 @@ impl IndexWorker {
             .name("search-index".into())
             .spawn(move || {
                 let mut last_build: Option<Instant> = None;
-                let mut pending: Option<(PathBuf, bool)> = None;
                 loop {
-                    let (mut root, mut show_hidden) = match pending.take() {
-                        Some(next) => next,
-                        None => match commands.recv() {
-                            Ok(IndexCmd::Rebuild { root, show_hidden }) => (root, show_hidden),
-                            Err(_) => return,
-                        },
+                    let (mut root, mut show_hidden) = match commands.recv() {
+                        Ok(IndexCmd::Rebuild { root, show_hidden }) => (root, show_hidden),
+                        Err(_) => return,
                     };
                     let collapse = |root: &mut PathBuf, show_hidden: &mut bool| {
                         while let Ok(IndexCmd::Rebuild {
@@ -523,28 +531,16 @@ impl IndexWorker {
                             collapse(&mut root, &mut show_hidden);
                         }
                     }
-                    // Publish as the walk grows the index (ADR 0026), and stop
-                    // early when a newer request makes this walk stale.
-                    let mut superseded = false;
+                    // Publish as the walk grows the index (ADR 0026). The walk
+                    // always runs to the end: abandoning it for a newer request
+                    // throws away every chunk already published and restarts at
+                    // zero, so under filesystem churn the index would never
+                    // reach `complete` and "no matches" could never be said.
+                    // A queued rebuild simply runs next.
                     let index = build_index_streaming(&root, show_hidden, |snapshot| {
-                        if events.send(IndexEvent::Index(Arc::new(snapshot))).is_err() {
-                            return false;
-                        }
-                        if let Ok(IndexCmd::Rebuild {
-                            root: r,
-                            show_hidden: s,
-                        }) = commands.try_recv()
-                        {
-                            pending = Some((r, s));
-                            superseded = true;
-                            return false;
-                        }
-                        true
+                        events.send(IndexEvent::Index(Arc::new(snapshot))).is_ok()
                     });
                     last_build = Some(Instant::now());
-                    if superseded {
-                        continue;
-                    }
                     if events.send(IndexEvent::Index(Arc::new(index))).is_err() {
                         return;
                     }

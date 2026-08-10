@@ -162,7 +162,7 @@ compact = true         # compact single-child folder chains
 mouse = true           # mouse support
 scroll-lines = 3       # rows per mouse-wheel tick (1-10)
 scrollbar = true       # scroll indicator on the right edge, when rows overflow
-badges = "right"       # status badge gutter: right | left | none (default: the theme's)
+badges = "right"       # status badge gutter: right | left | none | auto (auto = the theme's)
 branch-badges = true   # mark files this branch would merge, beside the status badge
 open-cmd = "nvim {}"   # open command template ({} = path)
 ```

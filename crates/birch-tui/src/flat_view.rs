@@ -301,6 +301,8 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], ro
         match child {
             Child::Missing(name) => {
                 let path = dir_path.join(&name);
+                // A file this branch deletes is still part of what it merges.
+                let deleted_in_branch = ctx.git.is_some_and(|git| git.in_branch(&path));
                 let hit = ctx.is_hit(&path);
                 let matched = ctx.matched_flag(hit);
                 let (live, pickable) = ctx.row_flags(hit, false, &path, &name);
@@ -314,7 +316,7 @@ fn push_children(ctx: &Ctx, dir_id: NodeId, depth: usize, ancestors: &[bool], ro
                     loaded: false,
                     chain: Vec::new(),
                     status: Some(FileStatus::Deleted),
-                    in_branch: false,
+                    in_branch: deleted_in_branch,
                     ignored: false,
                     missing: true,
                     live,

@@ -116,9 +116,10 @@ struct Layout {
 }
 
 /// How wide the badge band is: the working-tree column, plus the branch mark
-/// and its spacer when that axis is on.
-fn badge_width(settings: &Settings, branch_axis: bool) -> u16 {
-    if settings.branch_badges && branch_axis {
+/// and its spacer when that axis is on. `branch_axis` already folds in the
+/// setting, so this and `badge_line` cannot disagree about what is drawn.
+fn badge_width(branch_axis: bool) -> u16 {
+    if branch_axis {
         BADGE_WIDTH + BRANCH_BADGE_WIDTH
     } else {
         BADGE_WIDTH
@@ -138,19 +139,24 @@ fn layout(area: Rect, chrome: Chrome, rows: usize) -> Layout {
     } else {
         0
     };
+    // Everything but the scrollbar shares this; the bar is always the last
+    // column, so the bands are laid out inside what it leaves.
+    let inner = area.width.saturating_sub(bar_width);
     // The gutter is the badge column plus one spacer, so truncated text never
     // touches a status indicator. `None` gives the whole width back to names.
-    let badge_width = badge_width(settings, branch_axis);
+    // Both are clamped to what the pane actually has: a band that runs past the
+    // buffer is a panic, not a cosmetic problem.
     let gutter = match placement {
         BadgePlacement::None => 0,
-        _ => badge_width + 1,
+        _ => (badge_width(branch_axis) + 1).min(inner),
     };
-    let gutter = gutter.min(area.width.saturating_sub(bar_width));
-    let tree_width = area.width.saturating_sub(bar_width + gutter);
+    let badge_width = gutter.saturating_sub(1);
+    let tree_width = inner.saturating_sub(gutter);
     let (tree_x, badge_x) = match placement {
-        // Right: names, spacer, badges, then the bar outside everything.
+        // Left: gutter, then the tree. Right: tree, spacer, gutter — measured
+        // from the inner edge so it can never exceed it.
         BadgePlacement::Left => (area.x + gutter, area.x),
-        _ => (area.x, area.x + tree_width + 1),
+        _ => (area.x, area.x + inner.saturating_sub(badge_width)),
     };
     let band = |x: u16, width: u16| Rect {
         x,
@@ -160,7 +166,7 @@ fn layout(area: Rect, chrome: Chrome, rows: usize) -> Layout {
     };
     Layout {
         tree: band(tree_x, tree_width),
-        badges: (gutter > 0).then(|| band(badge_x, badge_width.min(area.width))),
+        badges: (badge_width > 0).then(|| band(badge_x, badge_width)),
         bar: (bar_width > 0).then(|| band(area.x + area.width - SCROLLBAR_WIDTH, SCROLLBAR_WIDTH)),
         viewport,
     }
@@ -182,6 +188,7 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
         return;
     }
     let geometry = layout(area, chrome, rows.len());
+    let placement = settings.badges.unwrap_or(theme.badge_placement);
     let viewport = geometry.viewport;
     let bar_width = geometry.bar.map_or(0, |b| b.width);
     let tree_area = geometry.tree;
@@ -201,7 +208,7 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
             selected_visible = Some(i as u16);
         }
         lines.push(row_line(theme, settings, row, is_selected));
-        badges.push(badge_line(theme, row, branch_axis));
+        badges.push(badge_line(theme, row, branch_axis, placement));
     }
     // A theme with an app_bg (the Commander's DOS blue) paints its whole
     // canvas; the area is filled first so the badge gutter matches, and every
@@ -374,22 +381,41 @@ fn glyph_column_spans(theme: &Theme, settings: &Settings, row: &Row) -> Vec<Span
 
 /// The right-hand git badge for one row (directory rollups always use the `●`
 /// dot; files follow the theme's `BadgeStyle`).
-fn badge_line(theme: &Theme, row: &Row, branch_axis: bool) -> Line<'static> {
-    let mut spans = Vec::new();
-    if branch_axis {
-        // The branch mark sits inward of the working-tree badge, with a space
-        // between, so the badge a user already reads keeps its column (078).
-        spans.push(Span::styled(
-            if row.in_branch {
-                theme.branch_mark
-            } else {
-                " "
-            },
-            Style::default().fg(theme.palette.branch_mark),
-        ));
-        spans.push(Span::raw(" "));
+fn badge_line(
+    theme: &Theme,
+    row: &Row,
+    branch_axis: bool,
+    placement: BadgePlacement,
+) -> Line<'static> {
+    let status = status_span(theme, row);
+    if !branch_axis {
+        return Line::from(status);
     }
-    spans.extend(status_span(theme, row));
+    // The working-tree badge is *outermost* — furthest from the name — so it
+    // keeps the column it had before this axis existed, and the branch mark is
+    // added inward of it. Which side is outermost depends on where the gutter
+    // sits (078, 064).
+    let mark = Span::styled(
+        if row.in_branch {
+            theme.branch_mark
+        } else {
+            " "
+        },
+        Style::default().fg(theme.palette.branch_mark),
+    );
+    let mut spans = Vec::new();
+    match placement {
+        BadgePlacement::Left => {
+            spans.extend(status);
+            spans.push(Span::raw(" "));
+            spans.push(mark);
+        }
+        _ => {
+            spans.push(mark);
+            spans.push(Span::raw(" "));
+            spans.extend(status);
+        }
+    }
     Line::from(spans)
 }
 
@@ -1376,6 +1402,63 @@ mod tests {
     }
 
     #[test]
+    fn the_local_badge_keeps_its_column_under_either_placement() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let th = theme();
+        let mut changed = row("app.rs", NodeKind::File, 0);
+        changed.status = Some(FileStatus::Modified);
+        changed.in_branch = true;
+        let rows = vec![changed];
+        let view = FlatView::default();
+        let (w, h) = (30u16, 3u16);
+
+        for placement in [BadgePlacement::Right, BadgePlacement::Left] {
+            let settings = Settings {
+                scrollbar: false,
+                badges: Some(placement),
+                ..Settings::default()
+            };
+            let column_of = |branch_axis: bool| {
+                let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &rows, &view, chrome(&settings, &th, branch_axis), "")
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                (0..w)
+                    .map(|x| buffer[(x, 0)].symbol().to_string())
+                    .collect::<Vec<_>>()
+            };
+            let without = column_of(false);
+            let with = column_of(true);
+            let local_without = without.iter().position(|s| s == "M").expect("badge");
+            let local_with = with.iter().position(|s| s == "M").expect("badge");
+            assert_eq!(
+                local_with, local_without,
+                "{placement:?}: the working-tree badge moved when the branch column appeared"
+            );
+            let mark = with
+                .iter()
+                .position(|s| s == th.branch_mark)
+                .expect("branch mark");
+            // Inward means "nearer the name", which is the other side under
+            // each placement.
+            match placement {
+                BadgePlacement::Left => assert!(
+                    mark > local_with,
+                    "left gutter: the mark belongs nearer the name"
+                ),
+                _ => assert!(
+                    mark < local_with,
+                    "right gutter: the mark belongs nearer the name"
+                ),
+            }
+        }
+    }
+
+    #[test]
     fn without_a_base_the_branch_column_costs_nothing() {
         let rows = [row("src", NodeKind::Dir, 0)];
         let area = Rect::new(0, 0, 40, 10);
@@ -1398,8 +1481,16 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
         let theme = theme();
+        // Rows must carry something to *paint* in the gutter: an empty badge
+        // line never indexes a cell, so a band placed outside the buffer would
+        // go unnoticed.
         let rows: Vec<Row> = (0..40)
-            .map(|i| row(&format!("f{i}"), NodeKind::File, 0))
+            .map(|i| {
+                let mut r = row(&format!("f{i}"), NodeKind::File, 0);
+                r.status = Some(FileStatus::Modified);
+                r.in_branch = true;
+                r
+            })
             .collect();
         let view = FlatView::default();
         // Every pane from one cell wide upward must draw without panicking on
