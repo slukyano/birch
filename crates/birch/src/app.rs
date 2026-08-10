@@ -175,13 +175,18 @@ enum BatchStop {
 
 /// Handles every event already queued, in order, until the channel is empty or
 /// `deadline` passes. Never blocks: only what has *already* arrived joins the
-/// batch, so an idle birch still draws one frame per event.
-fn drain_batch<F>(events: &Receiver<AppEvent>, deadline: Instant, mut handle: F) -> BatchStop
+/// batch, so an idle birch still draws one frame per event. `None` drains the
+/// queue outright — the post-handover drain must leave nothing behind.
+fn drain_batch<F>(
+    events: &Receiver<AppEvent>,
+    deadline: Option<Instant>,
+    mut handle: F,
+) -> BatchStop
 where
     F: FnMut(AppEvent) -> BatchStep,
 {
     loop {
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|at| Instant::now() >= at) {
             return BatchStop::Budget;
         }
         let Ok(event) = events.try_recv() else {
@@ -271,7 +276,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         // A hand-off in the event just handled ends the batch before it starts
         // — nothing may run behind a child that owned the tty (decision 4).
         let stopped = if batch_step(false, app.yielded_terminal) == BatchStep::Continue {
-            drain_batch(&events, Instant::now() + BATCH_BUDGET, |event| {
+            drain_batch(&events, Some(Instant::now() + BATCH_BUDGET), |event| {
                 let quit = app.handle(terminal, &events, event);
                 batch_step(quit, app.yielded_terminal)
             })
@@ -533,8 +538,8 @@ impl App {
                     // Unreachable by construction (activate picks first in
                     // picker mode), kept as a guard: never exec in a picker.
                     self.picked = Some(path);
-                } else {
-                    self.perform_open(terminal, events, &path);
+                } else if self.perform_open(terminal, events, &path) {
+                    return true;
                 }
             }
         }
@@ -543,26 +548,36 @@ impl App {
 
     /// The one open execution path — hotkeys, mouse, and the socket verb all
     /// land here (the action layer is shared by design).
+    /// Returns true when a quit arrived while the child owned the terminal —
+    /// a `ctl quit` or a signal must not be answered and then forgotten.
     fn perform_open(
         &mut self,
         terminal: &mut term::Term,
         events: &Receiver<AppEvent>,
         path: &Path,
-    ) {
+    ) -> bool {
         match self.open_cmd.mode {
-            OpenMode::Detached => self.open_detached(path),
+            OpenMode::Detached => {
+                self.open_detached(path);
+                false
+            }
             OpenMode::Terminal => {
                 self.open_in_terminal(terminal, path);
-                // Events read before the handover completed are stale:
-                // apply everything except old input.
-                while let Ok(pending) = events.try_recv() {
-                    match pending {
-                        AppEvent::Input(_) => {}
-                        other => {
-                            self.handle(terminal, events, other);
+                // Events read before the handover completed are stale: apply
+                // everything except old input. One drain helper, so this and
+                // the loop's batch cannot diverge on what "handled" means —
+                // and, as there, nothing runs behind a quit (ADR 0024).
+                let stop = drain_batch(events, None, |pending| match pending {
+                    AppEvent::Input(_) => BatchStep::Continue,
+                    other => {
+                        if self.handle(terminal, events, other) {
+                            BatchStep::Quit
+                        } else {
+                            BatchStep::Continue
                         }
                     }
-                }
+                });
+                stop == BatchStop::Quit
             }
         }
     }
@@ -583,10 +598,7 @@ impl App {
         match effect {
             CtlEffect::None => false,
             CtlEffect::Quit => true,
-            CtlEffect::Open(path) => {
-                self.perform_open(terminal, events, &path);
-                false
-            }
+            CtlEffect::Open(path) => self.perform_open(terminal, events, &path),
         }
     }
 
@@ -2476,7 +2488,7 @@ mod tests {
             tx.send(AppEvent::Shutdown).unwrap();
         }
         let mut seen = 0;
-        let stop = drain_batch(&rx, Instant::now() + Duration::from_secs(5), |_| {
+        let stop = drain_batch(&rx, Some(Instant::now() + Duration::from_secs(5)), |_| {
             seen += 1;
             BatchStep::Continue
         });
@@ -2491,7 +2503,7 @@ mod tests {
         // budget.
         let (_tx, rx) = mpsc::channel::<AppEvent>();
         let started = Instant::now();
-        let stop = drain_batch(&rx, started + Duration::from_secs(30), |_| {
+        let stop = drain_batch(&rx, Some(started + Duration::from_secs(30)), |_| {
             BatchStep::Continue
         });
         assert_eq!(stop, BatchStop::Drained);
@@ -2506,7 +2518,7 @@ mod tests {
         }
         let mut seen = 0;
         // A budget already spent draws before consuming anything more.
-        let stop = drain_batch(&rx, Instant::now(), |_| {
+        let stop = drain_batch(&rx, Some(Instant::now()), |_| {
             seen += 1;
             BatchStep::Continue
         });
@@ -2525,7 +2537,7 @@ mod tests {
                 tx.send(AppEvent::Shutdown).unwrap();
             }
             let mut seen = 0;
-            let stop = drain_batch(&rx, Instant::now() + Duration::from_secs(5), |_| {
+            let stop = drain_batch(&rx, Some(Instant::now() + Duration::from_secs(5)), |_| {
                 seen += 1;
                 step
             });
@@ -2883,6 +2895,50 @@ mod tests {
         );
         // ...and the newly arrived rows are matches it can now step to.
         assert_eq!(h.app.search.as_ref().unwrap().matches.len(), 5);
+    }
+
+    // ---- 077: a quit during a terminal handover is not swallowed ----
+
+    #[test]
+    fn the_post_handover_drain_reports_a_quit() {
+        // The drain that discards stale input after an editor exits must still
+        // carry a quit out: ctl quit and SIGHUP both arrive as events, and
+        // both were answered and then ignored.
+        let (tx, rx) = mpsc::channel();
+        tx.send(AppEvent::Input(crossterm::event::Event::FocusGained))
+            .unwrap();
+        tx.send(AppEvent::Shutdown).unwrap();
+        tx.send(AppEvent::Input(crossterm::event::Event::FocusLost))
+            .unwrap();
+
+        let mut handled = 0;
+        let stop = drain_batch(&rx, None, |pending| match pending {
+            AppEvent::Input(_) => BatchStep::Continue,
+            _ => {
+                handled += 1;
+                BatchStep::Quit
+            }
+        });
+        assert_eq!(stop, BatchStop::Quit);
+        assert_eq!(handled, 1, "the quit stopped the drain");
+    }
+
+    #[test]
+    fn the_post_handover_drain_empties_the_queue() {
+        // It has no time budget: every event queued while the child owned the
+        // tty is stale, and leaving any behind defeats the drain.
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..500 {
+            tx.send(AppEvent::Input(crossterm::event::Event::FocusGained))
+                .unwrap();
+        }
+        let mut seen = 0;
+        let stop = drain_batch(&rx, None, |_| {
+            seen += 1;
+            BatchStep::Continue
+        });
+        assert_eq!(stop, BatchStop::Drained);
+        assert_eq!(seen, 500);
     }
 }
 
