@@ -23,69 +23,89 @@ birch and from a pane in that window, and reverse-reveal through it.
 
 ## How it must be run
 
-**Never against the maintainer's own cmux instance** (`AGENTS.md`): launch a separate one with
-`open -na cmux` and target it by exporting `CMUX_SOCKET_PATH`, plus `CMUX_WORKSPACE_ID` and
-`CMUX_SURFACE_ID` from its `cmux tree --id-format both`, for every command aimed at it.
-
-## The part that may not be automatable
-
-The Dock is a beta **UI** surface, and its config seeds on first show rather than into an already
-open Dock. Whether it can be revealed from the CLI is unverified. If it cannot, the sidebar step
-needs the maintainer at the window — like [`035`](035-verify-herdr-integration.md) — and this task
-says so in its result rather than reporting a pass it did not observe.
+**Never against the maintainer's own cmux instance** (`AGENTS.md`) — always a throwaway one. The
+recipe `AGENTS.md` carried (`open -na cmux`) does not produce a second instance; what does is in
+the design below, and `AGENTS.md` is corrected as part of this task.
 
 ## Done when
 
-Each of the three behaviours is either observed and recorded, or named as unobservable with the
-reason. Anything that fails becomes a fix in this sprint or a `Draft` task with a name.
+Each of the three behaviours is observed automatically and recorded. Anything that fails becomes a
+fix in this sprint or a `Draft` task with a name.
 
 ## Design
 
-**A separate instance turned out not to be launchable.** Three attempts, recorded so nobody repeats
-them:
+**All of it is automatable.** The premise this task was filed on — that the Dock is a UI surface a
+script cannot reach — is wrong twice over: a separate cmux instance *can* be run, and the Dock is
+fully scriptable over the control socket.
 
-| Attempt | Result |
+### Running a second cmux
+
+`AGENTS.md`'s recipe (`open -na cmux`) does not work: cmux enforces one instance **per bundle
+identifier**, and a second process exits right after `appDelegate.didFinish.complete` without a
+crash report. `CMUX_TAG`, which does give a separate socket and state, is gated to DEV builds
+(*"refusing to launch untagged cmux DEV"*).
+
+What works is a **copy of the bundle carrying its own identifier**:
+
+```sh
+cp -a /Applications/cmux.app ./cmux-birchtest.app
+plutil -replace CFBundleIdentifier -string com.cmuxterm.app.birchtest \
+    cmux-birchtest.app/Contents/Info.plist
+codesign --force --deep --sign - --options runtime --entitlements ent-adhoc.plist cmux-birchtest.app
+open -na "$PWD/cmux-birchtest.app" --env CMUX_SOCKET_ENABLE=1 --env CMUX_SOCKET_MODE=allowAll \
+    --env "CMUX_SOCKET_PATH=$SOCK" --env CMUX_ALLOW_SOCKET_OVERRIDE=1 \
+    --env CMUX_DISABLE_SESSION_RESTORE=1
+```
+
+Ad-hoc signing cannot claim the team identifier or the keychain group, so those two entitlements are
+dropped and the rest kept. `open` needs an **absolute** path — a relative one is "not found".
+
+A distinct identifier isolates more than the instance check: **UserDefaults are per bundle id**, so
+the copy has its own settings and its own session, and nothing the test does can reach the
+maintainer's cmux. The Dock beta is off in a fresh instance and is enabled the same way:
+`defaults write com.cmuxterm.app.birchtest rightSidebar.beta.dock.enabled -bool true`.
+
+### Driving the Dock
+
+No `dock.json` is needed, which also side-steps the project-config **trust gate**:
+
+| Step | Command |
 |---|---|
-| `open -na cmux` | No second process. LaunchServices activates the running app. |
-| Direct exec of `cmux.app/Contents/MacOS/cmux` | A second process appears, then exits within seconds — the app self-terminates as a duplicate launch. |
-| The same with `CMUX_SOCKET_PATH` + `CMUX_ALLOW_SOCKET_OVERRIDE` + `CMUX_DISABLE_SESSION_RESTORE` | Same. The socket override never binds because the process is already gone. |
+| Create the Dock surface | `cmux new-surface --placement dock` → `[dock:global]` in `cmux tree` |
+| Run the adapter in it | `cmux send --surface <dock> "…/birch-cmux dock-run\n"` |
+| **Read birch's screen** | `cmux capture-pane --surface <dock>` |
+| Drive birch | `cmux send-key --surface <dock> down` / `enter` |
+| See where a preview landed | `cmux tree --json` → the non-terminal surface's workspace |
 
-`CMUX_TAG`, which does give a fully separate socket and state, is gated to DEV builds
-(*"refusing to launch untagged cmux DEV"*), and this is the stable app. So `AGENTS.md`'s procedure
-cannot be followed on this machine as it stands, and driving the maintainer's own instance is
-forbidden. The task splits accordingly.
+`capture-pane` on a Dock surface is what makes the tree itself observable — the root line and rows
+come back as text.
 
-### What is automatable — a stub `cmux` on `PATH`
+### The checks
 
-The adapter's own contract is fully testable without cmux: put a recording stub named `cmux`
-ahead of the real one on `PATH`, replay captured `tree --json` / `list-workspaces --json`
-fixtures, and assert the argv the adapter builds.
+Each is an assertion, not an eyeball:
 
-That pins exactly what [`079`](079-preview-opens-in-current-workspace.md) changes and what a future
-edit would silently break:
+1. **Sidebar** — after `dock-run`, `capture-pane` shows birch's root row.
+2. **Follows the workspace** — `workspace select` each way; the captured root line changes to that
+   workspace's directory.
+3. **Preview lands in the current workspace** — record `selected_workspace_ref`, press `enter` in the
+   dock birch, then assert the new `filepreview` surface's workspace **is** that one.
 
-- `preview` invokes `cmux open <file> --window <win>` — **no `--pane`**, and `--window` present,
-  since that flag is what suppresses caller-surface inheritance.
-- `dock-socket` and `dock-run` derive the *same* socket path for one window id, and a different one
-  for a different window.
-- The follow watcher issues `birch ctl … set-root <dir>` for the **selected** workspace's
-  `current_directory`, and survives a fixture that returns empty or malformed JSON without exiting.
+Also worth pinning, since it is what makes the whole thing work: the dock shell exports
+`CMUX_SURFACE_ID` for the dock surface and `CMUX_WORKSPACE_ID` set to the **window** uuid (a routing
+id cmux itself rejects), which is precisely why an `open` without `--window` lands in the dock.
 
-As a Rust integration test under `crates/birch/tests/`, it runs inside the existing `cargo test`
-gate rather than needing new CI wiring. No cmux, no UI, deterministic.
+### Already run, against the unfixed adapter
 
-### What is not automatable
+The harness was built and exercised during design, so the task starts from evidence rather than
+hope. With `AlphaWs` selected and birch live in the Dock, `enter` on `alpha-file.txt` put the
+preview in `workspace:1` — a different workspace — which `cmux open` then selected. Re-rooting
+passed in both directions. And the fix [`079`](079-preview-opens-in-current-workspace.md) proposes
+was confirmed the same way: with `BetaWs` selected, `cmux open FILE --window window:1` from a
+dock-shell environment landed in `BetaWs`.
 
-The UI half — the Dock rendering birch, previews visibly appearing in the right workspace, the tree
-re-rooting on a workspace switch. That needs the maintainer, exactly as [`035`](035-verify-herdr-integration.md)
-does for herdr, and this task delivers a **checklist** for it rather than a claimed pass:
+### Where the harness lives
 
-1. Point `dock.json` at the installed adapter, open a fresh cmux window, show the Dock — birch
-   appears, rooted at the selected workspace.
-2. Switch workspaces — the tree re-roots. Switch to one whose directory was renamed — it corrects.
-3. Open a file from the dock birch — the preview tab appears **in the workspace you are in**, and
-   in its focused pane.
-4. From a pane in that window: `birch ctl --socket "$(birch-cmux dock-socket)" reveal <file>` —
-   the dock birch reveals it.
-
-If a way to run a second instance is found later, this checklist is what it should run.
+`$CLAUDE_JOB_DIR` is disposable, so the driver script becomes a committed artifact — a `testcmux`
+helper plus the check script — with the bundle copy built on demand and never checked in. It does
+**not** join `cargo test`: it needs a GUI session and a 314 MB bundle copy, which a headless CI run
+cannot provide. It is a script the maintainer or an agent runs deliberately.

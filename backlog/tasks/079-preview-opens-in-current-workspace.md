@@ -93,6 +93,22 @@ inside the same call, atomically. Explicitness would buy nothing and reintroduce
 is that the adapter depends on a resolution order cmux documents only in code — recorded in a
 comment at the call site, and covered by [`080`](080-verify-cmux-integration-live.md).
 
+### Confirmed on a live cmux, not only in the source
+
+Both halves were observed against a throwaway instance (the harness is
+[`080`](080-verify-cmux-integration-live.md)'s design):
+
+- **The bug, end to end.** birch running in the Dock, `AlphaWs` selected, `enter` on a file — the
+  preview opened in `workspace:1`, a different workspace, which `cmux open` then *selected*, so the
+  user is moved as well as misrouted.
+- **The fix.** With `BetaWs` selected, `cmux open FILE --window window:1` issued from a dock-shell
+  environment put the preview in `BetaWs`, in its focused pane.
+
+That environment matters, and measuring it settled the last doubt: the dock shell exports
+`CMUX_SURFACE_ID` for the dock surface and `CMUX_WORKSPACE_ID` set to the **window** uuid — a dock
+routing id that `resolveWorkspace` explicitly rejects. So without `--window`, the call either lands
+in the dock or resolves no workspace at all. That is ADR 0016's "files land in the dock", measured.
+
 ### What this changes elsewhere
 
 - **[ADR 0016](../../docs/adr/0016-cmux-integrates-via-the-dock.md)** — the `preview` bullet says

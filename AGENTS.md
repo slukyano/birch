@@ -40,10 +40,12 @@ Two boundaries (`docs/design.md`, Architecture) are load-bearing; everything els
 The gates (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` — see
 `CONTRIBUTING.md`) must pass before presenting work.
 
-Live cmux testing never drives the maintainer's own cmux instance: launch a separate instance
-(`open -na cmux`) and target it by exporting `CMUX_SOCKET_PATH` (plus
-`CMUX_WORKSPACE_ID`/`CMUX_SURFACE_ID` from its `cmux tree --id-format both`) for every command
-aimed at it.
+Live cmux testing never drives the maintainer's own cmux instance. `open -na cmux` does **not**
+give you a second one — cmux allows a single instance per bundle identifier and the duplicate exits
+silently during startup. Use the throwaway instance driven by
+[`contrib/testcmux`](contrib/testcmux), which runs a re-identified, ad-hoc-signed copy of the
+bundle on its own socket and its own UserDefaults, and target it with `--socket` (or
+`CMUX_SOCKET_PATH`) on every command.
 
 ## Publishing
 

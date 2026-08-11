@@ -53,6 +53,7 @@ okf_version: "0.1"
 * [Verify the herdr integration live](tasks/035-verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
 * [A preview opens in the workspace you are in](tasks/079-preview-opens-in-current-workspace.md) - The cmux adapter targets the window's first terminal pane, usually a different workspace than the selected one.
 * [Verify the cmux integration live](tasks/080-verify-cmux-integration-live.md) - Sidebar, follow-the-workspace, and preview targeting, checked end to end against a separate cmux instance.
+* [Support the standard navigation keys](tasks/081-standard-navigation-keys.md) - PgUp/PgDn/Home/End are dead keys; bind them, deciding selection-vs-viewport paging and what they mean under a live search.
 
 # Publication
 
