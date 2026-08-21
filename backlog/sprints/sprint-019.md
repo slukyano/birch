@@ -215,6 +215,8 @@ this sprint's own runs.
   binary, so ADR 0027's `$0` handling is exercised by the `--open-cmd` round trip.
 - Counter-checked at `82635d0` (pre-`079`): 7 passed, **2 failed** — the two preview assertions,
   previews landing in `workspace:1` whatever was selected.
+- **The maintainer ran the integration by hand**, in their own cmux, and confirmed all three
+  behaviours. That is the end-to-end check the automated suite stands in for.
 - `shellcheck -s sh` clean on `contrib/birch-cmux`, `contrib/testcmux`, and the test script.
 - All three adapter shims produce byte-identical output and exit codes to their scripts.
 - The generated Homebrew formula will carry them: `cargo metadata` now declares four bin targets

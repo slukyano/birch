@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: The host adapters ship as binaries that carry their script
-status: Proposed
+status: Accepted
 sprint: sprint-019
 ---
 
