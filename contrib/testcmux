@@ -1,0 +1,91 @@
+#!/bin/sh
+# testcmux — drive a throwaway cmux, never the maintainer's (see AGENTS.md).
+#
+# cmux allows one instance per *bundle identifier*: a second copy of the shipped
+# bundle exits during startup, silently, right after
+# `appDelegate.didFinish.complete`. So this runs a copy that carries its own
+# identifier. That also gives it its own UserDefaults — its own settings, its
+# own session — so nothing here can reach a real instance.
+#
+#   testcmux build      copy /Applications/cmux.app, re-id it, ad-hoc sign it
+#   testcmux start      launch it, enable the Dock beta, wait for its socket
+#   testcmux stop       quit it
+#   testcmux sock       print its control socket path
+#   testcmux cli ARGS   run the cmux CLI against it
+#
+# $TESTCMUX_HOME holds the bundle copy and the socket; it is disposable and
+# never checked in.
+set -eu
+
+HOME_DIR="${TESTCMUX_HOME:-${TMPDIR:-/tmp}/birch-testcmux}"
+HOME_DIR="${HOME_DIR%/}"
+APP="$HOME_DIR/cmux-testcmux.app"
+SOCK="$HOME_DIR/cmux.sock"
+BUNDLE_ID="com.cmuxterm.app.birchtest"
+
+# Every command is addressed explicitly. Without this the CLI falls back to
+# $CMUX_SOCKET_PATH and then to the default socket — i.e. to the maintainer's
+# own cmux — which is the one thing this script exists to prevent.
+cli() {
+    [ -n "$SOCK" ] || { echo "testcmux: empty socket path" >&2; exit 1; }
+    case "$SOCK" in
+    "$HOME_DIR"/*) ;;
+    *) echo "testcmux: socket '$SOCK' is outside $HOME_DIR; refusing" >&2; exit 1 ;;
+    esac
+    cmux --socket "$SOCK" "$@"
+}
+
+case "${1:-}" in
+build)
+    [ -d /Applications/cmux.app ] || { echo "testcmux: /Applications/cmux.app not found" >&2; exit 1; }
+    mkdir -p "$HOME_DIR"
+    rm -rf "$APP"
+    cp -a /Applications/cmux.app "$APP"
+    plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$APP/Contents/Info.plist"
+    # Ad-hoc signing cannot claim the team identifier or its keychain group, so
+    # those two entitlements are dropped and the rest carried over.
+    cat > "$HOME_DIR/entitlements.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.automation.apple-events</key><true/>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict></plist>
+PLIST
+    codesign --force --deep --sign - --options runtime \
+        --entitlements "$HOME_DIR/entitlements.plist" "$APP" >/dev/null
+    echo "built $APP"
+    ;;
+
+start)
+    [ -d "$APP" ] || { echo "testcmux: run 'testcmux build' first" >&2; exit 1; }
+    # Per-bundle-id defaults, so this touches no real instance's settings.
+    defaults write "$BUNDLE_ID" "rightSidebar.beta.dock.enabled" -bool true
+    defaults write "$BUNDLE_ID" "rightSidebar.mode" -string dock
+    rm -f "$SOCK" "$SOCK.lock"
+    # `open` resolves only absolute paths; a relative one is "not found".
+    open -na "$APP" \
+        --env CMUX_SOCKET_ENABLE=1 --env CMUX_SOCKET_MODE=allowAll \
+        --env "CMUX_SOCKET_PATH=$SOCK" --env CMUX_ALLOW_SOCKET_OVERRIDE=1 \
+        --env CMUX_DISABLE_SESSION_RESTORE=1
+    i=0
+    while [ "$i" -lt 60 ]; do
+        if cli tree >/dev/null 2>&1; then echo "$SOCK"; exit 0; fi
+        i=$((i + 1))
+        perl -e 'select(undef, undef, undef, 0.5)'
+    done
+    echo "testcmux: socket never came up" >&2
+    exit 1
+    ;;
+
+stop)
+    osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
+    pkill -f "cmux-testcmux.app/Contents/MacOS/cmux" 2>/dev/null || true
+    ;;
+
+sock) printf '%s\n' "$SOCK" ;;
+cli) shift; cli "$@" ;;
+*) echo "usage: testcmux [build|start|stop|sock|cli ARGS...]" >&2; exit 64 ;;
+esac

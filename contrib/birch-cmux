@@ -11,18 +11,19 @@
 #                      this window's follow watcher, then become birch. $BIRCH
 #                      names the binary (default `birch`); [root] defaults to
 #                      the window's currently-selected workspace directory.
-#   preview <file>     open <file> as a new tab in the active window's main pane
-#                      (birch's --open-cmd target)
+#   preview <file>     open <file> as a new tab in the active window's currently
+#                      selected workspace (birch's --open-cmd target)
 #   dock-socket        print THIS window's dock-birch control socket path, for
 #                      reverse-reveal / scripting from a workspace pane:
 #                        birch ctl --socket "$(birch-cmux dock-socket)" reveal <file>
 #
 # Design facts about the cmux Dock (all verified, all beta):
-#   - one dock birch per window; the dock's shell has no CMUX_WORKSPACE_ID, so
-#     identity comes from `cmux current-window` (the focused window — which is
-#     this window whenever you interact with its dock);
-#   - files opened from the dockless context land in the dock unless routed to
-#     an explicit workspace pane, hence --pane on the open;
+#   - one dock birch per window; the dock's shell exports CMUX_WORKSPACE_ID set
+#     to the *window* uuid (a dock routing id cmux itself rejects), not a real
+#     workspace, so identity comes from `cmux current-window` (the focused
+#     window — which is this window whenever you interact with its dock);
+#   - files opened from the dockless context land in the dock unless the open
+#     names a target, hence --window on the open;
 #   - `workspace.selected` events drive the follow watcher, which re-roots the
 #     dock birch to the active workspace. The watcher is a background sibling of
 #     the dock birch: it dies with the window (shared pty SIGHUP) and with cmux
@@ -65,19 +66,6 @@ focused_window() { cmux current-window --id-format both 2>/dev/null | head -1; }
 # Socket path keyed on a window UUID. cksum keeps it under the ~104-byte limit.
 socket_for() {
     printf '%s/birch-dock-%s.sock' "$state_dir" "$(printf '%s' "$1" | cksum | awk '{ print $1 }')"
-}
-
-# The first terminal pane in a window — where birch opens preview tabs. Both the
-# pane ref and the `[terminal]` type token are anchored to their node columns
-# (`surface surface:N <uuid> [terminal]`), so a surface title containing a
-# ref- or type-shaped word can't be mistaken for the real thing.
-main_pane() {
-    cmux tree --window "$1" --id-format both 2>/dev/null | awk '
-        { for (i = 1; i < NF; i++) {
-              if ($i == "pane" && $(i + 1) ~ /^pane:[0-9]+$/) p = $(i + 1)
-              if ($i == "surface" && $(i + 1) ~ /^surface:[0-9]+$/ \
-                  && $(i + 3) == "[terminal]" && p != "") { print p; exit }
-          } }'
 }
 
 # The current directory of a window's selected workspace (no jq dependency).
@@ -138,9 +126,16 @@ preview)
     [ $# -eq 2 ] || { echo "usage: birch-cmux preview <file>" >&2; exit 64; }
     win="$(focused_window)"
     [ -n "$win" ] || exit 0
-    pane="$(main_pane "$win")"
-    [ -n "$pane" ] || exit 0
-    cmux open "$2" --pane "$pane" --window "$win" >/dev/null 2>&1 || true
+    # `--window` and nothing else, deliberately. cmux then resolves the target
+    # itself, at open time and on its main actor: the window's *selected*
+    # workspace, and that workspace's focused pane. Naming a workspace here
+    # instead would be racy — whatever we read is stale by the time `open` runs.
+    #
+    # The flag is also what keeps the file out of the dock. A dock shell exports
+    # CMUX_SURFACE_ID for the dock surface and CMUX_WORKSPACE_ID set to the
+    # *window* uuid (a routing id cmux rejects), and `cmux open` inherits both
+    # only when no --window/--workspace/--pane is given.
+    cmux open "$2" --window "$win" >/dev/null 2>&1 || true
     ;;
 
 dock-socket)

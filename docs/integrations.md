@@ -82,7 +82,7 @@ already-open Dock). birch appears with previews and a tree that tracks your work
 | Verb | Called by | When |
 |------|-----------|------|
 | `dock-run [root]` | cmux, via `dock.json` | seeds the dock birch: resolve the window, start its follow watcher, `exec` birch |
-| `preview <file>` | birch, as `--open-cmd` | on file open — opens the file as a tab in the window's main pane |
+| `preview <file>` | birch, as `--open-cmd` | on file open — opens the file as a tab in the window's **selected workspace** |
 | `dock-socket` | you / an editor / an agent | to address this window's birch (reverse-reveal, scripting) |
 
 **4. Reverse-reveal** — a hook computes the window's socket and calls `reveal`:

@@ -33,6 +33,13 @@ All notable changes to birch are documented here, following
 
 ### Fixed
 
+- **cmux: a preview opens in the workspace you are in.** The Dock adapter aimed
+  at the window's "main pane", which it worked out as the *first* terminal pane
+  in the window — so with several workspaces open, files opened in whichever one
+  happened to come first, and cmux then switched you to it. `birch-cmux preview`
+  now names only the window and lets cmux resolve the rest, which it does at open
+  time: the selected workspace, and that workspace's focused pane.
+
 - **Search now works from a large root.** Opening the picker in a home
   directory used to report "no matches" forever: nothing was searchable until
   a walk of every entry finished. Results now appear in well under a second

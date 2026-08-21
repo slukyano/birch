@@ -189,8 +189,8 @@ emacsclient, VS Code) are in [`docs/integrations.md`](docs/integrations.md).
 ### cmux
 
 [`contrib/birch-cmux`](contrib/birch-cmux) — integrates via cmux's right-sidebar **Dock**: one
-birch per window, file previews open as tabs in the main pane, and the tree re-roots as you switch
-workspaces ([ADR 0016](docs/adr/0016-cmux-integrates-via-the-dock.md)).
+birch per window, file previews open as tabs in the workspace you are in, and the tree re-roots as
+you switch workspaces ([ADR 0016](docs/adr/0016-cmux-integrates-via-the-dock.md)).
 
 ### tmux
 
