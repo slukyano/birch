@@ -34,6 +34,12 @@ the host keys things (the reference adapters use one socket per tmux session / p
 
 ## Reference adapters
 
+Every install puts the three adapters on `PATH` alongside `birch`, so they are callable by
+bare name. The scripts themselves are the source of truth and ship beside the binary —
+`$(brew --prefix)/share/birch/` for a Homebrew install — to be read, copied, and adapted;
+each `birch-*` binary simply carries the script of the same name
+([ADR 0027](adr/0027-adapters-ship-as-binaries.md)).
+
 - [`contrib/birch-tmux`](../contrib/birch-tmux) — `open`/`toggle`/`socket` subcommands
   over `split-window`, `send-keys`, and `kill-pane`. Suggested binding:
   `bind-key b run-shell "birch-tmux toggle #{pane_current_path}"`.
@@ -67,8 +73,7 @@ roots at the active workspace and follows workspace switches from there:
     {
       "id": "birch",
       "title": "birch",
-      "command": "/abs/path/to/birch-cmux dock-run",
-      "env": { "BIRCH": "/abs/path/to/birch" }
+      "command": "birch-cmux dock-run"
     }
   ]
 }
@@ -91,7 +96,8 @@ already-open Dock). birch appears with previews and a tree that tracks your work
 birch ctl --socket "$(birch-cmux dock-socket)" reveal <file>
 ```
 
-One dock birch per window; its socket is keyed on the window id, so `dock-socket`
+`BIRCH` is only needed to point at a birch that is not the one on `PATH`. One dock birch
+per window; its socket is keyed on the window id, so `dock-socket`
 resolves the same path from the dock birch and from any pane in that window. A
 background watcher re-roots the tree on each workspace switch and dies with the window
 or with cmux — nothing to start at login, nothing to clean up. Requires `python3` (for

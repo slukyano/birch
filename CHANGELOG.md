@@ -7,6 +7,15 @@ All notable changes to birch are documented here, following
 
 ### Added
 
+- **The host adapters are on `PATH`.** `birch-cmux`, `birch-tmux`, and
+  `birch-herdr` now install alongside `birch` through every channel — Homebrew,
+  the shell installer, and `cargo install`, which shipped none of them before.
+  So a cmux `dock.json` reads `birch-cmux dock-run` instead of an absolute path
+  into a particular install, and the documented
+  `bind-key b run-shell "birch-tmux toggle …"` works off a fresh install. The
+  scripts are still the source of truth and still ship beside the binary — in
+  `share/birch/` for Homebrew — to read, copy, and adapt.
+
 - **Branch badges**: a column marking the files this branch would merge —
   everything that differs from the remote base (`origin/HEAD`, else
   `origin/main`, else `origin/master`). Collapsed folders roll it up, so a

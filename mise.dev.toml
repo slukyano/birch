@@ -2,5 +2,10 @@
 # mise.toml): the debug build and the contrib adapters go on PATH so `birch`,
 # `birch-ctl`, `birch-cmux`, … run with no prefixes. Deliberately not in
 # mise.toml — everywhere else, a globally installed stock birch wins.
+#
+# `contrib` comes first on purpose. Since ADR 0027 the build also produces
+# `birch-cmux` and friends as binaries carrying the same scripts, so both are on
+# PATH here; preferring the scripts means an adapter edit takes effect without a
+# rebuild. Run the one in `target/debug` to exercise what an install ships.
 [env]
 _.path = ["{{config_root}}/contrib", "{{config_root}}/target/debug"]

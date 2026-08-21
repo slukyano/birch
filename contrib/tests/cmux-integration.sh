@@ -17,10 +17,16 @@ here=$(cd "$(dirname "$0")" && pwd)
 contrib=$(dirname "$here")
 repo=$(dirname "$contrib")
 testcmux="$contrib/testcmux"
-adapter="$contrib/birch-cmux"
 birch="${1:-$repo/target/debug/birch}"
 
 [ -x "$birch" ] || { echo "no birch at $birch (cargo build first)" >&2; exit 1; }
+
+# Prefer the built `birch-cmux` binary — that is what an install puts on PATH,
+# and running it also proves the shim hands the script a usable `$0`, since
+# `dock-run` bakes `$0` into birch's --open-cmd and `preview` arrives through it.
+adapter="$(dirname "$birch")/birch-cmux"
+[ -x "$adapter" ] || adapter="$contrib/birch-cmux"
+echo "adapter: $adapter"
 
 work="${TESTCMUX_HOME:-${TMPDIR:-/tmp}/birch-testcmux}/work"
 rm -rf "$work"; mkdir -p "$work/ws-alpha" "$work/ws-beta"
