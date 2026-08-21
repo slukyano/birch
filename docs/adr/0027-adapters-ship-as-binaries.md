@@ -59,7 +59,9 @@ documenting the path (leaving the bare-name bindings wrong).
 - **`include_str!` reaches outside the package directory**, which `cargo package` would not carry.
   `birch` is `publish = false`, and cargo-dist builds from the workspace checkout, so nothing in the
   release path depends on packaging the crate.
-- **Three more binaries in the archive** (~1 MB), and the `birch` package now declares four.
+- **Three more binaries in the archive** (~1 MB), and the `birch` package now declares four —
+  which is what carries them into the formula: cargo-dist's `homebrew.rb.j2` emits `bin.install`
+  over every executable in the archive fragment, and it reads that list from cargo metadata.
 - **No upstream dependency.** Nothing here needs cargo-dist to grow a feature, and nothing has to be
   redone if it does.
 - birch's adapter promise is unchanged — the contract is still `--socket`, `--open-cmd`,

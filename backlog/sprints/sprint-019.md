@@ -183,6 +183,9 @@ birch's adapter contract are untouched, and the scripts still ship at `share/bir
 - Counter-checked at `82635d0` (pre-`079`): 7 passed, **2 failed** — the two preview assertions,
   previews landing in `workspace:1` whatever was selected.
 - All three adapter shims produce byte-identical output and exit codes to their scripts.
+- The generated Homebrew formula will carry them: `cargo metadata` now declares four bin targets
+  for the `birch` package, and cargo-dist's `homebrew.rb.j2` emits `bin.install` over every
+  executable in the archive fragment. Not run end to end — that needs a real release.
 
 # Session log
 
