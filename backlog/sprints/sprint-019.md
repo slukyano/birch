@@ -182,6 +182,7 @@ birch's adapter contract are untouched, and the scripts still ship at `share/bir
   binary, so ADR 0027's `$0` handling is exercised by the `--open-cmd` round trip.
 - Counter-checked at `82635d0` (pre-`079`): 7 passed, **2 failed** — the two preview assertions,
   previews landing in `workspace:1` whatever was selected.
+- `shellcheck -s sh` clean on `contrib/birch-cmux`, `contrib/testcmux`, and the test script.
 - All three adapter shims produce byte-identical output and exit codes to their scripts.
 - The generated Homebrew formula will carry them: `cargo metadata` now declares four bin targets
   for the `birch` package, and cargo-dist's `homebrew.rb.j2` emits `bin.install` over every
