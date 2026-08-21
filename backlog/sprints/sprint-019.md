@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: The cmux integration, finished
-status: Implementing
+status: Done
 branch: sprint/019
 tasks:
 - 079-preview-opens-in-current-workspace
@@ -84,10 +84,115 @@ gap is already reproduced and recorded in the task.
 
 # Checklist
 
-- [ ] 079-preview-opens-in-current-workspace
-- [ ] 051-install-adapters-on-path
-- [ ] 080-verify-cmux-integration-live
+- [x] 079-preview-opens-in-current-workspace
+- [x] 051-install-adapters-on-path
+- [x] 080-verify-cmux-integration-live
 
 # Open questions
 
 _(none yet)_
+
+# Sprint summary
+
+The integration now does the three things it promised, and a script proves it.
+
+**`079` turned out to be a deletion.** The adapter computed a "main pane" — the first terminal pane
+in the window — because it predated `cmux open`'s ability to resolve a target itself. Reading cmux's
+source settled the design: given only `--window`, cmux picks the window's *selected* workspace and
+that workspace's *focused* pane, on its main actor, at open time. Passing an explicit `--workspace`
+would have been strictly worse, since any id the adapter reads is stale by the time `open` runs. The
+explicit `--pane` [ADR 0016](../../docs/adr/0016-cmux-integrates-via-the-dock.md) prescribed turned
+out to be a workaround for something `--window` already handles: it is the flag that stops
+`cmux open` inheriting the caller's surface, which is what dragged files into the dock.
+
+**The premise of `080` was wrong, and that was the sprint's real find.** It was scoped as
+"probably needs the maintainer", the way `035` does for herdr. Both halves of that gave way:
+
+- **A second cmux can be run.** The instance check keys on the *bundle identifier*, so a copy that
+  carries its own identifier launches alongside the real one — and inherits none of its
+  UserDefaults, which means its own settings and its own session. `AGENTS.md`'s `open -na cmux`
+  recipe never worked and has been corrected.
+- **The Dock is scriptable.** `new-surface --placement dock` creates the control, `send` runs the
+  adapter in it, and `capture-pane` reads birch's rendered tree back as text. Nothing needs a
+  `dock.json`, which also side-steps the project-config trust gate.
+
+So the sprint ends with nine assertions rather than a checklist, and they discriminate: run against
+the adapter as it stood before `079`, exactly the two preview checks fail.
+
+**`051` had no clean answer, only a least-bad one.** cargo-dist installs declared binaries to `bin`
+and sweeps everything else into `pkgshare`, and offers no formula template or `post_install` to
+change that. The adapters reach `bin` only if cargo-dist believes they are binaries — so now they
+are, each a three-line bin target carrying its script via `include_str!`
+([ADR 0027](../../docs/adr/0027-adapters-ship-as-binaries.md)). The scripts still ship as scripts
+beside them, so nothing about the contrib-as-example story changes.
+
+# Task ledger
+
+| Task | Weight | What changed |
+|---|---|---|
+| [`079-preview-opens-in-current-workspace`](../archive/079-preview-opens-in-current-workspace.md) | mid | A preview from the dock birch opens in the workspace you are in, in its focused pane. Previously it opened in the window's first terminal pane — a different workspace — and cmux then switched you to it. Delivered as designed. |
+| [`051-install-adapters-on-path`](../archive/051-install-adapters-on-path.md) | mid | `birch-cmux`, `birch-tmux`, `birch-herdr` are on `PATH` from every channel, so `dock.json` reads `birch-cmux dock-run` and the documented tmux binding works. `cargo install` ships them for the first time. Shape **A** of four, chosen by the maintainer. |
+| [`080-verify-cmux-integration-live`](../archive/080-verify-cmux-integration-live.md) | mid | A committed harness that drives a throwaway cmux and asserts all three promises plus `dock-socket` and reverse-reveal. Scoped expecting a manual checklist; delivered fully automatic. |
+
+# Public-surface delta
+
+| Surface | Addition |
+|---|---|
+| Installed binaries | `birch-cmux`, `birch-tmux`, `birch-herdr` alongside `birch` |
+| Docs | `dock.json` uses bare `birch-cmux dock-run`; `BIRCH` is now only an override |
+
+No flags, config keys, or socket messages added. No breaking changes: the adapters' verbs and
+birch's adapter contract are untouched, and the scripts still ship at `share/birch/`.
+
+# Architectural decisions
+
+- **[ADR 0016](../../docs/adr/0016-cmux-integrates-via-the-dock.md)** — amended. The `preview`
+  bullet's "window's main pane (routed with an explicit `--pane`)" was wrong in both halves; the
+  decision to integrate via the Dock is unchanged.
+- **[ADR 0027](../../docs/adr/0027-adapters-ship-as-binaries.md)** — the adapters ship as binaries
+  that carry their script, because that is the only way cargo-dist puts them on `PATH`.
+
+# Bugs found & fixed
+
+- **The one this sprint existed for**: previews opened in the wrong workspace, and moved you there.
+- **Two harness bugs**, found by the harness disagreeing with itself: there is no CLI verb that
+  closes a preview surface, so cleanup silently did nothing and a stale surface was read as the new
+  one; and `down`+`enter` only means "open that file" when the workspace has a single row —
+  with a folder sorted first, `enter` expanded it.
+- **`AGENTS.md`'s cmux testing recipe** did not work and would have silently sent any future agent
+  at the maintainer's own instance.
+
+# Remaining limitations & highlights
+
+- **The harness is not in `cargo test`** and not in CI: it needs a GUI session and a 314 MB copy of
+  the cmux bundle. It is run deliberately — `contrib/tests/cmux-integration.sh`.
+- **The adapter depends on a resolution order cmux documents only in code.** If cmux changed what an
+  `open` with only `--window` resolves to, previews would move silently. The harness is the guard,
+  and the reasoning is recorded at the call site.
+- **`contrib/` is now a build input of `crates/birch`**: editing an adapter needs a rebuild before
+  the installed binary changes. The scripts stay directly runnable, so the two can be compared.
+- **The Dock beta remains a beta.** Everything here rides observed behaviour of an unreleased
+  surface.
+
+# Verification
+
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` — green;
+  **230 tests**.
+- `contrib/tests/cmux-integration.sh` — **9 passed, 0 failed**, against the built `birch-cmux`
+  binary, so ADR 0027's `$0` handling is exercised by the `--open-cmd` round trip.
+- Counter-checked at `82635d0` (pre-`079`): 7 passed, **2 failed** — the two preview assertions,
+  previews landing in `workspace:1` whatever was selected.
+- All three adapter shims produce byte-identical output and exit codes to their scripts.
+
+# Session log
+
+- Scoped and cut: `079`, `051`, `080`. Branch `sprint/019` cut from `main`.
+- Design: `079` read out of cmux's Swift sources rather than guessed; `051` presented as four shapes
+  with cargo-dist's limits established, maintainer chose **A**; `080` initially designed around a
+  manual checklist, **rejected by the maintainer**, then redesigned once a throwaway instance and a
+  scriptable Dock were found. ADR 0016 amended, ADR 0027 proposed.
+- Implementation: `079` (the `--pane` lookup deleted), `051` (three bin targets carrying their
+  scripts), `080` (`contrib/testcmux` + `contrib/tests/cmux-integration.sh`, nine assertions).
+- **Incident**: with `CMUX_SOCKET_PATH` empty the cmux CLI falls back to the default socket, and two
+  stray workspaces were created in the maintainer's own instance. Both removed immediately;
+  `testcmux` now refuses any socket outside its own directory.

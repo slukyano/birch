@@ -2,7 +2,7 @@
 type: Task
 title: Install the contrib adapters on PATH
 description: brew install puts the adapters in share/birch/, not PATH; make birch-tmux / birch-herdr / birch-cmux callable by bare name.
-status: Designed
+status: Done
 priority: medium
 ---
 

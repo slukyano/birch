@@ -2,13 +2,13 @@
 type: Task
 title: Verify the cmux integration live
 description: Drive a separate cmux instance and confirm the three things the integration promises — sidebar, follow, preview — actually happen.
-status: Designed
+status: Done
 priority: medium
 ---
 
 The cmux integration was built across
-[`018`](../archive/018-add-cmux-integration.md), [`021`](../archive/021-refine-cmux-adapter.md) and
-[`024`](../archive/024-adopt-cmux-dock-integration.md), and each was verified as it landed. What has
+[`018`](018-add-cmux-integration.md), [`021`](021-refine-cmux-adapter.md) and
+[`024`](024-adopt-cmux-dock-integration.md), and each was verified as it landed. What has
 never been checked is the whole thing at once, from an *installed* setup, against the three
 behaviours the maintainer actually wants:
 
@@ -109,3 +109,40 @@ dock-shell environment landed in `BetaWs`.
 helper plus the check script — with the bundle copy built on demand and never checked in. It does
 **not** join `cargo test`: it needs a GUI session and a 314 MB bundle copy, which a headless CI run
 cannot provide. It is a script the maintainer or an agent runs deliberately.
+
+## Result
+
+Nine assertions, all passing, in [`contrib/tests/cmux-integration.sh`](../../contrib/tests/cmux-integration.sh):
+
+| | Check |
+|---|---|
+| 1 | birch runs in the Dock, rooted at the selected workspace |
+| 2 | selecting `BetaWs` re-roots the tree |
+| 3 | selecting `AlphaWs` re-roots it back |
+| 4–5 | a preview from the dock birch opens in the selected workspace — checked from **both** workspaces |
+| 6 | `dock-socket` names an existing socket |
+| 7 | `dock-socket` addresses the *running* dock birch (`birch ctl … get-path` answers on it) |
+| 8 | a nested file starts hidden |
+| 9 | `reveal` through `dock-socket` shows it |
+
+The suite runs against the built `birch-cmux` **binary** rather than the script, so it also
+exercises [ADR 0027](../../docs/adr/0027-adapters-ship-as-binaries.md)'s `$0`: `dock-run` bakes it
+into birch's `--open-cmd`, and `preview` only arrives if it is a path that invokes the adapter again.
+
+**It discriminates.** Counter-checked against the adapter as it stood before
+[`079`](079-preview-opens-in-current-workspace.md) (`82635d0`): exactly the two preview assertions
+fail — previews land in `workspace:1` whatever is selected — and the other seven pass.
+
+Two harness bugs were found and fixed while writing it, both worth remembering:
+
+- **Cleanup by closing preview surfaces does not work** — there is no CLI verb that closes one
+  (`cmux close` is not a command). The check now diffs the set of preview surfaces across the open
+  and looks at what is *new*, which is more direct anyway.
+- **`down` + `enter` is only "open that file" if the workspace has one row.** With a folder sorted
+  first, `enter` expanded it and nothing opened. The reveal check's folder is therefore created
+  after the preview rounds.
+
+And one real hazard, hit for real: with `CMUX_SOCKET_PATH` set to an empty string the CLI falls back
+to the default socket — i.e. to the maintainer's own cmux. Two stray workspaces were created there
+and immediately removed. `testcmux` now passes `--socket` explicitly on every call and refuses any
+path outside its own working directory.

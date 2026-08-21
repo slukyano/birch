@@ -26,7 +26,7 @@ okf_version: "0.1"
 * [Sprint 016 — Navigation & search feel](sprints/sprint-016.md) - Done.
 * [Sprint 017 — Pointer feel](sprints/sprint-017.md) - Done.
 * [Sprint 018 — Branch state, and critical fixes](sprints/sprint-018.md) - Done.
-* [Sprint 019 — The cmux integration, finished](sprints/sprint-019.md) - Scoped.
+* [Sprint 019 — The cmux integration, finished](sprints/sprint-019.md) - Done.
 
 # Tasks
 
@@ -51,8 +51,6 @@ okf_version: "0.1"
 * [Add the Project View source](tasks/033-add-project-view-source.md) - A curated/virtual tree source, reusing the source-as-delta-stream interface.
 * [Add "Open with…" to the context menu](tasks/034-add-open-with.md) - Choose an alternative open command for the selected node.
 * [Verify the herdr integration live](tasks/035-verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
-* [A preview opens in the workspace you are in](tasks/079-preview-opens-in-current-workspace.md) - The cmux adapter targets the window's first terminal pane, usually a different workspace than the selected one.
-* [Verify the cmux integration live](tasks/080-verify-cmux-integration-live.md) - Sidebar, follow-the-workspace, and preview targeting, checked end to end against a separate cmux instance.
 * [Support the standard navigation keys](tasks/081-standard-navigation-keys.md) - PgUp/PgDn/Home/End are dead keys; bind them, deciding selection-vs-viewport paging and what they mean under a live search.
 
 # Publication
@@ -60,7 +58,6 @@ okf_version: "0.1"
 Pre-publication work — repo hygiene, distribution, and process docs. Not product features,
 so outside the `docs/design.md` scope fence.
 
-* [Install the contrib adapters on PATH](tasks/051-install-adapters-on-path.md) - brew install puts them in share/birch/, not PATH; make them callable by bare name (or document the path).
 * [Add a flag to disable state persistence](tasks/053-add-state-persistence-toggle.md) - Turn off remembering/restoring expansion/selection/scroll per root.
 
 # Done
@@ -123,5 +120,8 @@ so outside the `docs/design.md` scope fence.
 * [A quit arriving during a terminal handover is swallowed](archive/077-quit-swallowed-during-terminal-handover.md) - Fixed: the quit is carried out of the post-handover drain and exits through the normal path.
 * [Make git badge placement configurable](archive/064-configurable-badge-placement.md) - Right, left, or none — per theme, and overridable by flag, config, and ctl set.
 * [Add in/out badges for branch changes](archive/078-add-branch-diff-badges.md) - One column marking what this branch would merge, vs the remote base.
+* [A preview opens in the workspace you are in](archive/079-preview-opens-in-current-workspace.md) - Previews land in the selected workspace; `cmux open --window` replaces the hand-rolled main-pane lookup.
+* [Install the contrib adapters on PATH](archive/051-install-adapters-on-path.md) - Adapters ship as binaries carrying their script (ADR 0027), so bare names work on every channel.
+* [Verify the cmux integration live](archive/080-verify-cmux-integration-live.md) - Nine assertions against a throwaway cmux; counter-checked to fail on the pre-fix adapter.
 
 # Dropped
