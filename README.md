@@ -44,7 +44,7 @@ Type anything for a fuzzy search. `Esc` or `Ctrl-C` quit.
 brew install slukyano/tap/birch
 ```
 
-**cargo** (needs a Rust toolchain) — installs the `birch` binary only, not the `contrib/` adapters:
+**cargo** (needs a Rust toolchain):
 
 ```sh
 cargo install --git https://github.com/slukyano/birch birch
@@ -57,8 +57,9 @@ cargo build              # or: cargo run -p birch
 ```
 
 A terminal with a Nerd Font gives the icons; `--no-icons` works everywhere. Git statuses need `git`
-on PATH and degrade to a plain tree without it. Installed via Homebrew, the contrib adapters land in
-`$(brew --prefix)/share/birch/` (not on PATH).
+on PATH and degrade to a plain tree without it. Every install also puts the host adapters —
+`birch-cmux`, `birch-tmux`, `birch-herdr` — on PATH beside `birch`
+([ADR 0027](docs/adr/0027-adapters-ship-as-binaries.md)).
 
 **Set a `Mono` Nerd Font as the terminal's primary font** — `JetBrainsMono NFM`, `Hack Nerd Font
 Mono`, and so on. It is not enough for *some* installed font to have the icons: when the primary

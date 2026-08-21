@@ -13,8 +13,10 @@ installers = ["shell", "homebrew"]
 tap = "slukyano/homebrew-tap"
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
-# Extra static files to include in each App (path relative to this file's dir)
-include = ["contrib/birch-cmux", "contrib/birch-tmux", "contrib/birch-herdr"]
+# No `include`: since ADR 0027 the adapters ship as binaries of the `birch`
+# package, and `include` places files in the archive root under their basename —
+# exactly where those binaries go. Shipping `contrib/birch-cmux` as well would
+# collide with the `birch-cmux` executable for the same path.
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
 # Which actions to run on pull requests

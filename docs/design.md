@@ -137,7 +137,7 @@ Reveal Root Here
 
 A custom template hands the terminal over and waits (terminal editors) unless `--open-detached` marks it detached from the tty — the mode adapter open-cmds need, since they are short scripts driving the host's CLI, not tty programs.
 
-Examples: `nvim {}`, `code -r {}`, or a host adapter's open primitive (herdr types into the main pane; cmux renders previews in a dedicated pane). The template grows a `{line}` placeholder when content search lands (the feature that produces line numbers); until then the contract is `{}`-only.
+Examples: `nvim {}`, `code -r {}`, or a host adapter's open primitive (herdr types into the main pane; cmux opens previews as a tab in the current workspace). The template grows a `{line}` placeholder when content search lands (the feature that produces line numbers); until then the contract is `{}`-only.
 
 ## Search
 
@@ -287,7 +287,7 @@ An adapter's job (~a screen of code):
 3. Wire reverse-reveal: host's file-focus hook → `birch ctl --socket <path> reveal <file>` — the tree follows your editing, IDE-style
 4. Optionally: main-pane bindings for `birch ctl open` / `get-path`
 
-**Adapters live with the host, not in the birch repo.** The host knows its own pane, keybinding, and hook APIs; birch stays free of N host integrations (same instinct as "no plugins"). The birch repo ships one *reference* adapter as documentation of the pattern, plus plain recipes for hosts without adapter hooks:
+**Adapters live with the host, not in the birch repo.** The host knows its own pane, keybinding, and hook APIs; birch stays free of N host integrations (same instinct as "no plugins"). The birch repo ships three *reference* adapters as documentation of the pattern — installed on `PATH` beside `birch` since [ADR 0027](adr/0027-adapters-ship-as-binaries.md), because a binding that cannot be named is not usable documentation — plus plain recipes for hosts without adapter hooks:
 
 - **tmux**: pane spawn + `send-keys` open-cmd + toggle binding (recipe, not adapter — tmux has no hook surface worth wrapping).
 - **cmux**: integrates via cmux's native right-sidebar **Dock** rather than a workspace split — cmux owns the lifecycle from `dock.json`; the adapter supplies a per-window socket, preview-as-tab, and a workspace-follow watcher (ADR 0016, rides the Dock beta).

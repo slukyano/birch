@@ -14,14 +14,22 @@
 pub fn run(script: &str) -> ! {
     use std::os::unix::process::CommandExt;
 
-    // `sh -c SCRIPT NAME ARGS...` sets `$0` to NAME. It has to be this
-    // executable's own path: the adapters bake `$0` into birch's `--open-cmd`
-    // and re-exec themselves through it, so the script's own name would send
-    // those callbacks nowhere.
-    let argv0 = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.into_os_string().into_string().ok())
-        .unwrap_or_else(|| std::env::args().next().unwrap_or_default());
+    // `sh -c SCRIPT NAME ARGS...` sets `$0` to NAME. The adapters bake `$0` into
+    // birch's `--open-cmd` and re-exec themselves through it, so it has to be
+    // something that invokes this adapter again.
+    //
+    // Our own argv[0] is the right answer, and better than `current_exe()`: the
+    // scripts already resolve a bare name through `command -v`, which lands on
+    // the stable `…/bin/birch-cmux`, while `current_exe()` resolves symlinks and
+    // would pin the callback to a versioned path — `…/Cellar/birch/0.2.0/bin/…`
+    // for a Homebrew install, which `brew cleanup` deletes out from under a
+    // still-running dock birch. `current_exe()` is only the fallback for an
+    // argv[0] that is missing or empty.
+    let argv0 = std::env::args_os()
+        .next()
+        .filter(|a| !a.is_empty())
+        .or_else(|| std::env::current_exe().ok().map(Into::into))
+        .unwrap_or_default();
 
     // `exec`, not spawn-and-wait: the adapters rely on being the process the
     // host signals — a dock control dies with its pty's SIGHUP — and on their

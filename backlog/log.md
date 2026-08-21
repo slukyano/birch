@@ -247,3 +247,37 @@
   killed birch, and the guard test written for that exact case missed it because its rows painted
   nothing in the gutter.
 
+
+## 2026-08-21 (sprint 019)
+
+* **The cmux integration does the three things it promised.** birch sits in the Dock, follows the
+  selected workspace, and — the one that was broken — opens previews *in the workspace you are in*.
+  It had aimed at the window's "main pane", which the adapter computed as the first terminal pane in
+  the window; with several workspaces open that is whichever comes first, and `cmux open` then
+  switched you to it. The fix was a deletion: pass only `--window` and let cmux resolve the
+  selected workspace and its focused pane itself, at open time.
+* **The `--pane` in [ADR 0016](../docs/adr/0016-cmux-integrates-via-the-dock.md) was a workaround
+  for something `--window` already does** — suppressing inheritance of the caller's surface, which
+  is what dragged files into the dock. A dock shell exports `CMUX_SURFACE_ID` for the dock surface
+  and `CMUX_WORKSPACE_ID` set to the *window* uuid, a routing id cmux itself rejects. ADR amended.
+* **The task that was scoped as "probably needs the maintainer" turned out fully automatable, and
+  that was the sprint's real find.** Both halves of the premise gave way: cmux's single-instance
+  check keys on the *bundle identifier*, so a re-identified, ad-hoc-signed copy runs alongside the
+  real one with its own UserDefaults; and the Dock is scriptable end to end —
+  `new-surface --placement dock`, `send`, and `capture-pane`, which reads birch's rendered tree back
+  as text. `AGENTS.md`'s `open -na cmux` recipe never worked and was corrected.
+* **The suite discriminates, which is the only thing that makes it worth having**: run against the
+  adapter as it stood before the fix, exactly the two preview assertions fail.
+* **The adapters are on `PATH`** ([ADR 0027](../docs/adr/0027-adapters-ship-as-binaries.md)).
+  cargo-dist installs declared binaries to `bin` and sweeps everything else into `pkgshare`, with no
+  formula template to change that — so the adapters reach `bin` only by *being* binaries. Each is
+  now a three-line bin target carrying its script via `include_str!`.
+* **I created two stray workspaces in the maintainer's own cmux.** With `CMUX_SOCKET_PATH` set to an
+  empty string the CLI falls back to the default socket; a job directory vanished under me and the
+  path collapsed. Removed immediately. The lesson is in the harness: every call names its socket
+  explicitly, including the adapter run inside the Dock, and the first check is fatal because
+  everything after it opens files.
+* **The independent review caught a release-path defect before it shipped**: `include` places files
+  in the archive root under their basename, which is exactly where the new binaries go, so
+  `contrib/birch-cmux` and the `birch-cmux` executable both wanted `<archive>/birch-cmux`. Dropped
+  the `include`; five documents claiming the scripts still ship to `share/birch/` were corrected.

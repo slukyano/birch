@@ -42,11 +42,17 @@ documenting the path (leaving the bare-name bindings wrong).
 - **The helper `exec`s `/bin/sh -c <script> <argv0> "$@"`.** `exec` rather than spawn-and-wait,
   because the adapters rely on being the process the host signals — a dock control dies with its
   pty's SIGHUP — and on their exit status reaching the caller.
-- **`$0` is `current_exe()`, not the script's name.** Every adapter bakes `$0` into birch's
-  `--open-cmd` and re-execs itself through it, so `$0` has to be a path that invokes the adapter
-  again. The installed binary is that path.
-- **The scripts keep shipping as scripts.** `dist-workspace.toml` still `include`s them, so
-  `share/birch/` still holds the readable, copyable original beside the binary.
+- **`$0` is our own argv[0]**, with `current_exe()` only as a fallback. Every adapter bakes `$0`
+  into birch's `--open-cmd` and re-execs itself through it, so it has to invoke the adapter again.
+  argv[0] is what the scripts already expected — they resolve a bare name through `command -v`,
+  landing on the stable `…/bin/birch-cmux`. `current_exe()` resolves symlinks and would pin the
+  callback to a versioned path (`…/Cellar/birch/0.2.0/bin/…`), which `brew cleanup` deletes out
+  from under a dock birch that is still running.
+- **`dist-workspace.toml` drops its `include` of the three scripts.** `include` places files in
+  the archive root under their basename — exactly where the binaries go — so shipping both would
+  have two files claiming `<archive>/birch-cmux`. The binary is the one that has to win, and a
+  second copy is redundant now that it carries the script. The readable original is `contrib/` in
+  the repository, which the docs link to.
 
 # Consequences
 

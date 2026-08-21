@@ -13,8 +13,10 @@ All notable changes to birch are documented here, following
   So a cmux `dock.json` reads `birch-cmux dock-run` instead of an absolute path
   into a particular install, and the documented
   `bind-key b run-shell "birch-tmux toggle …"` works off a fresh install. The
-  scripts are still the source of truth and still ship beside the binary — in
-  `share/birch/` for Homebrew — to read, copy, and adapt.
+  scripts remain the source of truth — each binary carries the script of the
+  same name — and are read and copied from
+  [`contrib/`](https://github.com/slukyano/birch/tree/main/contrib) in the repo.
+  They are no longer installed separately into `share/birch/`.
 
 - **Branch badges**: a column marking the files this branch would merge —
   everything that differs from the remote base (`origin/HEAD`, else

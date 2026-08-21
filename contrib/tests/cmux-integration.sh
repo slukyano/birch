@@ -46,6 +46,14 @@ check() { # check <label> <expected> <actual>
     fi
 }
 
+# Same, but stops the run. Used where continuing would be unsafe rather than
+# merely uninformative: if birch is not rooted where we expect, we cannot assume
+# the adapter is talking to the throwaway, and everything after this opens files.
+check_fatal() {
+    check "$@"
+    [ "$2" = "$3" ] || { echo "        (fatal — not continuing)" >&2; exit 1; }
+}
+
 # The window's selected workspace, as a ref.
 selected() { cli tree --json 2>/dev/null | python3 -c \
     'import json,sys; print(json.load(sys.stdin)["windows"][0]["selected_workspace_ref"])'; }
@@ -67,6 +75,8 @@ settle() { perl -e 'select(undef, undef, undef, '"${1:-2}"')'; }
 
 [ -d "${TESTCMUX_HOME:-${TMPDIR:-/tmp}/birch-testcmux}/cmux-testcmux.app" ] || "$testcmux" build
 "$testcmux" stop; settle 2
+# Under `set -eu` any abort would otherwise leave the throwaway running.
+trap '"$testcmux" stop' EXIT INT TERM
 "$testcmux" start >/dev/null
 
 alpha=$(cli workspace create --name AlphaWs --cwd "$work/ws-alpha" 2>/dev/null | awk '{print $2}')
@@ -78,14 +88,21 @@ dock=$(cli new-surface --placement dock --focus false 2>/dev/null | awk '{print 
 settle 2
 cli workspace select "$alpha" >/dev/null
 settle 1
-cli send --surface "$dock" "clear; BIRCH=$birch $adapter dock-run\n" >/dev/null
+# The adapter runs inside the dock shell and calls bare `cmux` — for
+# current-window, list-workspaces, events, and (through birch's --open-cmd) the
+# *mutating* `cmux open`. The throwaway does propagate CMUX_SOCKET_PATH into the
+# shells it spawns, but nothing here guarantees that, and an empty value sends
+# the CLI to the default socket — a real cmux. So set it explicitly, and quote
+# the paths so a directory with a space does not break the command line.
+cli send --surface "$dock" \
+    "clear; CMUX_SOCKET_PATH='$("$testcmux" sock)' BIRCH='$birch' '$adapter' dock-run\n" >/dev/null
 settle 5
 
 # 1. birch is in the sidebar, rooted at the selected workspace.
 root_line() { cli capture-pane --surface "$dock" 2>/dev/null | sed -n '1p'; }
 case "$(root_line)" in
-*ws-alpha*) check "birch runs in the Dock, rooted at the selected workspace" yes yes ;;
-*)          check "birch runs in the Dock, rooted at the selected workspace" yes "no (root line: $(root_line))" ;;
+*ws-alpha*) check_fatal "birch runs in the Dock, rooted at the selected workspace" yes yes ;;
+*)          check_fatal "birch runs in the Dock, rooted at the selected workspace" yes "no (root line: $(root_line))" ;;
 esac
 
 # 2. it follows the current workspace, both ways.
@@ -131,11 +148,15 @@ check "dock-socket addresses the running dock birch" yes "$got"
 cli workspace select "$alpha" >/dev/null; settle 3
 mkdir -p "$work/ws-alpha/nested"; : > "$work/ws-alpha/nested/deep-file.txt"
 settle 3
-case "$(cli capture-pane --surface "$dock" 2>/dev/null)" in
+# An empty capture would satisfy "does not contain deep-file.txt" without
+# meaning anything, so require the folder row to be on screen too.
+screen=$(cli capture-pane --surface "$dock" 2>/dev/null)
+case "$screen" in
 *deep-file.txt*) pre=visible ;;
-*)               pre=hidden ;;
+*nested*)        pre=hidden ;;
+*)               pre="nothing on screen" ;;
 esac
-check "the nested file starts hidden" hidden "$pre"
+check "the nested file starts hidden, its folder shown" hidden "$pre"
 "$birch" ctl --socket "$sock" reveal "$work/ws-alpha/nested/deep-file.txt" >/dev/null 2>&1 || true
 settle 2
 case "$(cli capture-pane --surface "$dock" 2>/dev/null)" in
@@ -144,6 +165,7 @@ case "$(cli capture-pane --surface "$dock" 2>/dev/null)" in
 esac
 check "reveal through dock-socket shows it" visible "$got"
 
+trap - EXIT INT TERM
 "$testcmux" stop
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

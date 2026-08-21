@@ -23,8 +23,12 @@ on PATH — for trying the CLI as installed, without shadowing a system birch an
   - `birch-core` — real tree, sources-as-delta-streams, watcher, git status, search.
     Builds **without** ratatui (the crate boundary enforces the real-tree/render split).
   - `birch-tui` — the render layer (compaction, badges, widget, mouse, context menu).
-  - `birch` — the binary: wiring, flags, the socket server, and the `birch ctl` control client.
-- `contrib/` — reference host adapters (`birch-tmux`, `birch-herdr`, `birch-cmux`).
+  - `birch` — the binaries: `birch` itself (wiring, flags, the socket server, and the `birch ctl`
+    control client), plus `src/bin/birch-*.rs`, one per host adapter, each carrying the contrib
+    script of the same name ([ADR 0027](docs/adr/0027-adapters-ship-as-binaries.md)).
+- `contrib/` — reference host adapters (`birch-tmux`, `birch-herdr`, `birch-cmux`) as shell
+  scripts, the source of truth for those binaries; `testcmux` and `tests/` for the cmux
+  integration test.
 - `docs/` — the documentation bundle: [`docs/index.md`](docs/index.md) → `design.md` (product and
   architecture spec), `integrations.md`, and `adr/` (Architecture Decision Records).
 - `backlog/` — the maintainer's task/sprint bundle (see [below](#how-this-project-is-developed)).
@@ -57,9 +61,13 @@ workspace, previews opening in the workspace you are in, `dock-socket`, and reve
 It never touches a running cmux. [`contrib/testcmux`](contrib/testcmux) copies
 `/Applications/cmux.app`, gives the copy its own bundle identifier and an ad-hoc signature, and runs
 *that* — cmux allows one instance per identifier, and a distinct one also means separate
-UserDefaults, so the throwaway has its own settings and session. Every command is addressed with an
-explicit `--socket`; the script refuses to run if that path is not inside its own working directory,
-because an empty value would fall back to whatever cmux is really running.
+UserDefaults, so the throwaway has its own settings and session.
+
+Every command names the throwaway's socket with an explicit `--socket`, including the adapter run
+inside the Dock, which gets `CMUX_SOCKET_PATH` set on its command line. That matters more than it
+looks: with `CMUX_SOCKET_PATH` set to an *empty* string the cmux CLI falls back to the default
+socket — the cmux you are actually using — so a path that goes missing does not fail, it
+misfires. The first check is fatal for the same reason: everything after it opens files.
 
 ## Commits
 

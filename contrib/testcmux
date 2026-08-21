@@ -19,26 +19,31 @@ set -eu
 
 HOME_DIR="${TESTCMUX_HOME:-${TMPDIR:-/tmp}/birch-testcmux}"
 HOME_DIR="${HOME_DIR%/}"
+# `${VAR%/}` on "/" leaves "", which would make the socket guard below vacuous.
+case "$HOME_DIR" in
+/?*) ;;
+*) echo "testcmux: TESTCMUX_HOME must be an absolute path below /" >&2; exit 1 ;;
+esac
 APP="$HOME_DIR/cmux-testcmux.app"
 SOCK="$HOME_DIR/cmux.sock"
 BUNDLE_ID="com.cmuxterm.app.birchtest"
 
-# Every command is addressed explicitly. Without this the CLI falls back to
-# $CMUX_SOCKET_PATH and then to the default socket — i.e. to the maintainer's
-# own cmux — which is the one thing this script exists to prevent.
+# Every command names the socket explicitly. That is the protection: without
+# `--socket` the CLI falls back to $CMUX_SOCKET_PATH and then to the default
+# socket — i.e. to the maintainer's own cmux — which is the one thing this
+# script exists to prevent. The checks above make sure the path it names is
+# genuinely ours rather than an empty string standing in for one.
 cli() {
-    [ -n "$SOCK" ] || { echo "testcmux: empty socket path" >&2; exit 1; }
-    case "$SOCK" in
-    "$HOME_DIR"/*) ;;
-    *) echo "testcmux: socket '$SOCK' is outside $HOME_DIR; refusing" >&2; exit 1 ;;
-    esac
     cmux --socket "$SOCK" "$@"
 }
 
 case "${1:-}" in
 build)
     [ -d /Applications/cmux.app ] || { echo "testcmux: /Applications/cmux.app not found" >&2; exit 1; }
-    mkdir -p "$HOME_DIR"
+    # The socket runs `allowAll`, so anyone who can reach it can run commands
+    # through `cmux send`. With TMPDIR unset the base would be a world-traversable
+    # /tmp path, so lock the directory down the way birch-cmux does its own.
+    mkdir -p "$HOME_DIR" && chmod 700 "$HOME_DIR"
     rm -rf "$APP"
     cp -a /Applications/cmux.app "$APP"
     plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$APP/Contents/Info.plist"
@@ -61,6 +66,7 @@ PLIST
 
 start)
     [ -d "$APP" ] || { echo "testcmux: run 'testcmux build' first" >&2; exit 1; }
+    chmod 700 "$HOME_DIR"
     # Per-bundle-id defaults, so this touches no real instance's settings.
     defaults write "$BUNDLE_ID" "rightSidebar.beta.dock.enabled" -bool true
     defaults write "$BUNDLE_ID" "rightSidebar.mode" -string dock

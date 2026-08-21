@@ -35,10 +35,11 @@ the host keys things (the reference adapters use one socket per tmux session / p
 ## Reference adapters
 
 Every install puts the three adapters on `PATH` alongside `birch`, so they are callable by
-bare name. The scripts themselves are the source of truth and ship beside the binary —
-`$(brew --prefix)/share/birch/` for a Homebrew install — to be read, copied, and adapted;
-each `birch-*` binary simply carries the script of the same name
-([ADR 0027](adr/0027-adapters-ship-as-binaries.md)).
+bare name — each `birch-*` binary carries the script of the same name
+([ADR 0027](adr/0027-adapters-ship-as-binaries.md)). The scripts are still the source of truth
+and still the thing to read, copy, and adapt: they live in
+[`contrib/`](https://github.com/slukyano/birch/tree/main/contrib), linked below. They are not
+installed as separate files.
 
 - [`contrib/birch-tmux`](../contrib/birch-tmux) — `open`/`toggle`/`socket` subcommands
   over `split-window`, `send-keys`, and `kill-pane`. Suggested binding:
