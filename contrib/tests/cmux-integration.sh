@@ -29,6 +29,9 @@ adapter="$(dirname "$birch")/birch-cmux"
 echo "adapter: $adapter"
 
 work="${TESTCMUX_HOME:-${TMPDIR:-/tmp}/birch-testcmux}/work"
+# Exactly one entry per workspace, so `down` then `enter` in the dock birch is
+# unambiguously "open that file". The nested folder for the reveal check is
+# created later, once the preview rounds are done.
 rm -rf "$work"; mkdir -p "$work/ws-alpha" "$work/ws-beta"
 : > "$work/ws-alpha/alpha-file.txt"
 : > "$work/ws-beta/beta-file.txt"
@@ -106,6 +109,40 @@ for ws in "$beta" "$alpha"; do
     check "a preview from the dock birch opens in the selected workspace ($ws)" \
         "$want" "${opened:-none opened}"
 done
+
+# 4. `dock-socket` addresses this window's dock birch. The adapter resolves the
+#    window through the bare `cmux` CLI, so it needs the socket in its
+#    environment — set per-invocation, never exported, since an empty value
+#    would silently fall back to a real cmux.
+sock=$(CMUX_SOCKET_PATH="$("$testcmux" sock)" "$adapter" dock-socket 2>/dev/null || true)
+case "$sock" in
+/*) got=$([ -S "$sock" ] && echo yes || echo "no socket at $sock") ;;
+*)  got="no path printed" ;;
+esac
+check "dock-socket names an existing socket" yes "$got"
+
+# It has to be the *live* dock birch's socket, not merely a well-formed path.
+if [ -S "$sock" ] && "$birch" ctl --socket "$sock" get-path >/dev/null 2>&1; then got=yes; else got=no; fi
+check "dock-socket addresses the running dock birch" yes "$got"
+
+# 5. Reverse-reveal: a path inside a collapsed folder becomes visible. The
+#    folder is made now, so the watcher picks it up and birch shows it closed —
+#    birch never auto-expands.
+cli workspace select "$alpha" >/dev/null; settle 3
+mkdir -p "$work/ws-alpha/nested"; : > "$work/ws-alpha/nested/deep-file.txt"
+settle 3
+case "$(cli capture-pane --surface "$dock" 2>/dev/null)" in
+*deep-file.txt*) pre=visible ;;
+*)               pre=hidden ;;
+esac
+check "the nested file starts hidden" hidden "$pre"
+"$birch" ctl --socket "$sock" reveal "$work/ws-alpha/nested/deep-file.txt" >/dev/null 2>&1 || true
+settle 2
+case "$(cli capture-pane --surface "$dock" 2>/dev/null)" in
+*deep-file.txt*) got=visible ;;
+*)               got=hidden ;;
+esac
+check "reveal through dock-socket shows it" visible "$got"
 
 "$testcmux" stop
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

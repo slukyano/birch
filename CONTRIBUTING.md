@@ -41,6 +41,26 @@ cargo test
 
 New behavior should carry tests.
 
+### The cmux integration test
+
+The cmux adapter is checked against a real cmux, and cannot be: it needs a GUI session and a copy
+of the cmux bundle, so it stays out of `cargo test` and CI.
+
+```bash
+cargo build
+contrib/tests/cmux-integration.sh
+```
+
+It asserts what the integration promises — birch in the Dock, the tree following the selected
+workspace, previews opening in the workspace you are in, `dock-socket`, and reverse-reveal.
+
+It never touches a running cmux. [`contrib/testcmux`](contrib/testcmux) copies
+`/Applications/cmux.app`, gives the copy its own bundle identifier and an ad-hoc signature, and runs
+*that* — cmux allows one instance per identifier, and a distinct one also means separate
+UserDefaults, so the throwaway has its own settings and session. Every command is addressed with an
+explicit `--socket`; the script refuses to run if that path is not inside its own working directory,
+because an empty value would fall back to whatever cmux is really running.
+
 ## Commits
 
 birch uses [Conventional Commits](https://www.conventionalcommits.org/):
