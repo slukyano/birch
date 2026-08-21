@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: The cmux integration, finished
-status: Scoped
+status: Implementing
 branch: sprint/019
 tasks:
 - 079-preview-opens-in-current-workspace

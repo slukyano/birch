@@ -2,7 +2,7 @@
 type: Task
 title: Verify the cmux integration live
 description: Drive a separate cmux instance and confirm the three things the integration promises — sidebar, follow, preview — actually happen.
-status: Draft
+status: Designed
 priority: medium
 ---
 

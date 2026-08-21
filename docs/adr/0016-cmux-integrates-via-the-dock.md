@@ -21,9 +21,8 @@ persistent terminal controls declaratively from `dock.json`. It is the natural h
 a file tree: a dedicated region with its own width, no split, no toggle machinery. An
 extended live design session (throwaway cmux windows) established the load-bearing
 facts: the Dock is **per-window** (one control instance each); the dock control's shell
-has **no `CMUX_WORKSPACE_ID`** (identity must come from `cmux current-window`); a file
-opened from the dockless context lands **in the dock** unless routed to an explicit
-workspace pane; **`workspace.selected`** events carry the active workspace (while
+has **no usable `CMUX_WORKSPACE_ID`** (identity must come from `cmux current-window`); a file
+opened from the dockless context lands **in the dock** unless the open names a target; **`workspace.selected`** events carry the active workspace (while
 `window.focused` carries a stale workspace id); and `birch-ctl set-root` re-roots a live
 birch.
 
@@ -34,8 +33,9 @@ birch.
   - `dock-run [root]` — the `dock.json` entrypoint: resolve the window, start the follow
     watcher, then `exec` birch. Root defaults to the window's selected workspace (the
     global `dock.json` can't name a folder).
-  - `preview <file>` — birch's `--open-cmd`: open the file as a **new tab in the
-    window's main pane** (routed with an explicit `--pane`). No split, no replacement.
+  - `preview <file>` — birch's `--open-cmd`: open the file as a **new tab in the window's
+    selected workspace** (`cmux open --window`, letting cmux resolve workspace and pane).
+    No split, no replacement.
   - `dock-socket` — print this window's control socket, for reverse-reveal / scripting.
 - **One birch per window**, socket keyed on `cksum(window-uuid)` — computable at launch
   and from any pane in the window, so no manual `BIRCH_SOCKET` export.
@@ -62,3 +62,28 @@ birch.
 - birch's adapter promise is unchanged; the reference adapter pattern (ADR-shared with
   tmux/herdr) remains documented as the general case, with cmux now the Dock-based
   exception.
+
+# Amendment (sprint-019)
+
+The `preview` bullet originally read "a new tab in the window's **main pane** (routed with an
+explicit `--pane`)", and both halves were wrong.
+
+*Main pane* was never a cmux concept. The adapter computed it as the **first terminal pane in the
+window**, but a window holds many workspaces, so previews opened in whichever workspace happened to
+come first — not the one the user was in. Worse, `cmux open` focuses its target, so the user was
+moved there too.
+
+The explicit `--pane` was a workaround for the dock shell's environment, and a blunter instrument
+than needed. The dock shell exports `CMUX_SURFACE_ID` for the dock surface and `CMUX_WORKSPACE_ID`
+set to the **window** uuid — a dock routing id cmux's own `resolveWorkspace` rejects — so an
+unqualified `cmux open` inherits the caller's surface and lands in the dock. Passing **`--window`**
+suppresses both inheritances (`cmux_open.swift` guards each on `parsedArgs.window == nil`), which
+is all the workaround was reaching for.
+
+With only `window_id` supplied, cmux resolves the rest itself, on the main actor, at open time:
+workspace ← `tabManager.selectedTabId`, pane ← `focusedPaneId ?? allPaneIds.first`. That is exactly
+"a new tab in the current workspace", without the race an adapter-side lookup would reintroduce.
+
+The decision is unchanged — cmux integrates via the Dock, contrib plus docs, no birch changes. Only
+the routing mechanism is corrected. See
+[`079`](../../backlog/archive/079-preview-opens-in-current-workspace.md).

@@ -2,7 +2,7 @@
 type: Task
 title: A preview opens in the workspace you are in
 description: The cmux adapter routes previews to the window's first terminal pane, which is usually a different workspace than the selected one.
-status: Draft
+status: Designed
 priority: medium
 ---
 
