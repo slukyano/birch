@@ -162,6 +162,36 @@ birch's adapter contract are untouched, and the scripts still ship at `share/bir
 - **`AGENTS.md`'s cmux testing recipe** did not work and would have silently sent any future agent
   at the maintainer's own instance.
 
+# Review findings
+
+The independent review of the diff found three majors, all fixed:
+
+- **The release archive would have collided.** `include` places files in the archive root under
+  their *basename* — exactly where cargo-dist puts binaries — so `contrib/birch-cmux` and the new
+  `birch-cmux` executable both wanted `<archive>/birch-cmux`. Every outcome was bad: the binary
+  wins and `share/birch/` never exists, the script wins and `bin/birch-cmux` is a shell script with
+  the shim never running, or cargo-dist errors and the release breaks. The reviewer proved the flat
+  layout from the actual published v0.2.0 tarball. `include` is dropped — ADR 0027 removed the
+  reason it existed — and the **five** documents asserting the scripts still ship to `share/birch/`
+  were corrected. This sprint's own verification had admitted the release path was "not run end to
+  end" without naming the risk.
+- **`README.md` contradicted `CHANGELOG.md` inside the same diff** — still saying `cargo install`
+  ships "the `birch` binary only" and that the adapters are "not on PATH".
+- **The harness's riskiest `cmux` calls were its only unguarded ones.** The adapter runs inside the
+  dock shell and uses bare `cmux`, including the *mutating* `cmux open`, relying on env propagation
+  nothing asserted — the same failure that had already created stray workspaces once this sprint.
+  And a failed check did not stop the run, so a misdirected adapter would have proceeded into the
+  rounds that open files. Both fixed.
+
+Ten minors, all fixed, of which two were more than tidying: `current_exe()` resolves symlinks and
+pinned birch's `--open-cmd` to a Cellar path that `brew cleanup` deletes under a running dock birch
+(now argv[0], which is what the scripts always expected); and `testcmux`'s socket guard was
+tautological while `CONTRIBUTING.md` presented it as the safety mechanism.
+
+The reviewer could not independently confirm any cmux CLI surface — it was barred from driving a
+live instance — so everything about `capture-pane`, `--placement dock`, and the JSON keys rests on
+this sprint's own runs.
+
 # Remaining limitations & highlights
 
 - **The harness is not in `cargo test`** and not in CI: it needs a GUI session and a 314 MB copy of
@@ -173,6 +203,9 @@ birch's adapter contract are untouched, and the scripts still ship at `share/bir
   the installed binary changes. The scripts stay directly runnable, so the two can be compared.
 - **The Dock beta remains a beta.** Everything here rides observed behaviour of an unreleased
   surface.
+- **The release path is still unexercised.** The formula's `bin.install` list is derived from cargo
+  metadata, which now declares four binaries, but no release has been cut since. The next one is
+  where `share/birch/` disappearing and the adapters appearing in `bin` actually shows up.
 
 # Verification
 
