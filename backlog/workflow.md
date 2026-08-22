@@ -211,10 +211,12 @@ the reviewer finds **before** presenting. Do not present an unverified summary.
 
 Present in the chat protocol below. The summary MUST include:
 
-- **A task ledger listing *every* task involved** — Done, Dropped, created-this-sprint, and
-  planned-but-descoped. For each: its **relative weight** (`major` / `mid` / `minor` — size AND
-  importance AND future impact; e.g. a package rename is a small diff but major impact), and a
-  **brief description — one sentence, shorter where possible**, covering three things:
+- **A task ledger covering the sprint's scope, and only that** — the tasks the sprint took on, each
+  `Done` or `Dropped`. Tasks *created* during the sprint are not scope and belong under **backlog
+  changes**; a task that was never in the scope has no row here at all. For each: its **relative
+  weight** (`major` / `mid` / `minor` — size AND importance AND future impact; e.g. a package rename
+  is a small diff but major impact), and a **brief description — one sentence, shorter where
+  possible**, covering three things:
   1. **what the change is**;
   2. **what the plan was**;
   3. **how the plan changed**.
@@ -223,8 +225,12 @@ Present in the chat protocol below. The summary MUST include:
   transformation — most tasks. Saying so in the sentence is the whole signal: no warning glyph, no
   separate "transformed" marker, since a mark beside a description that already states the change
   is redundant, and a mark on nearly every row means nothing at all.
-- **Explicitly what was NOT done** — deliberately or by omission — each item paired with its
-  disposition (done, or the **named** `Draft` task that now holds it).
+- **What was NOT done — only when something was dropped or reduced**, each item paired with its
+  disposition (the **named** `Draft` task that now holds it). A sprint that delivered its whole
+  scope has no such section: an empty one, or one padded with work that was never in the scope,
+  says nothing. When every task landed, the ledger says so and that is the end of it.
+- **Backlog changes** — tasks created, retitled, or re-scoped, and anything filed rather than fixed.
+  Informational: no approval is asked for these.
 - **Breaking changes.**
 - **Architectural decisions** made, with their ADRs.
 - **Bugs found & fixed** (review findings & how they were resolved) — its own section.

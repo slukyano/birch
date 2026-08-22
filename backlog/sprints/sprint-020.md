@@ -115,20 +115,10 @@ Weight is size **and** importance **and** future impact together, so a small dif
 | `081-standard-navigation-keys` | **mid** | `PgUp`/`PgDn`/`Home`/`End` were dead keys; they now move the selection and let the viewport follow, by a page of live rows in a free tree and a page of matches under a query, clamping where a single step wraps. Delivered as designed. |
 | `074-add-multi-selection` | **major** | Selection becomes a set around the cursor: `Shift` with the movement keys extends a range, `Ctrl`-click toggles, `Shift`-click extends where the terminal forwards it. `--pick --multi` and `--print0` for the picker, an additive `paths` array on `get-path`, and `birch ctl get-path --all`. Delivered as designed. Two decisions inside that design are worth naming: `Shift`-click was designed out on evidence and restored by maintainer decision **before** the design merge, and a multi-selection deliberately does not persist — which removed the sprint's own "restored selection must survive vanished rows" risk. |
 | `071-add-context-menu` | **major** | Right-click opens a menu generated from a new action layer in `birch-core`, rather than an authored list. Ships with the two actions that exist. Delivered as designed. |
-| `089-keyboard-toggle-for-multi-select` | minor | **Created this sprint**, `Draft`. There is no keyboard equivalent of `Ctrl`-click, so a discontiguous selection is reachable by mouse only. |
-| `090-hover-highlight-in-the-tree` | minor | **Created this sprint**, `Draft`. Motion tracking is enabled only for the menu's lifetime; hover in the tree is its own feature with its own event-volume cost. |
 
-No task was dropped or descoped. One promise was narrowed during the design phase — segment-scoped
-context menus on compacted chains — and is recorded below.
-
-# What was NOT done
-
-| left undone | disposition |
-|---|---|
-| A keyboard way to toggle one row in or out of the selection | `089-keyboard-toggle-for-multi-select` (`Draft`) |
-| Hover highlight in the tree | `090-hover-highlight-in-the-tree` (`Draft`) |
-| Seven of the nine menu entries the design doc specifies (Open and Reveal Root Here shipped) | Their actions do not exist; each arrives with its own task — `028-add-copy-paths`, `029-add-file-operations`, `034-add-open-with`. An unavailable action is absent, so none of them touches the menu's rendering or its geometry; each adds its action and an entry to the `MENU_GROUPS` placeholder its group already reserves. |
-| Segment-scoped context menus on compacted chains | Withdrawn by approved decision; `docs/design.md` corrected to name chain splitting as the reach. |
+All four were delivered; none was dropped or reduced. One promise was narrowed during the design
+phase — segment-scoped context menus on compacted chains, withdrawn so that every surface resolves a
+compacted chain to its tail, with `docs/design.md` corrected to name chain splitting as the reach.
 
 # Breaking changes
 
@@ -147,6 +137,16 @@ Everything else was held deliberately:
 - `PersistedState` is untouched: no new field, no version bump, no migration.
 - `↑`/`↓` under a search wrap exactly as before, pinned by test through the `step_match` refactor.
 - Every theme renders a single selection exactly as it did.
+
+# Backlog changes
+
+Two gaps surfaced while designing and were filed rather than guessed at. Informational — neither is
+part of this sprint's scope.
+
+| task | why it exists |
+|---|---|
+| `089-keyboard-toggle-for-multi-select` (`Draft`) | `Shift` with the movement keys extends a contiguous range, and `Ctrl`-click toggles a row, but there is no keyboard equivalent of the toggle — so a *discontiguous* selection is reachable by mouse only. No toggle key was asked for, and printable characters are reserved, so the binding decision was left to its own task. |
+| `090-hover-highlight-in-the-tree` (`Draft`) | The context menu enables motion tracking for its own lifetime, because a menu that does not light the entry under the pointer cannot be used with a mouse. Hover in the tree is a different feature with a different event-volume cost. |
 
 # Architectural decisions
 
@@ -190,12 +190,11 @@ Nothing was skipped, and no scenario needed an instrument that was unavailable.
 # Remaining limitations and highlights
 
 - **The menu ships with two entries.** Open and Reveal Root Here are the only actions that exist. This is the approved split — the surface first, its contents in sprint 021 — but a user who opens the menu this sprint will find it nearly empty.
-- **`Shift`-click will not reach birch in ghostty by default.** `mouse-shift-capture` defaults to `false`, meaning the terminal keeps `Shift` for its own text selection. birch handles the gesture wherever it is forwarded and deliberately does not send `XTSHIFTESCAPE` to claim it back, since that would withdraw the native text selection for the whole pane. `Shift` with the arrow keys always works.
+- **Which mouse modifiers arrive is the terminal's decision, not birch's.** ghostty's `mouse-shift-capture` defaults to `false`, so `Shift`-click is kept for its own text selection and never reaches birch there; `Ctrl`-click may be translated to a right-click by macOS convention. birch handles either wherever it is forwarded and deliberately does not send `XTSHIFTESCAPE` to claim `Shift` back, which would withdraw the native text selection for the whole pane. Nothing in the behaviour depends on the answer, and `Shift` with the arrow keys always works.
 - **A keyboard-only user can build contiguous ranges but not discontiguous sets.** `089-keyboard-toggle-for-multi-select` holds this.
 - **A narrowing evaporates a multi-selection.** Typing a query dims non-matching rows, and a dimmed row is inert (ADR 0023), so it leaves the selection. `Esc` restores the whole set, not just the cursor.
 - **A multi-selection does not survive a restart**, by design: expansion and scroll are view state, but a selection is intent, and restoring it hours later would re-arm an action whose targets have been forgotten.
 - **`--multi` output is newline-separated unless `--print0` is given**, and a newline is a legal character in a file name. `--print0` exists precisely for that and is the safe form for scripts.
-- **`Ctrl`-click has not been confirmed in a real terminal**, and macOS convention may translate it to a right-click. Nothing in the code depends on the answer — both modifiers are handled when present — but it decides what a ghostty user actually experiences. Settling it needs a terminal, a pointer, and a program that enables the same mouse modes birch enables and prints what arrives.
 
 # Session log
 
@@ -207,7 +206,6 @@ Nothing was skipped, and no scenario needed an instrument that was unavailable.
   birch handles the gesture whenever the terminal forwards it, and does not send `XTSHIFTESCAPE` to
   claim it. ghostty's `mouse-shift-capture` defaults to `false`, so the event does not arrive there;
   that is the terminal's call, and the keyboard path is the one that always works.
-  A throwaway probe was written to settle the remaining modifier questions in a real terminal.
 - Two gaps found while designing were filed rather than guessed at:
   `089-keyboard-toggle-for-multi-select` and `090-hover-highlight-in-the-tree`.
 - ADRs proposed: 0028 (the identity is the scope fence), 0029 (the menu projects the action layer).
