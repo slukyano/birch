@@ -51,6 +51,7 @@ Process: see [the task workflow](../backlog/workflow.md#adrs).
 * [0029 — The context menu is a projection of the action layer, and an unavailable action is absent](adr/0029-the-menu-projects-the-action-layer.md)
 * [0030 — The inline editor is birch's only mode, and printables follow the focused field](adr/0030-the-inline-editor-is-the-only-mode.md)
 * [0031 — Delete goes to trash, and confirmation appears only where neither trash nor git can help](adr/0031-delete-goes-to-trash.md)
+* [0032 — Files move by dragging; rename-to-a-path stays as the keyboard route](adr/0032-move-by-dragging.md)
 
 # Research
 
