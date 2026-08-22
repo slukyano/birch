@@ -96,6 +96,10 @@ trash over confirmation, and a drag that cannot be mistaken for a click.
   when the window closes, so it forks a `cmux` call and a `python3` on every workspace switch,
   forever) and `085` means a failing `--open-cmd` says nothing at all. Both are defects rather than
   features; deferred as off-theme, not as unimportant.
+- **`093-undo-a-file-operation`** — filed during this sprint's design phase, and deliberately not
+  scoped into it. Once birch mutates, only delete has a way back (the trash); rename, move, and
+  create have none. Reversing `docs/design.md`'s "no op-history/undo stack" is its own argument with
+  its own ADR, and bolting it onto a sprint that is already five tasks would rush it.
 - **`073-hotkey-reference`** — worth more than it was, since sprints 020 and 021 add
   `PgUp`/`PgDn`/`Home`/`End`, the `Shift` variants, and a whole menu layer. But it is a
   discoverability task, not an action task.
