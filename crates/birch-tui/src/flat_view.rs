@@ -799,9 +799,9 @@ impl FlatView {
     }
 
     /// `Ctrl`-click: add the row to the selection or take it out, and re-anchor
-    /// there. Removing the cursor moves it to the nearest remaining selected
-    /// row; removing the *only* selected row does nothing, because the cursor
-    /// is always selected.
+    /// there. Removing the cursor moves it to the first row still selected in
+    /// tree order; removing the *only* selected row does nothing, because the
+    /// cursor is always selected.
     pub fn toggle_selected(&mut self, rows: &[Row], idx: usize) {
         let Some(row) = rows.get(idx).filter(|row| row.live) else {
             return;

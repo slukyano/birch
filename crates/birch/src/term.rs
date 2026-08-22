@@ -94,6 +94,11 @@ pub fn leave(mouse: bool, stderr: bool) {
 pub fn restore(mouse: bool, stderr: bool) {
     let mut stream = out(stderr);
     if mouse {
+        // Motion tracking is enabled only while the context menu is open, and
+        // `DisableMouseCapture` does not cover it — so it is turned off here
+        // unconditionally. Quitting with the menu open (Ctrl-C, SIGHUP) would
+        // otherwise leave the terminal reporting every pointer move.
+        let _ = stream.write_all(b"\x1b[?1003l");
         let _ = execute!(stream, DisableMouseCapture);
     }
     let _ = execute!(stream, LeaveAlternateScreen);

@@ -1233,6 +1233,15 @@ impl App {
                     self.close_menu(terminal);
                 }
             }
+            // A right-click elsewhere moves the menu rather than leaving it
+            // stranded: the old one closes, and the release opens a new one on
+            // the row the press landed on.
+            InputAction::RightPress { column, row } => {
+                if !menu_ref(&self.menu).covers(layout, column, row) {
+                    self.close_menu(terminal);
+                    self.armed_right = Some((column, row));
+                }
+            }
             InputAction::Release { column, row, .. } => {
                 if let Some(index) = menu_ref(&self.menu).hit(layout, column, row) {
                     menu_mut(&mut self.menu).highlight(index);
