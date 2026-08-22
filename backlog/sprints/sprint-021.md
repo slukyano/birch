@@ -134,9 +134,10 @@ Weight is size **and** importance **and** future impact together.
 | `072-drag-to-move` | **major** | Drag a row onto a directory to move it. A drag is a click that left its row, so ADR 0025's model already tracks it with no threshold. Delivered as designed — and spring-loading turned out to need no carve-out, because the never-auto-expand rule is scoped to *ignored* directories and search already auto-expands. |
 | `028-add-copy-paths` | **mid** | Copy name, root-relative path, or absolute path, newline-joined in tree order for several rows. One clipboard transport per copy, chosen the way Neovim chooses it. Two changes from what `docs/design.md` sketched: the three-tier fallback cannot be built, because OSC 52 is a one-way write with no failure to react to; and `Ctrl-Shift-C` is **dropped**, being the same byte as `Ctrl-C`, which quits. |
 | `092-open-the-menu-from-the-keyboard` | **mid** | `Shift-F10` and the `Menu` key open the menu at the cursor row without disturbing the selection. **Added to scope after the sprint opened**, once it was clear the menu had exactly one trigger and a host that swallows right-click made it unreachable. |
-| `034-add-open-with` | **minor** | `Open` names the program it will run, and `Open system` hands the path to the desktop's handler — absent when the resolved command already is that handler, on a multi-row selection, and in `--pick`. Rewritten during design from the task's "Open with…" framing: the config array and the submenu were both dropped in favour of two rows and **no config surface at all**. |
+| `034-add-open-with` | **minor** | `Open with <program>` names the program it will run, and a second row hands the path to the desktop's handler — absent when the resolved command already is that handler, on a multi-row selection, and in `--pick`. Rewritten during design from the task's "Open with…" framing: the config array and the submenu were both dropped in favour of two rows and **no config surface at all**. |
+| `093-undo-a-file-operation` | **major** | `Ctrl-Z` reverses the last mutation. **Added to scope after the sprint opened**, at the maintainer's direction, after using what the sprint had built. Filed as backlog during the sprint and pulled in the same day. Designed inline rather than in the design phase, which the maintainer decided on after the trade-off was put to them. [ADR 0033](../../docs/adr/0033-undo-is-a-session-stack.md). |
 
-All five were delivered; none was dropped or reduced.
+All six were delivered; none was dropped or reduced.
 
 # Breaking changes
 
@@ -155,13 +156,15 @@ Filed during the sprint and deliberately not scoped into it. Informational; no a
 | task | why it exists |
 |---|---|
 | `091-kitty-keyboard-protocol` (`Draft`) | The legacy encoding cannot represent `Shift` with a control character — nor `Cmd` at all — so `Ctrl-Shift-C` and every `Cmd` chord are unreachable. Adopting the Kitty protocol changes how *every* key is decoded, so it is its own task. |
-| `093-undo-a-file-operation` (`Draft`) | After this sprint only delete has a way back, through the trash. Rename, move, and create have none. Reversing `docs/design.md`'s "no op-history/undo stack" is its own argument with its own ADR. |
+`093-undo-a-file-operation` was filed here too, then **pulled into scope** and delivered — it is in
+the task ledger above rather than in this table.
 
 # Architectural decisions
 
 - **ADR 0030** — the inline editor is birch's only mode. ADR 0008 is read as it was always meant: printables go to whatever text field is focused, and an edit focuses a different one, so no letter becomes a command. The editor is a paint-time overlay that never touches the tree, so an abandoned edit leaves nothing behind and no watcher suppression is needed. Confirmations answer to `Enter` and `Esc`, never `y`/`n`.
 - **ADR 0031** — delete goes to trash, and confirmation appears only where neither trash nor git reaches. Tracked paths delete immediately, untracked confirm once, an unavailable trash confirms saying the delete is permanent, and a trash failure is never silently upgraded.
 - **ADR 0032** — files move by dragging, and rename-to-a-path stays as the keyboard route. The original "no move" argument was right about capability and wrong about discovery: nothing on screen suggests a name field accepts `../`, and it cannot move a multi-selection at all.
+- **ADR 0033** — undo is a session stack, and delete is the step it cannot take back. Three measurements settled what the task left open: `trash`'s restore is not compiled on macOS, `cfmakeraw` clears `ISIG` so `Ctrl-Z` was never suspend, and undoing a create has to trash rather than unlink. A delete records a step that *refuses*, because a delete that recorded nothing would let the next `Ctrl-Z` reverse the operation before it. **Amends ADR 0031 and ADR 0032**, which both recorded "there is no undo".
 
 # Bugs found and fixed
 
@@ -205,6 +208,32 @@ makes `090-hover-highlight-in-the-tree` cheaper than it was written to be — th
 already spent, and only the redraw is unbudgeted — and its notes now say so. The rule that replaces
 it is recorded on `term::enter`: the mode set is chosen once, and nothing turns a mouse mode off
 while birch runs.
+
+A second round came from the maintainer **using** what the sprint had built, which found five more
+that no diff review would have (`981f2df`, `2a7...`, this sprint's last three commits). They cluster:
+
+- **A create hid the directory's first child.** The field drew on the line after its parent, which
+  is where the first child already is, so an edit covered a real file. It now opens a gap and pushes
+  the rows below it down — a paint-time transform, so the tree is still untouched (ADR 0030).
+- **A name clash looked like a silent overwrite.** It never was one — `create` refuses an occupied
+  path — but the field closed and discarded what was typed, leaving the tree unchanged behind it and
+  an unreadable error. The field now keeps the text so a typo costs a keystroke.
+- **The bottom line was dim unconditionally**, which is right for chrome and badly wrong for a
+  question waiting to be answered. It now knows what it carries: chrome dim, a message at full
+  contrast, a question in the accent colour, bold.
+- **The confirmation ate every key it did not recognise**, so a prompt nobody could see also made
+  birch look like it had stopped responding — failing two thirds of the bar ADR 0030 sets for a
+  second mode (*visible, transient, one exit*). Every key now backs out except the pointer, which is
+  exempt because motion is reported continuously; a printable backs out and reaches the search, as
+  it does under the menu.
+- **Menu rows named the wrong things.** `Open` on a directory named an editor that would not run;
+  it now says `Expand` or `Collapse`. The label asked whether *any* target was a directory while
+  `Open` acts on the **cursor**, so a mixed selection labelled the wrong row. And `Open vim` /
+  `Open system` are now `Open with vim` / `Open with open`, the program drawn dim — "system" is not
+  a thing anybody runs.
+
+`New Folder` and `Reveal` were added in the same pass, both because the menu is where actions are
+found (ADR 0029) and neither had a way in.
 
 # Verification
 
