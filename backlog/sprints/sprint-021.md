@@ -116,9 +116,9 @@ depends on nothing here, and `029`, which the rest of the sprint waits on.
 `092-open-the-menu-from-the-keyboard` was added once it became clear the menu has no keyboard
 trigger at all — a gap that grows with every action this sprint adds to it.
 
-Branch `sprint/021`, base `main`. Nine commits on top of the approved design merge; 20 files,
-+3107/−128. 328 tests pass; `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`
-clean.
+Branch `sprint/021`, base `main`. **Nine implementation commits** on top of the approved design
+merge, plus this close-out. 328 tests pass; `cargo fmt --check` and
+`cargo clippy --all-targets -- -D warnings` clean.
 
 **This is the sprint where birch began writing to the user's filesystem.** Everything before it read
 the tree, painted it, and reported paths; a wrong answer was wrong on screen. From here a wrong
