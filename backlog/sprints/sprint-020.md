@@ -106,16 +106,20 @@ Branch `sprint/020`, base `main`. Six implementation commits on top of the appro
 
 # Task ledger
 
+Weight is size **and** importance **and** future impact together, so a small diff can be major —
+`088` changes four files and governs every scope question birch will ever face.
+
 | task | weight | what it is |
 |---|---|---|
 | `088-replace-the-scope-fence` | **major** | The permanent out-of-scope list is deleted from `docs/design.md`; the identity sentence becomes the whole fence, judged in two halves (the explorer panel's job, and a narrow terminal pane as the medium), the in-scope line becomes a description that gates nothing, and `AGENTS.md`'s reject-by-lookup rule becomes that judgement test. Delivered as designed. |
 | `081-standard-navigation-keys` | **mid** | `PgUp`/`PgDn`/`Home`/`End` were dead keys; they now move the selection and let the viewport follow, by a page of live rows in a free tree and a page of matches under a query, clamping where a single step wraps. Delivered as designed. |
-| `074-add-multi-selection` | **major** | Selection becomes a set around the cursor: `Shift` with the movement keys extends a range, `Ctrl`-click toggles, `Shift`-click extends where the terminal forwards it. `--pick --multi` and `--print0` for the picker, an additive `paths` array on `get-path`, and `birch ctl get-path --all`. **Two changes from the approved design**: `Shift`-click was designed out on evidence and then restored by maintainer decision, and a multi-selection deliberately does not persist — which removed the sprint's own "restored selection must survive vanished rows" risk. |
+| `074-add-multi-selection` | **major** | Selection becomes a set around the cursor: `Shift` with the movement keys extends a range, `Ctrl`-click toggles, `Shift`-click extends where the terminal forwards it. `--pick --multi` and `--print0` for the picker, an additive `paths` array on `get-path`, and `birch ctl get-path --all`. Delivered as designed. Two decisions inside that design are worth naming: `Shift`-click was designed out on evidence and restored by maintainer decision **before** the design merge, and a multi-selection deliberately does not persist — which removed the sprint's own "restored selection must survive vanished rows" risk. |
 | `071-add-context-menu` | **major** | Right-click opens a menu generated from a new action layer in `birch-core`, rather than an authored list. Ships with the two actions that exist. Delivered as designed. |
 | `089-keyboard-toggle-for-multi-select` | minor | **Created this sprint**, `Draft`. There is no keyboard equivalent of `Ctrl`-click, so a discontiguous selection is reachable by mouse only. |
 | `090-hover-highlight-in-the-tree` | minor | **Created this sprint**, `Draft`. Motion tracking is enabled only for the menu's lifetime; hover in the tree is its own feature with its own event-volume cost. |
 
-Nothing was dropped or descoped after scope approval.
+No task was dropped or descoped. One promise was narrowed during the design phase — segment-scoped
+context menus on compacted chains — and is recorded below.
 
 # What was NOT done
 
@@ -123,12 +127,20 @@ Nothing was dropped or descoped after scope approval.
 |---|---|
 | A keyboard way to toggle one row in or out of the selection | `089-keyboard-toggle-for-multi-select` (`Draft`) |
 | Hover highlight in the tree | `090-hover-highlight-in-the-tree` (`Draft`) |
-| The nine menu entries the design doc specifies | Their actions do not exist; each arrives with its own task — `028-add-copy-paths`, `029-add-file-operations`, `034-add-open-with`. An unavailable action is absent, so no menu edit is needed when they land. |
+| Seven of the nine menu entries the design doc specifies (Open and Reveal Root Here shipped) | Their actions do not exist; each arrives with its own task — `028-add-copy-paths`, `029-add-file-operations`, `034-add-open-with`. An unavailable action is absent, so none of them touches the menu's rendering or its geometry; each adds its action and an entry to the `MENU_GROUPS` placeholder its group already reserves. |
 | Segment-scoped context menus on compacted chains | Withdrawn by approved decision; `docs/design.md` corrected to name chain splitting as the reach. |
 
 # Breaking changes
 
-**None.** Every existing contract was held deliberately:
+**None** — no output, wire format, or on-disk format changed. **Two keyboard behaviours did change
+meaning**, which is the feature rather than a break, but a user with muscle memory will notice:
+
+- **`Shift` with `↑`/`↓` used to be a plain move** — the modifier was ignored — and now extends a
+  selection. The cursor still lands in exactly the same place, so nothing that reads the selection
+  decodes differently; what changes is that rows behind it stay selected.
+- **`Ctrl`-click used to be a plain select** and now toggles a row in or out of the selection.
+
+Everything else was held deliberately:
 
 - `birch --pick` without `--multi` is byte-for-byte what it was: single selection, exactly one line on stdout. `nvim "$(birch --pick)"` and every shipped adapter keep working.
 - `get-path` still carries exactly one path in `data` — the cursor. The selection arrives in a new optional `paths` field, which a client that has never heard of it ignores (ADR 0011, additive-only).
@@ -159,7 +171,7 @@ Nothing was dropped or descoped after scope approval.
 9. **The menu re-targeted the root for any `hit_test` miss.** That function says `None` for the space below the last row, the scrollbar column, and the status line alike; right-clicking the scrollbar destroyed a multi-selection and jumped the cursor to the root. `render::on_tree_surface` tells them apart.
 10. **A right-click on a dimmed or git-deleted row collapsed the selection** on the way to discovering there was no menu to open.
 
-**And an eighth defect the review could not have seen**, found while verifying fix 6 in a real terminal: a `Shift` extension **resolved its anchor after the cursor had moved**. Under a search the anchor is routinely stale — `sync` re-homes a cursor without moving the anchor, and a query dims the row it sits on — so the range collapsed to a single row whenever the search index arrived after the query was typed. Every unit test passed throughout, because in a test the index is already built. The anchor is now resolved before the move, falling back to the cursor.
+**And one more the review could not have seen**, found while verifying fix 6 in a real terminal: a `Shift` extension **resolved its anchor after the cursor had moved**. Under a search the anchor is routinely stale — `sync` re-homes a cursor without moving the anchor, and a query dims the row it sits on — so the range collapsed to a single row whenever the search index arrived after the query was typed. Every unit test passed throughout, because in a test the index is already built. The anchor is now resolved before the move, falling back to the cursor.
 
 # Verification
 
@@ -183,7 +195,7 @@ Nothing was skipped, and no scenario needed an instrument that was unavailable.
 - **A narrowing evaporates a multi-selection.** Typing a query dims non-matching rows, and a dimmed row is inert (ADR 0023), so it leaves the selection. `Esc` restores the whole set, not just the cursor.
 - **A multi-selection does not survive a restart**, by design: expansion and scroll are view state, but a selection is intent, and restoring it hours later would re-arm an action whose targets have been forgotten.
 - **`--multi` output is newline-separated unless `--print0` is given**, and a newline is a legal character in a file name. `--print0` exists precisely for that and is the safe form for scripts.
-- **`Ctrl`-click has not been confirmed in a real terminal.** `.scratchpad/mouse-probe.py` reports which modifiers actually arrive; macOS convention may translate `Ctrl`-click to a right-click. Nothing in the code depends on the answer — both modifiers are handled when present — but it decides what a ghostty user actually experiences.
+- **`Ctrl`-click has not been confirmed in a real terminal**, and macOS convention may translate it to a right-click. Nothing in the code depends on the answer — both modifiers are handled when present — but it decides what a ghostty user actually experiences. Settling it needs a terminal, a pointer, and a program that enables the same mouse modes birch enables and prints what arrives.
 
 # Session log
 
@@ -195,8 +207,7 @@ Nothing was skipped, and no scenario needed an instrument that was unavailable.
   birch handles the gesture whenever the terminal forwards it, and does not send `XTSHIFTESCAPE` to
   claim it. ghostty's `mouse-shift-capture` defaults to `false`, so the event does not arrive there;
   that is the terminal's call, and the keyboard path is the one that always works.
-  `.scratchpad/mouse-probe.py` was written to settle the remaining modifier questions in a real
-  terminal.
+  A throwaway probe was written to settle the remaining modifier questions in a real terminal.
 - Two gaps found while designing were filed rather than guessed at:
   `089-keyboard-toggle-for-multi-select` and `090-hover-highlight-in-the-tree`.
 - ADRs proposed: 0028 (the identity is the scope fence), 0029 (the menu projects the action layer).

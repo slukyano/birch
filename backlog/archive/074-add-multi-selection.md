@@ -264,7 +264,7 @@ line. Hands-on: `vhs` frames for a multi-row selection under both `SelectionStyl
 
 Which modifiers actually reach a TUI is terminal behaviour, not birch's to decide: `Ctrl`-click may
 be translated to a right-click by macOS convention, and `Shift`-click is withheld by ghostty's
-default. `.scratchpad/mouse-probe.py` enables exactly the modes birch enables and reports what
-arrives. Neither answer changes the code — both modifiers are handled when present — but it tells
+default. Settling it needs a program that enables exactly the modes birch enables and reports what
+arrives, driven by a pointer in a real terminal. Neither answer changes the code — both modifiers are handled when present — but it tells
 the release notes which gestures a ghostty user will actually have. If `Ctrl`-click does not
 survive, `Alt`-click is added beside it as a second toggle modifier.
