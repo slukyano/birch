@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Multi-select and the action surface
-status: Scoped
+status: Implementing
 branch: sprint/020
 tasks:
 - 081-standard-navigation-keys
@@ -90,11 +90,27 @@ gates `074`, and with `081` in parallel since it depends on nothing here.
 
 # Checklist
 
-- [ ] 081-standard-navigation-keys
-- [ ] 088-replace-the-scope-fence
-- [ ] 074-add-multi-selection
-- [ ] 071-add-context-menu
+- [ ] 081-standard-navigation-keys — designed
+- [ ] 088-replace-the-scope-fence — designed
+- [ ] 074-add-multi-selection — designed
+- [ ] 071-add-context-menu — designed
 
 # Open questions
 
-_(none yet)_
+_(none open)_
+
+# Session log
+
+- Scoped and cut: `081`, `088`, `074`, `071`. Branch `sprint/020` cut from `main`.
+- Design: `088` and `081` presented first, since `088` gates `074`; four questions answered
+  (the two-part identity test, per-operation arity, selection-moving page keys, and paging by
+  matches under a query). `074` and `071` designed on the settled fence.
+- `Shift` with the mouse was first designed away and then **restored by maintainer decision**:
+  birch handles the gesture whenever the terminal forwards it, and does not send `XTSHIFTESCAPE` to
+  claim it. ghostty's `mouse-shift-capture` defaults to `false`, so the event does not arrive there;
+  that is the terminal's call, and the keyboard path is the one that always works.
+  `.scratchpad/mouse-probe.py` was written to settle the remaining modifier questions in a real
+  terminal.
+- Two gaps found while designing were filed rather than guessed at:
+  `089-keyboard-toggle-for-multi-select` and `090-hover-highlight-in-the-tree`.
+- ADRs proposed: 0028 (the identity is the scope fence), 0029 (the menu projects the action layer).
