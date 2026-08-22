@@ -6,11 +6,12 @@ Lean and beautiful interactive file tree for the terminal.
 
 birch does exactly what an IDE file tree does, and nothing else.
 
-It is the IDEA / VS Code explorer panel, living in a terminal pane next to your editor. That sentence is both the feature list and the scope fence:
+It is the IDEA / VS Code explorer panel, living in a terminal pane next to your editor. That sentence is the whole scope fence, and it has two halves that must both hold ([ADR 0028](adr/0028-the-identity-is-the-scope-fence.md)):
 
-**In scope (the whitelist):** tree view, icons, git status, open file, fuzzy find, content search, rename / delete / new file / new dir, copy name/path, compact folders, live updates, mouse.
+- **The panel's job.** Does the IDEA / VS Code explorer panel do this? The panel is a tree of files plus the operations reached from a row — not a file manager, not a diff viewer, not a shell, not a second navigation model.
+- **The pane's medium.** Does it survive a narrow terminal pane where every printable character belongs to search ([ADR 0008](adr/0008-q-types-into-search.md))? A feature needing width, a second axis, a modal state, or a letter hotkey fails here however ordinary it is inside an IDE.
 
-**Permanently out of scope:** miller columns, verbs or command language, vim modes, multi-select, bulk operations, copy/duplicate files, drag-and-drop move, search-and-replace, archive browsing, permissions editing, plugin API.
+**What that is today:** tree view, icons, git status, open file, fuzzy find, content search, multi-select, rename / delete / new file / new dir, copy name/path, compact folders, live updates, mouse. That line describes the current surface; it gates nothing. A feature absent from it is not thereby out of scope — the identity decides. Prohibitions stated by a section below (no plugins, no search-and-replace, no mutation verbs on the socket, no copy, no move) stand on their own terms.
 
 Contrast with neighbors:
 
@@ -30,6 +31,7 @@ birch [<options>] [<dir>]
 
 ```
 birch --pick [<dir>]      # picker mode: Enter prints the selection and exits
+birch --pick --multi      # ...several: one path per line (--print0 to NUL-separate)
 birch --filter '*.md'     # glob filter (repeatable); --filter-mode hide|skip
 birch ctl <verb> [...]    # control a running instance (see Control socket)
 ```
@@ -47,7 +49,7 @@ birch ctl <verb> [...]    # control a running instance (see Control socket)
 - **Compact folders** (VS Code-style): pure single-child dir chains render as one row, `a/b/c`, separators dimmed. Rules:
   - A chain compacts iff each dir's only *visible* child is a single dir (visibility-aware: hidden-file settings affect tree shape).
   - Compaction is a **render-layer transform**. The real tree, watcher, git, search, and ops all speak real paths; compaction happens at paint time only.
-  - Keyboard treats a chain as one node (the tail) — until `→` on an expanded chain **splits** it into individual member rows; collapsing a member re-fuses the chain from that point (ADR 0014). Splits are session-local. Mouse segment-clicks target individual dirs (matters for context-menu scoping).
+  - Keyboard treats a chain as one node (the tail) — until `→` on an expanded chain **splits** it into individual member rows; collapsing a member re-fuses the chain from that point (ADR 0014). Splits are session-local. Every surface resolves a chain row to its **tail** — selection, `get-path`, the copy variants, and the context menu alike; reaching an intermediate directory means splitting the chain first (ADR 0029).
   - F2 on a chain inline-edits the full `a/b/c` fragment (this is rename-with-path reused).
   - Live updates split/fuse chains in place as children appear/disappear.
 
@@ -83,12 +85,15 @@ Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and 
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Move selection (during a search: step matches, in tree order) |
+| `PgUp` / `PgDn` | Move selection a page — the viewport less a row of overlap — and let the viewport follow (during a search: a page's worth of matches). Clamps at the ends where `↑`/`↓` wrap. |
+| `Home` / `End` | Move selection to the first / last row (during a search: the first / last match) |
+| `Shift` + `↑` `↓` `PgUp` `PgDn` `Home` `End` | Extend the selection from the anchor to where the cursor lands, over live rows only. Any unmodified move collapses the selection back to one row. |
 | `→` | **Always moves or reveals** (task 060): a collapsed dir expands; an expanded chain splits into member rows; otherwise the selection advances to the next row. Nothing happens only on the last row. |
 | `Enter` on dir | Toggle expand/collapse |
 | `←` on dir / into parent | Collapse / jump to parent |
 | `Enter` on file | Open (see Opening files). **Enter always opens — never contextual.** |
 | any printable char | Fuzzy filename search |
-| `Esc` | Back out: clear search / close menu; at top level, quit |
+| `Esc` | Back out one layer: close the context menu, else clear the search; at top level, quit (ADR 0012) |
 | `F2` | Rename (inline) |
 | `Delete` | Delete (to trash) |
 | `Ctrl-N` | New file / dir |
@@ -102,27 +107,30 @@ Printable characters are permanently reserved for search — no letter hotkeys, 
 
 - **Single-click selects; double-click activates** (ADR 0015 — reversed from the original VS Code-school single-click-activates). In a host pane, a click meant to focus the pane — or just to point — arrives as a normal click, so the first click must be harmless: it only moves selection. A second click on the same row within 450 ms is Enter's twin (open file / toggle dir). Clicking a dir's chevron toggles without moving selection; each chevron click is its own toggle.
 - **A click completes on release** (ADR 0025): the press arms, and the click acts only when the button is released on the same row, in the same zone. Releasing anywhere else abandons it, so a click can be revoked by sliding off. The double-click window measures release to release — two complete clicks.
+- **`Ctrl`-click toggles** a row in or out of the selection; **`Shift`-click** extends the range from the anchor to it. Both are handled whenever the terminal forwards the modifier — many terminals keep `Shift` for their own text selection while an application has the mouse (ghostty's `mouse-shift-capture` defaults to `false`), and birch never claims it back. `Shift` with the arrow keys always works.
 - **Scroll wheel**: `--scroll-lines` rows per tick, 3 by default (1–10).
-- **Hover highlight** (SGR 1003 motion tracking).
-- **Right-click → context menu** (keyboard works inside it: arrows/Enter/Esc):
+- **Hover highlight** (SGR 1003 motion tracking): on inside the context menu, which is the only place motion is asked for today. Hover in the tree is `090-hover-highlight-in-the-tree`.
+- **Right-click → context menu**, which is a **projection of the action layer** (ADR 0029), not an authored list: actions declare a label, an accelerator, and an availability rule over the selection, and the menu draws whichever are available. **An action that does not exist yet is absent, not greyed** — the menu grows as its contents land, and no task that adds an action edits the menu. Its full intended shape, in groups (a separator is drawn between any two groups that survive):
 
 ```
-Open
-Open with…            (later)
+Open                  ↵
+Open with…            (034)
 ──────────
-New File…             ^N
-Rename…               F2
-Delete                ⌦
+New File…             ^N     (029)
+Rename…               F2     (029)
+Delete                ⌦      (029)
 ──────────
-Copy Name
-Copy Relative Path    ^⇧C
-Copy Absolute Path
+Copy Name                    (028)
+Copy Relative Path    ^⇧C    (028)
+Copy Absolute Path           (028)
 ──────────
 Reveal Root Here
 ```
 
-- Right-click below the tree → menu targeting the root.
-- **Text-selection trade-off**: mouse capture disables native drag-to-copy. Mitigations: Shift-click passes through to the terminal (documented in `--help`); Copy Path in the menu covers the real use case.
+- **Opening it follows the left button's rule**: a right-press arms, and the menu opens on the release on the row the press started on (ADR 0025, extended). Keyboard works inside it — `↑`/`↓` step entries and skip separators, `Home`/`End` reach the ends, `Enter` invokes, `Esc` closes. **A printable character closes the menu and types into the search**: ADR 0008 has no exception, and a layer that redefines the keyboard is how a modal language starts.
+- **It targets the selection, and only disturbs it when it must**: a right-click inside the current selection acts on all of it, a click outside collapses the selection to that row first, and a click below the last row collapses to the root. A dimmed row is inert here as everywhere (ADR 0023).
+- **Geometry**: drawn as a bordered box over the tree, shifted left to fit at the right edge (rather than flipped, which in a narrow pane throws it across the whole width), flipped upward at the bottom, and clamped-and-scrolled in a pane too short to hold it. Accelerators are dropped before labels ellipsise.
+- **Text-selection trade-off**: mouse capture disables native drag-to-copy. Mitigations: most terminals pass `Shift`-drag through to their own selection while an application holds the mouse (documented in `--help`) — it is the terminal's decision, not birch's; Copy Path in the menu covers the real use case.
 - No drag-and-drop. Inside tmux, mouse requires tmux mouse mode (FAQ, not a bug).
 
 ### Opening files
@@ -174,7 +182,7 @@ Content search swaps the pane's **source** (see Architecture): same tree widget,
 
 ## File operations
 
-Exactly four: **rename, delete, new file, new dir.** No move (see below), no copy, no multi-select, no op-history/undo stack.
+Exactly four: **rename, delete, new file, new dir.** No move (see below), no copy, no op-history/undo stack. Whether an operation accepts one target or several is settled per operation, when that operation is designed.
 
 - **Rename (F2)**: inline row editing — the selected row becomes a text input (never a bottom command bar; prompt bars grow verbs). Editing to a path (`../other/name.ts`) silently performs a move — rename-with-path is the 80% of "move" without the complexity cliff. Plain `rename()`; no `git mv` magic (git rename detection handles it).
 - **New file (Ctrl-N)**: inline input in the target dir. `foo/bar/baz.ts` creates intermediate dirs; trailing slash (`foo/`) creates a dir. One binding, three ops (VS Code's trick). On a compacted chain, creates in the tail. No dedicated new-dir key.
@@ -235,12 +243,12 @@ A running birch instance exposes a Unix domain socket; `birch ctl` (a subcommand
 - **Host-dictated rendezvous**: `birch --socket <path>` binds exactly there, skipping default addressing (`--no-socket` skips binding entirely). A host that spawns birch shouldn't have to *discover* what it created — it picks the path and already knows it. `birch ctl --socket <path>` targets it. This is the load-bearing flag for host adapters.
 - **Lifecycle**: graceful exit on SIGHUP/SIGTERM (host closes pane → clean death, socket unlinked).
 - **Protocol**: newline-delimited JSON request/response with a `v` field. **Additive-only evolution; clients tolerate unknown fields.** Host adapters may be maintained out-of-tree on their own release cadence — the protocol is a public API commitment, not an internal detail.
-- **Verbs** (closed set — the whitelist applies to the protocol too):
+- **Verbs** (a closed set, for its own reason: the protocol is a public API and stays small):
 
 | Verb | Effect |
 |---|---|
 | `reveal <path>` | Expand to and select path (editor → tree reverse integration) |
-| `get-path [--name\|--rel\|--abs]` | Print current selection |
+| `get-path [--name\|--rel\|--abs] [--all]` | Print current selection; `--all` prints every selected path, one per line. On the wire `data` always carries exactly one path — the cursor — and `paths` carries the whole selection beside it. |
 | `get-root` | Print root |
 | `set <setting> <value>` | Runtime toggles: hidden, ignored, compact, icons, search case, … |
 | `set-root <dir>` | Re-root |

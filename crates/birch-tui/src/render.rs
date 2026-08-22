@@ -7,10 +7,13 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Clear, Padding, Paragraph};
+
+use birch_core::action::MenuRow;
 
 use crate::flat_view::{FlatView, Row};
 use crate::icons;
+use crate::menu::{Menu, MenuLayout};
 use crate::theme::{BadgeStyle, FolderStyle, GuideStyle, SelectionStyle, Theme};
 
 pub const INDENT_WIDTH: u16 = 2;
@@ -186,6 +189,92 @@ pub fn tree_viewport_height(area: Rect) -> usize {
     area.height.saturating_sub(1) as usize
 }
 
+/// Paints the context menu over the tree (ADR 0029). Drawn last, into the same
+/// `Rect`, so the tree beneath is not re-laid-out and `hit_test` geometry is
+/// untouched. The caller lays the menu out and passes the result in, so the
+/// painted rows and the clickable ones are the same rows by construction.
+///
+/// The menu is a bordered box rather than a coloured panel: the border is what
+/// separates it from the tree, so no theme has to grow a menu background.
+pub fn draw_menu(frame: &mut Frame, menu: &Menu, layout: MenuLayout, theme: &Theme) {
+    if layout.width < 3 || layout.height < 3 {
+        return;
+    }
+    let area = Rect {
+        x: layout.x,
+        y: layout.y,
+        width: layout.width,
+        height: layout.height,
+    };
+    let canvas = match theme.palette.app_bg {
+        Some(bg) => Style::default().bg(bg),
+        None => Style::default(),
+    };
+    let content = layout.content_width();
+    let lines: Vec<Line<'static>> = menu
+        .rows()
+        .iter()
+        .enumerate()
+        .skip(menu.scroll())
+        .take(layout.visible_rows())
+        .map(|(index, row)| match row {
+            MenuRow::Separator => Line::from(Span::styled(
+                "\u{2500}".repeat(content),
+                Style::default().fg(theme.palette.guide),
+            )),
+            MenuRow::Entry(action) => {
+                let accel = if layout.accelerators {
+                    action.accelerator().unwrap_or("")
+                } else {
+                    ""
+                };
+                let room = content.saturating_sub(accel.chars().count());
+                let label = truncate(action.label(), room);
+                let pad = room.saturating_sub(label.chars().count());
+                let mut style = canvas;
+                if index == menu.highlighted() {
+                    style = style.bg(theme.palette.selection_bg);
+                    if let Some(fg) = theme.palette.selection_fg {
+                        style = style.fg(fg);
+                    }
+                }
+                let mut spans = vec![
+                    Span::styled(label, style),
+                    Span::styled(" ".repeat(pad), style),
+                ];
+                if !accel.is_empty() {
+                    spans.push(Span::styled(
+                        accel.to_string(),
+                        style.add_modifier(Modifier::DIM),
+                    ));
+                }
+                Line::from(spans)
+            }
+        })
+        .collect();
+    // Clear whatever the tree painted here first: the box is opaque.
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_style(Style::default().fg(theme.palette.guide))
+        .padding(Padding::horizontal(1))
+        .style(canvas);
+    frame.render_widget(Paragraph::new(lines).block(block).style(canvas), area);
+}
+
+/// Cuts a label to `width` columns, marking the cut with `…` so a truncated
+/// entry never reads as a different, shorter action.
+fn truncate(label: &str, width: usize) -> String {
+    if label.chars().count() <= width {
+        return label.to_string();
+    }
+    if width <= 1 {
+        return "\u{2026}".repeat(width);
+    }
+    let mut out: String = label.chars().take(width - 1).collect();
+    out.push('\u{2026}');
+    out
+}
+
 pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bottom_line: &str) {
     let Chrome {
         settings,
@@ -207,16 +296,23 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
         ..area
     };
 
-    let selected = view.selection.as_deref();
+    let cursor = view.selection.as_deref();
+    // With one row selected every theme renders exactly as it always has. The
+    // accent bar appears on the cursor row in a `FullRow` theme only while
+    // there is more than one row selected — that is, only when there is
+    // something to tell apart (task 074).
+    let multi = view.selection_len() > 1;
     let mut lines = Vec::with_capacity(viewport);
     let mut badges = Vec::with_capacity(viewport);
-    let mut selected_visible: Option<u16> = None;
+    let mut selected_visible: Vec<u16> = Vec::new();
     for (i, row) in rows.iter().skip(view.scroll).take(viewport).enumerate() {
-        let is_selected = selected == Some(row.path.as_path());
+        let is_selected = view.is_selected(&row.path);
         if is_selected {
-            selected_visible = Some(i as u16);
+            selected_visible.push(i as u16);
         }
-        lines.push(row_line(theme, settings, row, is_selected));
+        let accent = cursor == Some(row.path.as_path())
+            && (multi || theme.selection == SelectionStyle::SoftBarAccent);
+        lines.push(row_line(theme, settings, row, is_selected, accent));
         badges.push(badge_line(
             theme,
             row,
@@ -278,7 +374,7 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
     // a search match — keep it: washing over them would leave their dark
     // foreground on a dark row, i.e. invisible text on the very row the
     // selection sits on.
-    if let Some(i) = selected_visible {
+    for i in selected_visible {
         let y = tree_area.y + i;
         let wash = theme.palette.selection_bg;
         let buffer = frame.buffer_mut();
@@ -299,9 +395,15 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
 /// active theme, and whether the row is selected — the same geometry
 /// `hit_test` mirrors (guides and the accent bar occupy the existing indent
 /// columns, never shifting the chevron).
-fn row_line(theme: &Theme, settings: &Settings, row: &Row, selected: bool) -> Line<'static> {
+fn row_line(
+    theme: &Theme,
+    settings: &Settings,
+    row: &Row,
+    selected: bool,
+    accent: bool,
+) -> Line<'static> {
     let name_style = name_style(theme, row);
-    let mut spans = indent_spans(theme, row, selected);
+    let mut spans = indent_spans(theme, row, accent);
     spans.extend(glyph_column_spans(theme, settings, row));
     spans.extend(label_spans(theme, row, name_style));
     if let Some(annotation) = &row.annotation {
@@ -461,21 +563,22 @@ fn status_span(theme: &Theme, row: &Row) -> Vec<Span<'static>> {
 }
 
 /// The ancestor-indent columns (`INDENT_WIDTH` each). Renders the theme's
-/// guide glyph, and — for a selected row under `SoftBarAccent` — turns the
-/// outermost column into the left accent bar (`▏`), keeping the total width
-/// identical so `hit_test` geometry is unchanged.
+/// guide glyph, and — when `accent` is set — turns the outermost column into
+/// the left accent bar (`▏`), keeping the total width identical so `hit_test`
+/// geometry is unchanged. The caller decides: the cursor row under
+/// `SoftBarAccent`, or the cursor row of a multi-selection in any theme.
 ///
 /// The outermost column (`level 0`) is never a guide: it is the root's spine,
 /// which always runs full-height and is uninformative. It is the selection
-/// accent bar (selected row, `SoftBarAccent`) or two blank spaces. Guides
-/// (`Indent` lines and `Connectors`) begin at `level >= 1`.
+/// accent bar or two blank spaces. Guides (`Indent` lines and `Connectors`)
+/// begin at `level >= 1`.
 ///
 /// A depth-0 (root) row has no indent columns, so its accent bar cannot be
 /// drawn without clobbering the chevron; the soft background still marks it.
-fn indent_spans(theme: &Theme, row: &Row, selected: bool) -> Vec<Span<'static>> {
+fn indent_spans(theme: &Theme, row: &Row, accent: bool) -> Vec<Span<'static>> {
     let depth = row.depth;
     let guide_style = Style::default().fg(theme.palette.guide);
-    let accent = selected && theme.selection == SelectionStyle::SoftBarAccent;
+
     // Depth fade (guide_fade = floor): lerp guide -> floor over levels 1..=4,
     // clamped at the floor so deep trees never lose their guides.
     let level_style = |level: usize| -> Style {
@@ -631,6 +734,27 @@ fn base_name_style(theme: &Theme, row: &Row) -> Style {
 /// Resolves a click at terminal coordinates to a row index and whether it hit
 /// the chevron cell of a directory row. Returns `None` for clicks outside the
 /// rows (the below-the-tree case gains meaning with the context menu, 0.5).
+/// Whether a point lies on the tree surface at all: inside the viewport, and
+/// clear of the scrollbar column. `hit_test` returns `None` for three different
+/// things — below the last row, on the inert scrollbar column, and on the
+/// status line — and a caller that treats them alike (the context menu, which
+/// targets the root for a click below the rows) would re-target the root when
+/// the click was actually on furniture.
+pub fn on_tree_surface(
+    rows_len: usize,
+    chrome: Chrome,
+    area: Rect,
+    column: u16,
+    row_y: u16,
+) -> bool {
+    let geometry = layout(area, chrome, rows_len);
+    let viewport = geometry.viewport as u16;
+    if row_y < area.y || row_y >= area.y + viewport {
+        return false;
+    }
+    !geometry.bar.is_some_and(|bar| column >= bar.x)
+}
+
 pub fn hit_test(
     rows: &[Row],
     view: &FlatView,
@@ -904,11 +1028,21 @@ mod tests {
 
         // A whole selected row also carries the soft selection background.
         let r = row("deep", NodeKind::File, 1);
-        let line = row_line(&theme, &Settings::default(), &r, true);
+        let line = row_line(&theme, &Settings::default(), &r, true, true);
         assert_eq!(line.style.bg, Some(theme.palette.selection_bg));
     }
 
     /// The glyph texts a row renders between the indent and the label, joined.
+    #[test]
+    fn a_truncated_label_is_marked_as_cut() {
+        assert_eq!(truncate("Open", 10), "Open");
+        assert_eq!(truncate("Open", 4), "Open");
+        assert_eq!(truncate("Reveal Root Here", 6), "Revea\u{2026}");
+        // Degenerate widths: never panic, never claim to be a shorter action.
+        assert_eq!(truncate("Open", 1), "\u{2026}");
+        assert_eq!(truncate("Open", 0), "");
+    }
+
     fn glyph_text(theme: &Theme, row: &Row) -> String {
         glyph_column_spans(theme, &Settings::default(), row)
             .iter()

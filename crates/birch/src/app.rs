@@ -14,6 +14,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use birch_core::action::{Action, ActionContext, ActionTarget};
 use birch_core::git::{self, GitCmd, GitEvent, GitState};
 use birch_core::protocol::{PathForm, Request, Response, SettingKey, SettingValue, Verb};
 use birch_core::search::{self, IndexCmd, IndexEvent, Match, SearchIndex, search};
@@ -22,8 +23,9 @@ use birch_core::{
     Filter, NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree,
     TreeDelta, persist, settings,
 };
-use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row};
+use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row, SelectionSnapshot};
 use birch_tui::input::{self, InputAction};
+use birch_tui::menu::Menu;
 use birch_tui::render;
 use birch_tui::theme::Theme;
 use ratatui::layout::Rect;
@@ -48,6 +50,9 @@ pub struct AppWiring {
     pub settings: Settings,
     pub open_cmd: OpenCmd,
     pub mode: Mode,
+    /// `--pick --multi` (task 074). Ignored outside picker mode, where
+    /// multi-select is always available.
+    pub multi: bool,
     pub events: Receiver<AppEvent>,
     pub source_cmds: Sender<SourceCmd>,
     pub watch_cmds: Sender<WatchCmd>,
@@ -71,7 +76,7 @@ struct SearchState {
     /// Path → matched char indices into the simple name (empty for path-mode
     /// hits, meaning whole-name highlight).
     matched_set: HashMap<PathBuf, Vec<u32>>,
-    saved_selection: Option<PathBuf>,
+    saved_selection: SelectionSnapshot,
     saved_scroll: usize,
 }
 
@@ -109,9 +114,26 @@ struct App {
     restore_expanded: HashSet<PathBuf>,
     expansion_dirty: bool,
     last_saved_expanded: Vec<PathBuf>,
-    picked: Option<PathBuf>,
+    /// Confirmed paths, in tree order. Empty until `Enter` picks; more than
+    /// one only under `--multi`.
+    picked: Vec<PathBuf>,
+    /// `--pick --multi`: multi-select is enabled in the picker and every
+    /// selected path is printed. Off, the picker behaves exactly as it always
+    /// has, and a selection the mode cannot output is not offered.
+    multi: bool,
     input_paused: Arc<AtomicBool>,
     click_timer: input::ClickTimer,
+    /// The open context menu, if any. Holds ordering and a highlight; what its
+    /// entries *do* lives in the action layer (ADR 0029).
+    menu: Option<Menu>,
+    /// A right-press waiting for its release, holding the row it resolved to —
+    /// `Some(None)` for a press below the last row, which targets the root.
+    /// Keyed on the row, not the cell, so a pointer that drifts a column
+    /// between press and release still opens the menu (ADR 0025).
+    armed_right: Option<Option<PathBuf>>,
+    /// A `Shift` extension waiting for its match reveal to converge. The range
+    /// is painted once, when the cursor lands, rather than every frame.
+    pending_extend: bool,
     /// The armed press: which row a left button-down landed on, and whether it
     /// landed in the chevron zone. A click completes only when the release
     /// matches both (ADR 0025). Keyed on the real path, so a snapshot arriving
@@ -200,7 +222,32 @@ where
     }
 }
 
-pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<PathBuf>> {
+/// What an input asks of the open menu. Keeps the decision separable from the
+/// I/O it implies, so every branch is testable without a terminal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MenuStep {
+    /// The menu stays open; any highlight move has already been applied.
+    Keep,
+    Close,
+    /// Close, and send the character to the search.
+    Search(char),
+    /// Close, and perform the action.
+    Invoke(Action),
+    /// Close, and arm a right-press so the release opens a menu elsewhere.
+    Reopen(Option<Option<PathBuf>>),
+}
+
+/// The open menu. Only called from paths that have just established there is
+/// one, so the panic is unreachable rather than a policy.
+fn menu_mut(menu: &mut Option<Menu>) -> &mut Menu {
+    menu.as_mut().expect("the menu is open")
+}
+
+fn menu_ref(menu: &Option<Menu>) -> &Menu {
+    menu.as_ref().expect("the menu is open")
+}
+
+pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathBuf>> {
     let AppWiring {
         root,
         settings,
@@ -215,6 +262,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         socket,
         filter,
         input_paused,
+        multi,
     } = wiring;
 
     let mut app = App {
@@ -245,9 +293,13 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         restore_expanded: HashSet::new(),
         expansion_dirty: false,
         last_saved_expanded: Vec::new(),
-        picked: None,
+        picked: Vec::new(),
+        multi,
         input_paused,
         click_timer: input::ClickTimer::default(),
+        menu: None,
+        armed_right: None,
+        pending_extend: false,
         armed_press: None,
         last_rematch: None,
         rows_len: 0,
@@ -436,6 +488,11 @@ impl App {
         }
         self.status.clear(); // status messages are transient
 
+        // The menu is a layer over the tree, so it sees input first (ADR 0029).
+        if self.menu.is_some() {
+            return self.handle_menu_input(terminal, events, action);
+        }
+
         // Search editing works the same in both modes.
         match action {
             InputAction::Char(c) => {
@@ -465,15 +522,84 @@ impl App {
             return false;
         }
 
+        // Without a plural selection to build, `Shift` with a movement key is
+        // just that movement: the picker without `--multi` behaves exactly as
+        // it always has, rather than building a set it cannot output.
+        let action = match action {
+            InputAction::Extend(movement) if !self.selection_is_plural() => match movement {
+                input::Movement::Up => InputAction::Up,
+                input::Movement::Down => InputAction::Down,
+                input::Movement::PageUp => InputAction::PageUp,
+                input::Movement::PageDown => InputAction::PageDown,
+                input::Movement::Home => InputAction::Home,
+                input::Movement::End => InputAction::End,
+            },
+            other => other,
+        };
+
         let rows = self.rows();
-        // With a live search, ↑/↓ cycle the matches — in both modes now
-        // (ADR 0023): the picker is the same tree, so it steps the same way.
-        if let Some(state) = &self.search
-            && !state.matches.is_empty()
-            && matches!(action, InputAction::Up | InputAction::Down)
-        {
-            self.cycle_match(action == InputAction::Down);
-            return false;
+        // One page is the viewport less a row of overlap: the row at the bottom
+        // edge becomes the row at the top, which is the only reason a page is
+        // not simply the viewport. The floor keeps a one-row pane usable.
+        let page = render::tree_viewport_height(area(terminal))
+            .saturating_sub(1)
+            .max(1) as isize;
+        // With a live search every movement key moves by *matches*, because
+        // nothing else is selectable (ADR 0023) — in both modes, since the
+        // picker is the same tree. Single steps wrap; page and edge steps clamp
+        // (task 081).
+        let match_count = self.search.as_ref().map_or(0, |state| state.matches.len()) as isize;
+        if match_count > 0 {
+            // `Shift` extends over matches, by the same unit rule: under a
+            // narrowing the thing a movement key moves by is a match.
+            let extend = matches!(action, InputAction::Extend(_));
+            let movement = match action {
+                InputAction::Extend(movement) => Some(movement),
+                InputAction::Up => Some(input::Movement::Up),
+                InputAction::Down => Some(input::Movement::Down),
+                InputAction::PageUp => Some(input::Movement::PageUp),
+                InputAction::PageDown => Some(input::Movement::PageDown),
+                InputAction::Home => Some(input::Movement::Home),
+                InputAction::End => Some(input::Movement::End),
+                _ => None,
+            };
+            if let Some(movement) = movement {
+                let (delta, wrap) = match movement {
+                    input::Movement::Up => (-1, true),
+                    input::Movement::Down => (1, true),
+                    input::Movement::PageUp => (-page, false),
+                    input::Movement::PageDown => (page, false),
+                    input::Movement::Home => (-match_count, false),
+                    input::Movement::End => (match_count, false),
+                };
+                // Stepping reaches its target over several frames, so the
+                // extension is armed here and painted once the cursor lands.
+                if extend {
+                    self.view.begin_extending(&rows);
+                    self.pending_extend = true;
+                } else {
+                    self.view.end_extending();
+                    self.pending_extend = false;
+                }
+                self.step_match(delta, wrap);
+                return false;
+            }
+        }
+        // Every unmodified movement collapses the selection to the cursor. Done
+        // here rather than inside the movement so it holds when the move goes
+        // nowhere — already at an edge, or `→` with nothing left to reveal.
+        if matches!(
+            action,
+            InputAction::Up
+                | InputAction::Down
+                | InputAction::Right
+                | InputAction::Left
+                | InputAction::PageUp
+                | InputAction::PageDown
+                | InputAction::Home
+                | InputAction::End
+        ) {
+            self.view.collapse_selection();
         }
         let effect = match action {
             InputAction::Up => {
@@ -482,6 +608,39 @@ impl App {
             }
             InputAction::Down => {
                 self.view.move_by(&rows, 1);
+                NavEffect::None
+            }
+            // Paging moves the selection and lets the viewport follow; the
+            // wheel stays the only motion that moves the viewport alone
+            // (task 081). `move_by` counts live rows and clamps at the ends.
+            InputAction::PageUp => {
+                self.view.move_by(&rows, -page);
+                NavEffect::None
+            }
+            InputAction::PageDown => {
+                self.view.move_by(&rows, page);
+                NavEffect::None
+            }
+            InputAction::Home => {
+                self.view.move_to_edge(&rows, true);
+                NavEffect::None
+            }
+            InputAction::End => {
+                self.view.move_to_edge(&rows, false);
+                NavEffect::None
+            }
+            // `Shift` with a movement key extends the range from the anchor
+            // (task 074); the movement itself is the same one the bare key
+            // makes, so the two can never disagree about where the cursor goes.
+            InputAction::Extend(movement) => {
+                match movement {
+                    input::Movement::Up => self.view.move_by_extending(&rows, -1),
+                    input::Movement::Down => self.view.move_by_extending(&rows, 1),
+                    input::Movement::PageUp => self.view.move_by_extending(&rows, -page),
+                    input::Movement::PageDown => self.view.move_by_extending(&rows, page),
+                    input::Movement::Home => self.view.move_to_edge_extending(&rows, true),
+                    input::Movement::End => self.view.move_to_edge_extending(&rows, false),
+                }
                 NavEffect::None
             }
             InputAction::Right => self.view.on_right(&mut self.tree, &rows),
@@ -508,7 +667,11 @@ impl App {
                 self.arm_press(&rows, hit);
                 NavEffect::None
             }
-            InputAction::Release { column, row } => {
+            InputAction::Release {
+                column,
+                row,
+                modifier,
+            } => {
                 let hit = render::hit_test(
                     &rows,
                     &self.view,
@@ -521,8 +684,34 @@ impl App {
                     column,
                     row,
                 );
-                self.resolve_release(&rows, hit, Instant::now())
+                self.resolve_release(&rows, hit, modifier, Instant::now())
             }
+            // The press only arms: the menu opens on the release, on the row
+            // the press started on — the left button's rule with no exception
+            // carved for the right one (ADR 0025, extended by ADR 0029).
+            InputAction::RightPress { column, row } => {
+                self.armed_right = self.right_target(area(terminal), &rows, column, row);
+                NavEffect::None
+            }
+            InputAction::RightRelease { column, row } => {
+                let armed = self.armed_right.take();
+                let released = self.right_target(area(terminal), &rows, column, row);
+                if armed.is_some()
+                    && armed == released
+                    && self.open_menu(&rows, armed.flatten(), column, row)
+                {
+                    // A menu that does not light the entry under the pointer
+                    // cannot be used with a mouse; the tree does not pay the
+                    // event volume the rest of the time (task 090).
+                    if self.settings.mouse {
+                        term::set_motion_tracking(terminal, true);
+                    }
+                }
+                NavEffect::None
+            }
+            // Motion is only ever reported while the menu is open, and the
+            // menu handles its own input above.
+            InputAction::Hover { .. } => NavEffect::None,
             // Scrolling returned above, from the count-only fast path.
             InputAction::ScrollUp
             | InputAction::ScrollDown
@@ -553,13 +742,13 @@ impl App {
                 if self.mode.is_pick() {
                     // Unreachable by construction (activate picks first in
                     // picker mode), kept as a guard: never exec in a picker.
-                    self.picked = Some(path);
+                    self.picked = vec![path];
                 } else if self.perform_open(terminal, events, &path) {
                     return true;
                 }
             }
         }
-        self.picked.is_some()
+        self.finished(false)
     }
 
     /// The one open execution path — hotkeys, mouse, and the socket verb all
@@ -634,23 +823,19 @@ impl App {
                 None => Response::err("reveal needs a path"),
             },
             Verb::GetPath => match self.view.selection.clone() {
-                Some(sel) => {
-                    let data = match request.form.unwrap_or_default() {
-                        PathForm::Name => sel
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| sel.display().to_string()),
-                        PathForm::Rel => {
-                            let rel = sel.strip_prefix(&self.root).unwrap_or(&sel);
-                            if rel.as_os_str().is_empty() {
-                                ".".into() // the root itself
-                            } else {
-                                rel.display().to_string()
-                            }
-                        }
-                        PathForm::Abs => sel.display().to_string(),
-                    };
-                    Response::ok(Some(data))
+                Some(cursor) => {
+                    let form = request.form.unwrap_or_default();
+                    // `data` stays exactly what it has always been — one path,
+                    // the cursor — and `paths` carries the whole selection in
+                    // tree order beside it (task 074). Redefining `data` would
+                    // not be additive evolution (ADR 0011).
+                    let paths = self
+                        .view
+                        .selected(&self.rows())
+                        .iter()
+                        .map(|path| self.format_path(path, form))
+                        .collect();
+                    Response::ok_selection(self.format_path(&cursor, form), paths)
                 }
                 None => Response::err("no selection"),
             },
@@ -837,6 +1022,7 @@ impl App {
         &mut self,
         rows: &[Row],
         hit: Option<(usize, bool)>,
+        modifier: input::ClickModifier,
         now: Instant,
     ) -> NavEffect {
         let armed = self.armed_press.take();
@@ -848,7 +1034,27 @@ impl App {
             self.click_timer.disarm();
             return NavEffect::None;
         }
+        // A modified click is a selection gesture and nothing else: it never
+        // activates, so it disarms any pending double-click. Whether the
+        // modifier arrives at all is the terminal's decision — many keep
+        // `Shift` for their own text selection (task 074).
+        if self.selection_is_plural() && modifier != input::ClickModifier::None {
+            self.click_timer.disarm();
+            match modifier {
+                input::ClickModifier::Extend => self.view.extend_to(rows, idx),
+                input::ClickModifier::Toggle => self.view.toggle_selected(rows, idx),
+                input::ClickModifier::None => {}
+            }
+            return NavEffect::None;
+        }
         self.resolve_click(rows, idx, on_chevron, now)
+    }
+
+    /// Whether more than one row may be selected at once: always in the tree,
+    /// and in the picker only under `--multi`, where a plural selection has
+    /// somewhere to go (task 074).
+    fn selection_is_plural(&self) -> bool {
+        !self.mode.is_pick() || self.multi
     }
 
     /// Click decision (ADR 0015): a chevron click toggles (each completed
@@ -908,10 +1114,22 @@ impl App {
             }
             if !browsing_click {
                 if click.is_some() {
-                    // A picking click also moves the selection there.
+                    // A picking click also moves the selection there — and
+                    // collapses it, so a click always confirms what it lands on.
                     self.view.focus(row.path.clone());
                 }
-                self.picked = Some(row.path.clone());
+                // Nothing selected is ever dropped silently: a row the filter
+                // does not confirm refuses the whole pick and says which one.
+                if let Some(unpickable) = rows
+                    .iter()
+                    .find(|row| self.view.is_selected(&row.path) && !row.pickable)
+                {
+                    return NavEffect::Message(format!(
+                        "{} does not match the filter",
+                        unpickable.name
+                    ));
+                }
+                self.picked = self.view.selected(rows);
                 return NavEffect::None;
             }
         }
@@ -919,6 +1137,300 @@ impl App {
             Some((idx, on_chevron)) => self.view.on_click(&mut self.tree, rows, idx, on_chevron),
             None => self.view.on_enter(&mut self.tree, rows),
         }
+    }
+
+    /// One path in the form the request asked for.
+    fn format_path(&self, path: &Path, form: PathForm) -> String {
+        match form {
+            PathForm::Name => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string()),
+            PathForm::Rel => {
+                let rel = path.strip_prefix(&self.root).unwrap_or(path);
+                if rel.as_os_str().is_empty() {
+                    ".".into() // the root itself
+                } else {
+                    rel.display().to_string()
+                }
+            }
+            PathForm::Abs => path.display().to_string(),
+        }
+    }
+
+    // ---- the context menu (071) and the action layer (ADR 0029) ----
+
+    /// The selection as the action layer sees it: paths in tree order, reduced
+    /// to the facts an availability rule uses.
+    fn action_targets(&self, rows: &[Row]) -> Vec<ActionTarget> {
+        rows.iter()
+            .filter(|row| self.view.is_selected(&row.path))
+            .map(|row| ActionTarget {
+                path: row.path.clone(),
+                is_dir: row.kind.is_dir(),
+                missing: row.missing,
+            })
+            .collect()
+    }
+
+    /// What a right-click at this point would target: `Some(Some(path))` for a
+    /// row, `Some(None)` for the empty space below the last row (which targets
+    /// the root), and `None` for anywhere the menu has no business opening —
+    /// the scrollbar column, the status line, a dimmed row, or a row that is
+    /// tracked in git but gone from disk. Keyed on the row rather than the
+    /// cell, so a press and release a column apart still agree (ADR 0025).
+    fn right_target(
+        &self,
+        area: Rect,
+        rows: &[Row],
+        column: u16,
+        row: u16,
+    ) -> Option<Option<PathBuf>> {
+        // A menu that cannot be drawn must not open: the app would be modal
+        // with nothing on screen.
+        if area.width < 3 || area.height < 3 {
+            return None;
+        }
+        let chrome = render::Chrome {
+            settings: &self.settings,
+            theme: &Theme::for_id(self.settings.theme),
+            branch_axis: self.branch_axis(),
+        };
+        match render::hit_test(rows, &self.view, chrome, area, column, row) {
+            Some((idx, _)) => {
+                let hit_row = rows.get(idx)?;
+                // A dimmed row is inert by every route (ADR 0023), and nothing
+                // can act on a row that is not there.
+                (hit_row.live && !hit_row.missing).then(|| Some(hit_row.path.clone()))
+            }
+            // `hit_test` says `None` for the empty space below the last row and
+            // for inert furniture alike; only the former targets the root.
+            None => render::on_tree_surface(rows.len(), chrome, area, column, row).then_some(None),
+        }
+    }
+
+    /// Opens the menu on a right-click. The selection is only disturbed when it
+    /// has to be: a click inside it acts on all of it, a click outside collapses
+    /// to that row first, and a click below the last row collapses to the root.
+    /// Returns true when a menu opened, so the caller can turn motion tracking
+    /// on. Terminal-free: opening a menu is a decision about rows, and only the
+    /// tracking is I/O. `right_target` has already refused the points where a
+    /// menu has no business appearing.
+    fn open_menu(&mut self, rows: &[Row], target: Option<PathBuf>, column: u16, row: u16) -> bool {
+        match target {
+            Some(path) => {
+                let Some(idx) = rows.iter().position(|r| r.path == path) else {
+                    return false;
+                };
+                self.view.on_single_click_if_unselected(rows, idx);
+            }
+            // Below the last row: the root becomes the target, which is what
+            // makes "new file in the root" reachable with nothing useful
+            // selected.
+            None => {
+                if let Some(root_idx) = rows.iter().position(|r| r.path == self.root)
+                    && rows[root_idx].live
+                {
+                    self.view.on_single_click(rows, root_idx);
+                } else {
+                    return false;
+                }
+            }
+        }
+        let rows = self.rows();
+        let targets = self.action_targets(&rows);
+        let context = ActionContext {
+            targets: &targets,
+            picker: self.mode.is_pick(),
+        };
+        let Some(menu) = Menu::open(context, column, row) else {
+            return false;
+        };
+        self.menu = Some(menu);
+        true
+    }
+
+    fn close_menu(&mut self, terminal: &mut term::Term) {
+        if self.menu.take().is_some() && self.settings.mouse {
+            term::set_motion_tracking(terminal, false);
+        }
+    }
+
+    /// Input while the menu is open. Returns true when birch should quit.
+    /// A thin wrapper: `menu_input` decides, and only the I/O happens here.
+    fn handle_menu_input(
+        &mut self,
+        terminal: &mut term::Term,
+        events: &Receiver<AppEvent>,
+        action: InputAction,
+    ) -> bool {
+        match self.menu_input(area(terminal), action) {
+            MenuStep::Keep => false,
+            MenuStep::Close => {
+                self.close_menu(terminal);
+                false
+            }
+            MenuStep::Search(c) => {
+                self.close_menu(terminal);
+                self.search_push(c);
+                false
+            }
+            MenuStep::Reopen(target) => {
+                self.close_menu(terminal);
+                self.armed_right = target;
+                false
+            }
+            MenuStep::Invoke(action) => {
+                self.close_menu(terminal);
+                let quit = match self.perform(action) {
+                    Some(path) => self.perform_open(terminal, events, &path),
+                    None => false,
+                };
+                // The same terminator every other input path falls through to:
+                // a pick made from the menu ends the picker there, not on
+                // whatever key happens to arrive next.
+                self.finished(quit)
+            }
+        }
+    }
+
+    /// What one input does to an open menu. Terminal-free, so every branch is
+    /// reachable from a test: the wrapper above turns the outcome into I/O.
+    fn menu_input(&mut self, area: Rect, action: InputAction) -> MenuStep {
+        let layout = {
+            let Some(menu) = self.menu.as_mut() else {
+                return MenuStep::Keep;
+            };
+            menu.layout(area.x, area.y, area.width, area.height)
+        };
+        match action {
+            InputAction::Esc => MenuStep::Close,
+            // Typing is always search (ADR 0008), with no exception for a menu:
+            // a layer that redefines the keyboard is how a modal language
+            // starts. The menu closes and the character reaches the query.
+            InputAction::Char(c) => MenuStep::Search(c),
+            InputAction::Up => {
+                menu_mut(&mut self.menu).step(false);
+                MenuStep::Keep
+            }
+            InputAction::Down => {
+                menu_mut(&mut self.menu).step(true);
+                MenuStep::Keep
+            }
+            InputAction::Home => {
+                menu_mut(&mut self.menu).go_to_edge(true);
+                MenuStep::Keep
+            }
+            InputAction::End => {
+                menu_mut(&mut self.menu).go_to_edge(false);
+                MenuStep::Keep
+            }
+            InputAction::Enter => match menu_ref(&self.menu).selected_action() {
+                Some(action) => MenuStep::Invoke(action),
+                None => MenuStep::Keep,
+            },
+            InputAction::Hover { column, row } => {
+                if let Some(index) = menu_ref(&self.menu).hit(layout, column, row) {
+                    menu_mut(&mut self.menu).highlight(index);
+                }
+                MenuStep::Keep
+            }
+            InputAction::Press { column, row } => {
+                // A press outside closes on the spot: there is no armed-click
+                // dance to run for dismissal.
+                if menu_ref(&self.menu).covers(layout, column, row) {
+                    MenuStep::Keep
+                } else {
+                    MenuStep::Close
+                }
+            }
+            // A right-click elsewhere moves the menu rather than leaving it
+            // stranded: the old one closes, and the release opens a new one on
+            // the row the press landed on.
+            InputAction::RightPress { column, row } => {
+                if menu_ref(&self.menu).covers(layout, column, row) {
+                    return MenuStep::Keep;
+                }
+                let rows = self.rows();
+                MenuStep::Reopen(self.right_target(area, &rows, column, row))
+            }
+            InputAction::Release { column, row, .. } => {
+                // Only an entry invokes. `highlight` ignores separators by
+                // design, so asking it to move and then reading the highlight
+                // would fire whatever was standing there.
+                let Some(index) = menu_ref(&self.menu).hit(layout, column, row) else {
+                    return MenuStep::Keep;
+                };
+                match menu_ref(&self.menu).action_at(index) {
+                    Some(action) => {
+                        menu_mut(&mut self.menu).highlight(index);
+                        MenuStep::Invoke(action)
+                    }
+                    None => MenuStep::Keep,
+                }
+            }
+            // Everything else — scrolling, resizes, movement keys the menu does
+            // not bind — leaves it alone.
+            _ => MenuStep::Keep,
+        }
+    }
+
+    /// The one way an action is performed. Hotkeys, the mouse, the menu, and
+    /// the socket all arrive here; nothing reaches an operation another way
+    /// (ADR 0029). Terminal-free, so it stays a decision about the tree: a file
+    /// that needs an editor comes back for the caller to open.
+    fn perform(&mut self, action: Action) -> Option<PathBuf> {
+        let rows = self.rows();
+        let targets = self.action_targets(&rows);
+        if !action.available(ActionContext {
+            targets: &targets,
+            picker: self.mode.is_pick(),
+        }) {
+            return None;
+        }
+        match action {
+            Action::Open => {
+                let effect = self.activate(&rows, None);
+                self.expansion_dirty = true;
+                match effect {
+                    // In the picker `activate` has already confirmed, so this
+                    // only ever carries a file the tree wants opened.
+                    NavEffect::Open(path) => return Some(path),
+                    NavEffect::Message(message) => self.status = message,
+                    NavEffect::RequestExpand(path) => {
+                        let _ = self.source_cmds.send(SourceCmd::Expand(path));
+                    }
+                    NavEffect::None => {}
+                }
+            }
+            Action::RevealRootHere => {
+                if let Some(target) = targets.first() {
+                    let response = self.set_root(target.path.clone());
+                    if !response.ok {
+                        self.status = response.error.unwrap_or_default();
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Paints a `Shift` extension once its match reveal has converged. Match
+    /// stepping lands over several frames — ancestors have to be expanded and
+    /// listed first — so the range cannot be drawn where the key was pressed.
+    fn settle_extension(&mut self) {
+        if self.pending_extend && self.pending_reveal.is_none() {
+            let rows = self.rows();
+            self.view.finish_extending(&rows);
+            self.pending_extend = false;
+        }
+    }
+
+    /// The terminator every input path shares: birch stops when an action asked
+    /// it to, or when a pick has been made. The menu path returning early is
+    /// exactly what once left a pick sitting until the next keystroke.
+    fn finished(&self, quit: bool) -> bool {
+        quit || !self.picked.is_empty()
     }
 
     /// Why nothing happened when there is no selection to act on.
@@ -953,7 +1465,7 @@ impl App {
                 query: String::new(),
                 matches: Vec::new(),
                 matched_set: HashMap::new(),
-                saved_selection: self.view.selection.clone(),
+                saved_selection: self.view.snapshot_selection(),
                 saved_scroll: self.view.scroll,
             });
         }
@@ -970,9 +1482,13 @@ impl App {
         state.query.pop();
         if state.query.is_empty() {
             // Backspace-to-empty ends the search in place; a reveal from the
-            // abandoned query must not keep mutating the tree.
+            // abandoned query must not keep mutating the tree, and an extension
+            // waiting on that reveal must not survive the narrowing that
+            // defined which rows it could cover.
             self.search = None;
             self.pending_reveal = None;
+            self.pending_extend = false;
+            self.view.end_extending();
             return;
         }
         self.rematch();
@@ -982,13 +1498,16 @@ impl App {
     /// mode restores the pre-search view); with nothing to dismiss, Esc
     /// quits — the picker without a pick, the tree like Ctrl-C.
     fn on_esc(&mut self) -> bool {
+        // Esc backs out one layer at a time (ADR 0012); the menu is now the
+        // outermost, so the order is menu → search → quit.
         match self.search.take() {
             Some(state) => {
                 // Both modes restore the pre-search view now: the picker keeps
                 // the tree, so it has a view worth putting back (ADR 0023).
-                self.view.selection = state.saved_selection;
+                self.view.restore_selection(state.saved_selection);
                 self.view.scroll = state.saved_scroll;
                 self.pending_reveal = None;
+                self.pending_extend = false;
                 false
             }
             None => {
@@ -1072,10 +1591,12 @@ impl App {
         }
     }
 
-    /// The forward anchor: the index of the first match at or after the current
-    /// selection in tree order, wrapping to the first match when none follows.
-    /// Falls back to the first match when there is no selection to anchor on.
-    fn anchor_index(&self, matches: &[Match]) -> usize {
+    /// How many matches sort before the current selection in tree order —
+    /// `0..=matches.len()`, **un-wrapped**. A selection sitting past the last
+    /// match yields `len`, which single stepping folds to the first match and
+    /// page stepping clamps to the last (task 081); the two need to tell those
+    /// apart, so the raw position lives here.
+    fn match_position(&self, matches: &[Match]) -> usize {
         if matches.is_empty() {
             return 0;
         }
@@ -1093,7 +1614,14 @@ impl App {
             .tree
             .node_at(selection)
             .is_some_and(|node| node.kind.is_dir());
-        let position = search::tree_order_position(matches, &rel, is_dir);
+        search::tree_order_position(matches, &rel, is_dir)
+    }
+
+    /// The forward anchor: the index of the first match at or after the current
+    /// selection in tree order, wrapping to the first match when none follows.
+    /// Falls back to the first match when there is no selection to anchor on.
+    fn anchor_index(&self, matches: &[Match]) -> usize {
+        let position = self.match_position(matches);
         // Past the last match, the anchor wraps to the first.
         if position == matches.len() {
             0
@@ -1102,32 +1630,35 @@ impl App {
         }
     }
 
-    /// Steps to the next or previous match **relative to the selection**, not
-    /// to a remembered pointer. `→`, `←`, and the mouse all move the selection
-    /// without going through here, so a stored index goes stale the moment one
-    /// of them is used — stepping would then swallow a keystroke or jump
-    /// backwards. Deriving the position each time cannot desynchronise.
-    fn cycle_match(&mut self, forward: bool) {
+    /// Steps `delta` matches **relative to the selection**, not to a remembered
+    /// pointer. `→`, `←`, and the mouse all move the selection without going
+    /// through here, so a stored index goes stale the moment one of them is
+    /// used — stepping would then swallow a keystroke or jump backwards.
+    /// Deriving the position each time cannot desynchronise.
+    ///
+    /// `wrap` distinguishes the two callers: a single step off the end has an
+    /// obvious destination and wraps, while a page-sized jump clamps — wrapping
+    /// one would teleport across the whole result set without saying so
+    /// (task 081). `Home`/`End` are a clamped step large enough to reach an edge.
+    fn step_match(&mut self, delta: isize, wrap: bool) {
         let matches = match &self.search {
             Some(state) if !state.matches.is_empty() => state.matches.clone(),
             _ => return,
         };
-        let n = matches.len();
-        // The first match at or after the selection, and whether that *is* the
-        // selected row.
-        let anchor = self.anchor_index(&matches);
-        let on_match = self
-            .view
-            .selection
-            .as_deref()
-            .is_some_and(|selected| selected == matches[anchor].entry.abs);
-        let next = if forward {
-            // Off a match, the anchor already sits after it.
-            if on_match { (anchor + 1) % n } else { anchor }
+        let n = matches.len() as isize;
+        let position = self.match_position(&matches);
+        let on_match = position < matches.len()
+            && self.view.selection.as_deref() == Some(matches[position].entry.abs.as_path());
+        // Off a match, `position` counts the matches *before* the selection, so
+        // the next one forward already sits at `position` and the previous at
+        // `position - 1`.
+        let target = position as isize + delta - isize::from(delta > 0 && !on_match);
+        let next = if wrap {
+            target.rem_euclid(n)
         } else {
-            (anchor + n - 1) % n
+            target.clamp(0, n - 1)
         };
-        self.reveal(matches[next].entry.abs.clone());
+        self.reveal(matches[next as usize].entry.abs.clone());
     }
 
     /// Expand ancestors toward `path` (requesting loads as needed) and focus
@@ -1232,6 +1763,7 @@ impl App {
         self.step_reveal();
         let rows = self.rows();
         self.rows_len = rows.len();
+        self.settle_extension();
         let viewport = render::tree_viewport_height(area(terminal));
         if !self.mode.is_pick() {
             self.reconcile_watches(&rows);
@@ -1244,13 +1776,25 @@ impl App {
         let bottom = self.bottom_line();
         let branch_axis = self.branch_axis();
         let theme = Theme::for_id(self.settings.theme);
-        let (view, settings) = (&self.view, &self.settings);
+        let area = area(terminal);
+        // The menu is laid out here and drawn from the same result, so the
+        // painted rows and the clickable ones cannot drift apart.
+        let menu_layout = self
+            .menu
+            .as_mut()
+            .map(|menu| menu.layout(area.x, area.y, area.width, area.height));
+        let (view, settings, menu) = (&self.view, &self.settings, &self.menu);
         let chrome = render::Chrome {
             settings,
             theme: &theme,
             branch_axis,
         };
-        terminal.draw(|frame| render::draw(frame, &rows, view, chrome, &bottom))?;
+        terminal.draw(|frame| {
+            render::draw(frame, &rows, view, chrome, &bottom);
+            if let (Some(menu), Some(layout)) = (menu, menu_layout) {
+                render::draw_menu(frame, menu, layout, &theme);
+            }
+        })?;
         Ok(())
     }
 
@@ -1608,9 +2152,13 @@ mod tests {
             restore_expanded: HashSet::new(),
             expansion_dirty: false,
             last_saved_expanded: Vec::new(),
-            picked: None,
+            picked: Vec::new(),
+            multi: false,
             input_paused: Arc::new(AtomicBool::new(false)),
             click_timer: input::ClickTimer::default(),
+            menu: None,
+            armed_right: None,
+            pending_extend: false,
             armed_press: None,
             last_rematch: None,
             rows_len: 0,
@@ -1727,6 +2275,145 @@ mod tests {
         );
     }
 
+    /// Task 081: a page-sized step through the matches clamps where a single
+    /// step wraps, so `PgDn` past the last match stops on it instead of
+    /// teleporting to the first.
+    #[test]
+    fn a_page_of_matches_clamps_where_a_single_step_wraps() {
+        let mut h = harness(Mode::Tree);
+        let names = ["a1.txt", "a2.txt", "a3.txt", "a4.txt"];
+        feed(&mut h.app, "/r", &names.map(|n| (n, NodeKind::File)));
+        h.app.index = Some(index_of(&names.map(|n| (n, false))));
+        h.app.search_push('a');
+        assert_eq!(h.app.search.as_ref().unwrap().matches.len(), 4);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a1.txt"))
+        );
+
+        // A page of two lands two matches on.
+        h.app.step_match(2, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a3.txt"))
+        );
+        // Past the end it stops on the last match rather than wrapping.
+        h.app.step_match(2, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a4.txt"))
+        );
+        h.app.step_match(2, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a4.txt"))
+        );
+        // A single step from the last match still wraps.
+        h.app.step_match(1, true);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a1.txt"))
+        );
+        // Backwards clamps the same way, and End/Home are a step big enough to
+        // reach an edge.
+        h.app.step_match(-2, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a1.txt"))
+        );
+        h.app.step_match(4, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a4.txt"))
+        );
+        h.app.step_match(-4, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a1.txt"))
+        );
+    }
+
+    /// The selection can sit *past* every match — `match_position` reports
+    /// `len` there, which single stepping folds to the first match and page
+    /// stepping must clamp to the last.
+    #[test]
+    fn stepping_from_past_the_last_match_wraps_but_paging_clamps() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a1.txt", NodeKind::File), ("zz.txt", NodeKind::File)],
+        );
+        h.app.index = Some(index_of(&[("a1.txt", false), ("zz.txt", false)]));
+        h.app.search_push('a');
+        assert_eq!(h.app.search.as_ref().unwrap().matches.len(), 1);
+        // Park the selection after the only match.
+        h.app.view.focus("/r/zz.txt".into());
+        h.app.step_match(3, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a1.txt"))
+        );
+    }
+
+    /// A `Shift` step through the matches extends over them. The reveal lands
+    /// over several frames, so the range is painted when the cursor settles —
+    /// once, and never again, or rows that were dim when the range was made
+    /// would join it as soon as the narrowing lifted.
+    #[test]
+    fn shift_stepping_the_matches_extends_over_them() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("a.txt", NodeKind::File),
+                ("b.txt", NodeKind::File),
+                ("c_a.txt", NodeKind::File),
+            ],
+        );
+        h.app.index = Some(index_of(&[
+            ("a.txt", false),
+            ("b.txt", false),
+            ("c_a.txt", false),
+        ]));
+        h.app.search_push('a');
+        assert_eq!(h.app.search.as_ref().unwrap().matches.len(), 2);
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/a.txt")));
+
+        let rows = h.app.rows();
+        h.app.view.begin_extending(&rows);
+        h.app.pending_extend = true;
+        h.app.step_match(1, true);
+        h.app.settle_extension();
+
+        let rows = h.app.rows();
+        let selected: Vec<_> = h
+            .app
+            .view
+            .selected(&rows)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        // b.txt sits between the two matches and is dim, so it is skipped.
+        assert_eq!(selected, ["a.txt", "c_a.txt"]);
+
+        // Backspacing the query away ends the search *and* the extension, so
+        // b.txt does not join the range the moment it becomes live again.
+        h.app.search_pop();
+        assert!(h.app.search.is_none());
+        let rows = h.app.rows();
+        h.app.view.reconcile(&rows, 10);
+        let after: Vec<_> = h
+            .app
+            .view
+            .selected(&rows)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(after, ["a.txt", "c_a.txt"]);
+    }
+
     #[test]
     fn cycle_wraps_and_survives_an_index_refresh() {
         let mut h = harness(Mode::Tree);
@@ -1742,14 +2429,14 @@ mod tests {
 
         // Stepping is expressed by where the selection lands, which is the only
         // thing the user can see — and the only thing that cannot go stale.
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/ab.txt"))
         );
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/a.txt")));
-        h.app.cycle_match(false);
+        h.app.step_match(-1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/ab.txt"))
@@ -1813,17 +2500,17 @@ mod tests {
         );
 
         // Stepping walks down the tree, then wraps.
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/mid.md"))
         );
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/zed.md"))
         );
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/src/deep.md"))
@@ -1956,7 +2643,7 @@ mod tests {
         // A fresh session: sync lands on row 0, and Enter picks the root —
         // the explicit "this dir" answer.
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r")]);
     }
 
     #[test]
@@ -1971,25 +2658,25 @@ mod tests {
         let rows = h.app.rows();
         let sub_idx = rows.iter().position(|r| r.name == "sub").unwrap();
         h.app.activate(&rows, Some((sub_idx, true)));
-        assert!(h.app.picked.is_none(), "chevron click browses");
+        assert!(h.app.picked.is_empty(), "chevron click browses");
         assert!(h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded);
         let rows = h.app.rows();
         h.app.activate(&rows, Some((sub_idx, false)));
-        assert!(h.app.picked.is_none(), "name click browses (collapses)");
+        assert!(h.app.picked.is_empty(), "name click browses (collapses)");
         assert!(!h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded);
 
         // File clicks pick.
         let rows = h.app.rows();
         let file_idx = rows.iter().position(|r| r.name == "file.txt").unwrap();
         h.app.activate(&rows, Some((file_idx, false)));
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/file.txt")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/file.txt")]);
 
         // Enter picks whatever is selected — a dir included.
-        h.app.picked = None;
+        h.app.picked.clear();
         let rows = h.app.rows();
         h.app.view.focus("/r/sub".into());
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/sub")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/sub")]);
     }
 
     #[test]
@@ -2060,17 +2747,17 @@ mod tests {
             h.app.resolve_click(&rows, 1, true, t0),
             NavEffect::None | NavEffect::RequestExpand(_)
         ));
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
         assert!(h.app.tree.node_at(Path::new("/r/src")).unwrap().expanded);
         // A completed double-click on a directory browses it too — only Enter
         // confirms a directory, so exploratory clicks never pick by accident.
         h.app
             .resolve_click(&rows, 1, false, t0 + Duration::from_millis(100));
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
         // Enter on the same row picks it.
         let rows = h.app.rows();
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/src")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/src")]);
     }
 
     #[test]
@@ -2101,7 +2788,7 @@ mod tests {
             Some(Path::new("/r/src/main.rs"))
         );
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/src/main.rs")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/src/main.rs")]);
     }
 
     /// Applies a glob filter to a harness, as `--filter`/`--filter-mode` do.
@@ -2148,12 +2835,12 @@ mod tests {
             effect,
             NavEffect::Message("src does not match the filter".into())
         );
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
 
         // Enter on the matching file picks it.
         h.app.view.focus("/r/notes.md".into());
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/notes.md")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/notes.md")]);
     }
 
     #[test]
@@ -2184,7 +2871,7 @@ mod tests {
         // The mouse cannot land on it, and it cannot be picked.
         h.app.resolve_click(&rows, dim, false, Instant::now());
         assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/c.md")));
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
     }
 
     #[test]
@@ -2238,7 +2925,7 @@ mod tests {
 
         h.app.view.focus("/r/src".into());
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/src")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/src")]);
     }
 
     #[test]
@@ -2372,7 +3059,7 @@ mod tests {
     #[test]
     fn stepping_follows_the_selection_after_an_arrow_or_a_click() {
         // Independent-review finding: `→`, `←` and clicks move the selection
-        // without going through cycle_match, so a remembered match pointer goes
+        // without going through step_match, so a remembered match pointer goes
         // stale — `↓` then either swallowed a keystroke or jumped backwards.
         let mut h = harness(Mode::Tree);
         feed(
@@ -2396,7 +3083,7 @@ mod tests {
         let rows = h.app.rows();
         h.app.view.on_right(&mut h.app.tree, &rows);
         assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/bb.md")));
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/cc.md")),
@@ -2408,7 +3095,7 @@ mod tests {
         let idx = rows.iter().position(|r| r.name == "aa.md").unwrap();
         h.app.resolve_click(&rows, idx, false, Instant::now());
         assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/aa.md")));
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/bb.md")),
@@ -2497,7 +3184,7 @@ mod tests {
 
         // A click on a dim row neither selects nor picks.
         h.app.resolve_click(&rows, dim, false, Instant::now());
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/keep.md")),
@@ -2519,7 +3206,7 @@ mod tests {
         assert!(h.app.view.sync(&rows).is_none());
         let effect = h.app.activate(&rows, None);
         assert_eq!(effect, NavEffect::Message("no matches".into()));
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
         // Independent-review finding: reporting "no selection" is not enough —
         // the field itself must be cleared, or the painter keeps drawing a
         // cursor on a dim row that answers to no key.
@@ -2777,8 +3464,12 @@ mod tests {
         );
         let rows = h.app.rows();
         press(&mut h.app, &rows, 2, false);
-        h.app
-            .resolve_release(&rows, Some((2, false)), Instant::now());
+        h.app.resolve_release(
+            &rows,
+            Some((2, false)),
+            input::ClickModifier::None,
+            Instant::now(),
+        );
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(rows[2].path.as_path())
@@ -2797,8 +3488,12 @@ mod tests {
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
         press(&mut h.app, &rows, 1, false);
-        h.app
-            .resolve_release(&rows, Some((2, false)), Instant::now());
+        h.app.resolve_release(
+            &rows,
+            Some((2, false)),
+            input::ClickModifier::None,
+            Instant::now(),
+        );
         assert_eq!(
             h.app.view.selection, before,
             "sliding off the pressed row revokes the click"
@@ -2813,7 +3508,8 @@ mod tests {
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
         press(&mut h.app, &rows, 1, false);
-        h.app.resolve_release(&rows, None, Instant::now());
+        h.app
+            .resolve_release(&rows, None, input::ClickModifier::None, Instant::now());
         assert_eq!(h.app.view.selection, before);
     }
 
@@ -2823,8 +3519,12 @@ mod tests {
         feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
-        h.app
-            .resolve_release(&rows, Some((1, false)), Instant::now());
+        h.app.resolve_release(
+            &rows,
+            Some((1, false)),
+            input::ClickModifier::None,
+            Instant::now(),
+        );
         assert_eq!(h.app.view.selection, before);
     }
 
@@ -2836,8 +3536,12 @@ mod tests {
         let rows = h.app.rows();
         let expanded = h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded;
         press(&mut h.app, &rows, 1, true);
-        h.app
-            .resolve_release(&rows, Some((1, false)), Instant::now());
+        h.app.resolve_release(
+            &rows,
+            Some((1, false)),
+            input::ClickModifier::None,
+            Instant::now(),
+        );
         assert_eq!(
             h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded,
             expanded,
@@ -2852,16 +3556,21 @@ mod tests {
         let rows = h.app.rows();
         let t0 = Instant::now();
         press(&mut h.app, &rows, 1, false);
-        h.app.resolve_release(&rows, Some((1, false)), t0);
-        assert!(h.app.picked.is_none(), "one click only selects");
+        h.app
+            .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
+        assert!(h.app.picked.is_empty(), "one click only selects");
         // A second press without its release must not activate.
         press(&mut h.app, &rows, 1, false);
-        assert!(h.app.picked.is_none());
-        h.app
-            .resolve_release(&rows, Some((1, false)), t0 + Duration::from_millis(100));
+        assert!(h.app.picked.is_empty());
+        h.app.resolve_release(
+            &rows,
+            Some((1, false)),
+            input::ClickModifier::None,
+            t0 + Duration::from_millis(100),
+        );
         assert_eq!(
-            h.app.picked.as_deref(),
-            Some(rows[1].path.as_path()),
+            h.app.picked.as_slice(),
+            [rows[1].path.clone()],
             "two complete clicks activate"
         );
     }
@@ -2873,15 +3582,17 @@ mod tests {
         let rows = h.app.rows();
         let t0 = Instant::now();
         press(&mut h.app, &rows, 1, false);
-        h.app.resolve_release(&rows, Some((1, false)), t0);
+        h.app
+            .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
         press(&mut h.app, &rows, 1, false);
         // Beyond the window: a slow second click is two singles, not a double.
         h.app.resolve_release(
             &rows,
             Some((1, false)),
+            input::ClickModifier::None,
             t0 + input::DOUBLE_CLICK_WINDOW + Duration::from_millis(1),
         );
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
     }
 
     #[test]
@@ -2895,16 +3606,25 @@ mod tests {
         let rows = h.app.rows();
         let t0 = Instant::now();
         press(&mut h.app, &rows, 1, false);
-        h.app.resolve_release(&rows, Some((1, false)), t0);
+        h.app
+            .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
         // A press released elsewhere is an intervening click: it resets.
         press(&mut h.app, &rows, 1, false);
-        h.app
-            .resolve_release(&rows, Some((2, false)), t0 + Duration::from_millis(50));
+        h.app.resolve_release(
+            &rows,
+            Some((2, false)),
+            input::ClickModifier::None,
+            t0 + Duration::from_millis(50),
+        );
         press(&mut h.app, &rows, 1, false);
-        h.app
-            .resolve_release(&rows, Some((1, false)), t0 + Duration::from_millis(100));
+        h.app.resolve_release(
+            &rows,
+            Some((1, false)),
+            input::ClickModifier::None,
+            t0 + Duration::from_millis(100),
+        );
         assert!(
-            h.app.picked.is_none(),
+            h.app.picked.is_empty(),
             "the abandoned click reset the double"
         );
     }
@@ -3016,7 +3736,7 @@ mod tests {
         h.app.index = Some(partial_index_of(&[("f3.txt", false), ("f4.txt", false)]));
         h.app.search_push('f');
         // Settle on the second of the two known matches.
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         let settled = h.app.view.selection.clone();
         assert!(settled.is_some());
 
@@ -3085,6 +3805,7 @@ mod tests {
 #[cfg(test)]
 mod ctl_tests {
     use birch_core::NodeKind;
+    use birch_core::git::parse_porcelain_v2;
     use birch_core::protocol::{PathForm, Request, SettingKey, Verb};
 
     use super::tests::{drain_expands, feed, harness};
@@ -3172,6 +3893,420 @@ mod ctl_tests {
         assert_eq!(
             h.app.ctl_response(request(Verb::GetRoot)).0.data.as_deref(),
             Some("/r")
+        );
+    }
+
+    /// Task 074: `data` keeps carrying exactly one path — the cursor — and
+    /// `paths` carries the whole selection beside it, so a client that has
+    /// never heard of `paths` is unaffected (ADR 0011, additive-only).
+    #[test]
+    fn get_path_reports_the_cursor_in_data_and_the_selection_in_paths() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("a.txt", NodeKind::File),
+                ("b.txt", NodeKind::File),
+                ("c.txt", NodeKind::File),
+            ],
+        );
+        h.app.view.focus("/r/a.txt".into());
+        let response = h.app.ctl_response(request(Verb::GetPath)).0;
+        assert_eq!(response.data.as_deref(), Some("a.txt"));
+        assert_eq!(response.paths, Some(vec!["a.txt".into()]));
+
+        // Extend upward, so the cursor is *not* the first selected path: `data`
+        // must still be the cursor, not `paths[0]`.
+        h.app.view.focus("/r/c.txt".into());
+        let rows = h.app.rows();
+        h.app.view.move_by_extending(&rows, -2);
+        let response = h.app.ctl_response(request(Verb::GetPath)).0;
+        assert_eq!(response.data.as_deref(), Some("a.txt"));
+        assert_eq!(
+            response.paths,
+            Some(vec!["a.txt".into(), "b.txt".into(), "c.txt".into()])
+        );
+    }
+
+    /// The picker without `--multi` is exactly what it always was: `Shift` with
+    /// a movement key is just that movement, and Enter confirms one path.
+    #[test]
+    fn the_picker_is_single_select_without_multi() {
+        for (multi, expected) in [(false, 1), (true, 3)] {
+            let mut h = harness(Mode::Pick);
+            h.app.multi = multi;
+            feed(
+                &mut h.app,
+                "/r",
+                &[
+                    ("a.txt", NodeKind::File),
+                    ("b.txt", NodeKind::File),
+                    ("c.txt", NodeKind::File),
+                ],
+            );
+            let rows = h.app.rows();
+            h.app.view.focus("/r/a.txt".into());
+            if multi {
+                h.app.view.move_by_extending(&rows, 2);
+            } else {
+                h.app.view.move_by(&rows, 2);
+            }
+            h.app.activate(&rows, None);
+            assert_eq!(h.app.picked.len(), expected, "multi = {multi}");
+        }
+    }
+
+    // ---- 071: the menu targets the selection ----
+
+    /// Right-clicking inside the selection leaves it alone and acts on all of
+    /// it; outside it, the selection collapses to that row first (ADR 0029).
+    #[test]
+    fn a_right_click_only_disturbs_the_selection_when_it_must() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("a.txt", NodeKind::File),
+                ("b.txt", NodeKind::File),
+                ("c.txt", NodeKind::File),
+            ],
+        );
+        let rows = h.app.rows();
+        h.app.view.focus("/r/a.txt".into());
+        h.app.view.move_by_extending(&rows, 1); // a.txt + b.txt
+
+        // Inside the selection: untouched, and the menu sees both rows.
+        h.app.view.on_single_click_if_unselected(&rows, 1);
+        assert_eq!(h.app.action_targets(&rows).len(), 2);
+
+        // Outside it: the selection collapses to the clicked row.
+        h.app.view.on_single_click_if_unselected(&rows, 3);
+        let targets = h.app.action_targets(&rows);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].path, PathBuf::from("/r/c.txt"));
+    }
+
+    /// The projection is what the menu contains: a file offers Open alone, a
+    /// directory offers Reveal Root Here as well, and a plural selection drops
+    /// the single-target action.
+    #[test]
+    fn the_menu_is_generated_from_what_is_available() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("src", NodeKind::Dir), ("a.txt", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+
+        h.app.view.focus("/r/src".into());
+        let targets = h.app.action_targets(&rows);
+        let context = ActionContext {
+            targets: &targets,
+            picker: false,
+        };
+        assert!(Action::Open.available(context));
+        assert!(Action::RevealRootHere.available(context));
+
+        h.app.view.focus("/r/a.txt".into());
+        let targets = h.app.action_targets(&rows);
+        let context = ActionContext {
+            targets: &targets,
+            picker: false,
+        };
+        assert!(Action::Open.available(context));
+        assert!(
+            !Action::RevealRootHere.available(context),
+            "a file cannot become a root"
+        );
+
+        h.app.view.focus("/r/src".into());
+        h.app.view.move_by_extending(&rows, 1);
+        let targets = h.app.action_targets(&rows);
+        let context = ActionContext {
+            targets: &targets,
+            picker: false,
+        };
+        assert!(
+            !Action::RevealRootHere.available(context),
+            "re-rooting is single-target"
+        );
+    }
+
+    /// The pane a synthetic right-click lands in. 40x20 is roomy enough that
+    /// the scrollbar only appears when there are more rows than fit.
+    fn pane() -> Rect {
+        Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        }
+    }
+
+    /// `hit_test` says `None` for the empty space below the last row, for the
+    /// scrollbar column, and for the status line alike. Only the first targets
+    /// the root; treating them alike destroyed a multi-selection when the
+    /// scrollbar was right-clicked.
+    #[test]
+    fn a_right_click_on_furniture_targets_nothing() {
+        let mut h = harness(Mode::Tree);
+        let names: Vec<_> = (0..40).map(|i| format!("f{i:02}.txt")).collect();
+        let entries: Vec<_> = names.iter().map(|n| (n.as_str(), NodeKind::File)).collect();
+        feed(&mut h.app, "/r", &entries);
+        let rows = h.app.rows();
+        let area = pane();
+
+        // A row: targeted by path, not by cell.
+        assert_eq!(
+            h.app.right_target(area, &rows, 4, 2),
+            Some(Some(rows[2].path.clone()))
+        );
+        // The same row, a column over: still the same target, so a pointer that
+        // drifts between press and release still opens the menu.
+        assert_eq!(
+            h.app.right_target(area, &rows, 5, 2),
+            h.app.right_target(area, &rows, 4, 2)
+        );
+        // The scrollbar column is inert for the right button as for the left.
+        assert_eq!(h.app.right_target(area, &rows, area.width - 1, 2), None);
+        // The status line is not the tree.
+        assert_eq!(h.app.right_target(area, &rows, 4, area.height - 1), None);
+        // A pane too small to draw a menu never opens one.
+        let tiny = Rect {
+            width: 2,
+            height: 2,
+            ..area
+        };
+        assert_eq!(h.app.right_target(tiny, &rows, 0, 0), None);
+    }
+
+    /// Below the last row targets the root — which is what makes the root menu
+    /// reachable with nothing useful selected.
+    #[test]
+    fn a_right_click_below_the_rows_targets_the_root() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        assert_eq!(h.app.right_target(pane(), &rows, 4, 8), Some(None));
+
+        h.app.view.focus("/r/a.txt".into());
+        assert!(h.app.open_menu(&rows, None, 4, 8));
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r")));
+    }
+
+    /// A row tracked in git but gone from disk has no available action, so no
+    /// menu opens — and the selection must not be destroyed on the way to
+    /// finding that out.
+    #[test]
+    fn a_right_click_on_a_missing_row_leaves_the_selection_alone() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
+        // Tracked in git, gone from disk: the row renders so the deletion is
+        // visible, but nothing can act on it.
+        h.app.git_state = Some(Arc::new(parse_porcelain_v2(
+            b"1 .D N... 100644 100644 000000 a a gone.rs\0",
+            Path::new("/r"),
+        )));
+        let rows = h.app.rows();
+        let missing = rows
+            .iter()
+            .position(|row| row.name == "gone.rs")
+            .expect("the deleted row renders");
+        assert!(rows[missing].missing);
+        h.app.view.focus("/r/a.txt".into());
+        assert_eq!(h.app.right_target(pane(), &rows, 4, missing as u16), None);
+        assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/a.txt")));
+    }
+
+    /// Picking from the menu must end the picker where it happened, not on
+    /// whatever key arrives next.
+    #[test]
+    fn open_from_the_menu_confirms_the_pick_immediately() {
+        let mut h = harness(Mode::Pick);
+        feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus("/r/a.txt".into());
+        assert!(
+            h.app
+                .open_menu(&rows, Some(PathBuf::from("/r/a.txt")), 4, 1)
+        );
+
+        assert_eq!(h.app.perform(Action::Open), None, "the picker confirms");
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/a.txt")]);
+        assert!(
+            h.app.finished(false),
+            "the picker exits on the pick, not one event later"
+        );
+    }
+
+    #[test]
+    fn open_from_the_menu_toggles_a_directory_and_reports_a_file() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("src", NodeKind::Dir), ("a.txt", NodeKind::File)],
+        );
+        h.app.view.focus("/r/src".into());
+        assert_eq!(h.app.perform(Action::Open), None);
+        assert!(
+            h.app.tree.node_at(Path::new("/r/src")).unwrap().expanded,
+            "Open toggles a directory, exactly as Enter does"
+        );
+
+        // On a file it hands the path back for the caller to open, rather than
+        // reaching for the terminal itself.
+        h.app.view.focus("/r/a.txt".into());
+        assert_eq!(h.app.perform(Action::Open), Some(PathBuf::from("/r/a.txt")));
+        assert!(
+            !h.app.finished(false),
+            "the tree does not exit on an action"
+        );
+    }
+
+    #[test]
+    fn reveal_root_here_re_roots_the_tree() {
+        let tmp = std::env::temp_dir().join(format!("birch-menu-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        let real = tmp.canonicalize().unwrap();
+
+        let mut h = harness(Mode::Tree);
+        h.app.root = real.clone();
+        h.app.tree = Tree::new(real.clone());
+        h.app.tree.set_expanded(&real, true);
+        h.app.tree.apply(TreeDelta::Snapshot {
+            dir: real.clone(),
+            entries: vec![birch_core::Entry {
+                name: "src".into(),
+                kind: NodeKind::Dir,
+            }],
+        });
+        h.app.view.focus(real.join("src"));
+
+        assert_eq!(h.app.perform(Action::RevealRootHere), None);
+        assert_eq!(h.app.root, real.join("src"));
+        assert!(h.app.status.is_empty(), "no error was reported");
+
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// Every branch of the menu's input handling, which two of this sprint's
+    /// bugs lived in.
+    #[test]
+    fn the_menu_handles_its_own_input() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("src", NodeKind::Dir)]);
+        let rows = h.app.rows();
+        let area = pane();
+        let open = |h: &mut App| {
+            h.view.focus("/r/src".into());
+            let rows = h.rows();
+            assert!(h.open_menu(&rows, Some(PathBuf::from("/r/src")), 2, 2));
+        };
+
+        // Arrows step entries and skip the rule between the groups; Home/End
+        // reach the ends.
+        open(&mut h.app);
+        assert_eq!(h.app.menu_input(area, InputAction::Down), MenuStep::Keep);
+        assert_eq!(
+            menu_ref(&h.app.menu).selected_action(),
+            Some(Action::RevealRootHere)
+        );
+        h.app.menu_input(area, InputAction::Up);
+        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(Action::Open));
+        h.app.menu_input(area, InputAction::End);
+        assert_eq!(
+            menu_ref(&h.app.menu).selected_action(),
+            Some(Action::RevealRootHere)
+        );
+        h.app.menu_input(area, InputAction::Home);
+        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(Action::Open));
+
+        // Enter invokes what is highlighted; Esc closes and changes nothing.
+        assert_eq!(
+            h.app.menu_input(area, InputAction::Enter),
+            MenuStep::Invoke(Action::Open)
+        );
+        assert_eq!(h.app.menu_input(area, InputAction::Esc), MenuStep::Close);
+
+        // A printable closes the menu and reaches the search — ADR 0008 has no
+        // exception for a menu.
+        assert_eq!(
+            h.app.menu_input(area, InputAction::Char('x')),
+            MenuStep::Search('x')
+        );
+
+        let layout = h
+            .app
+            .menu
+            .as_mut()
+            .unwrap()
+            .layout(area.x, area.y, area.width, area.height);
+
+        // Hover moves the highlight; a press inside keeps the menu, a press
+        // outside dismisses it.
+        h.app.menu_input(
+            area,
+            InputAction::Hover {
+                column: layout.x,
+                row: layout.y + 3,
+            },
+        );
+        assert_eq!(
+            menu_ref(&h.app.menu).selected_action(),
+            Some(Action::RevealRootHere)
+        );
+        assert_eq!(
+            h.app.menu_input(
+                area,
+                InputAction::Press {
+                    column: layout.x,
+                    row: layout.y + 1
+                }
+            ),
+            MenuStep::Keep
+        );
+        assert_eq!(
+            h.app.menu_input(
+                area,
+                InputAction::Press {
+                    column: layout.x + layout.width,
+                    row: layout.y
+                }
+            ),
+            MenuStep::Close
+        );
+
+        // A click on the rule between two groups does nothing. Before this was
+        // fixed it invoked whatever entry the highlight was standing on.
+        h.app.menu_input(area, InputAction::Home);
+        let separator = InputAction::Release {
+            column: layout.x,
+            row: layout.y + 2,
+            modifier: input::ClickModifier::None,
+        };
+        assert_eq!(h.app.menu_input(area, separator), MenuStep::Keep);
+        // ...while a click on an entry invokes that entry, not the highlight.
+        let entry = InputAction::Release {
+            column: layout.x,
+            row: layout.y + 3,
+            modifier: input::ClickModifier::None,
+        };
+        assert_eq!(
+            h.app.menu_input(area, entry),
+            MenuStep::Invoke(Action::RevealRootHere)
+        );
+
+        // A right-click elsewhere moves the menu rather than stranding it.
+        open(&mut h.app);
+        let elsewhere = InputAction::RightPress { column: 4, row: 1 };
+        assert_eq!(
+            h.app.menu_input(area, elsewhere),
+            MenuStep::Reopen(Some(Some(rows[1].path.clone())))
         );
     }
 

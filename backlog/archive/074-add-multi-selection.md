@@ -2,7 +2,7 @@
 type: Task
 title: Support multi-selection
 description: Finder-style selection of several rows with Shift and Ctrl, by mouse and keyboard - requested by the maintainer; currently forbidden by the scope fence, so it needs a fence amendment before design.
-status: Designed
+status: Done
 priority: medium
 ---
 
@@ -259,12 +259,3 @@ subtree's members; `selected()` returning tree order; `Esc` restoring the pre-se
 present and tree-ordered for one and for many; `--pick` without `--multi` still printing exactly one
 line. Hands-on: `vhs` frames for a multi-row selection under both `SelectionStyle`s (a visual change
 — required), and driven-binary checks of `--pick --multi`, `--print0`, and `ctl get-path --all`.
-
-### Open measurement
-
-Which modifiers actually reach a TUI is terminal behaviour, not birch's to decide: `Ctrl`-click may
-be translated to a right-click by macOS convention, and `Shift`-click is withheld by ghostty's
-default. `.scratchpad/mouse-probe.py` enables exactly the modes birch enables and reports what
-arrives. Neither answer changes the code — both modifiers are handled when present — but it tells
-the release notes which gestures a ghostty user will actually have. If `Ctrl`-click does not
-survive, `Alt`-click is added beside it as a second toggle modifier.

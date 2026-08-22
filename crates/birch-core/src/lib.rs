@@ -4,6 +4,7 @@
 //! This crate must build without ratatui — the crate boundary
 //! compiler-enforces the real-tree/render split (see `docs/design.md`).
 
+pub mod action;
 pub mod config;
 pub mod files_source;
 pub mod filter;
@@ -17,6 +18,7 @@ pub mod source;
 pub mod tree;
 pub mod watcher;
 
+pub use action::{Action, ActionContext, ActionTarget, MenuRow};
 pub use config::Config;
 pub use filter::{Filter, FilterMode};
 pub use git::{FileStatus, GitState};

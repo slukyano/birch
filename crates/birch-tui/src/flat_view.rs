@@ -5,7 +5,7 @@
 //! Pure logic — no ratatui types.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use birch_core::filter::FilterMode;
 use birch_core::git::GitState;
@@ -503,18 +503,45 @@ pub fn abbreviate_home(path: &std::path::Path, home: Option<&std::path::Path>) -
 
 #[derive(Default)]
 pub struct FlatView {
+    /// The cursor: the row the arrows move, the socket reports, persistence
+    /// restores, and a search anchors from. It is **always** part of the
+    /// selection, and empty only when no row can hold it (ADR 0023).
     pub selection: Option<PathBuf>,
     pub scroll: usize,
     /// Chains split on demand (ADR 0014): members of these paths render as
     /// individual rows instead of compacting. Session-local; collapsing a
     /// dir prunes it and everything under it, re-fusing the chain.
     pub split: HashSet<PathBuf>,
+    /// Rows selected **besides** the cursor (task 074); never contains it, so
+    /// the selection is `{cursor} ∪ extra` and the single-selection case is an
+    /// empty set. Pruned by `sync`: what cannot hold the selection leaves it.
+    extra: HashSet<PathBuf>,
+    /// Where a `Shift` range starts. A plain move resets it to the cursor; a
+    /// dimmed or vanished anchor falls back to the cursor when a range is
+    /// drawn, so there are no stale-anchor states.
+    anchor: Option<PathBuf>,
     /// Remembered position so a vanished selection lands somewhere sensible.
     last_index: usize,
     /// Set when the selection moves; the next `reconcile` scrolls it into
     /// view. Wheel scrolling leaves it unset, so free scrolling is never
     /// snapped back.
     follow: bool,
+    /// True while a range is being extended. Match stepping reaches its target
+    /// over several frames (ancestors have to be expanded and listed first), so
+    /// the range cannot be painted where the key was pressed; `reconcile`
+    /// repaints it from the anchor once the cursor has actually landed. Any
+    /// plain move clears it.
+    extending: bool,
+}
+
+/// The selection as it stood, so a layer that owns a restore point — a search
+/// being backed out of — can put the whole thing back rather than the cursor
+/// alone.
+#[derive(Default, Clone)]
+pub struct SelectionSnapshot {
+    cursor: Option<PathBuf>,
+    extra: HashSet<PathBuf>,
+    anchor: Option<PathBuf>,
 }
 
 /// The first live row at or after `from`, else the last live row before it.
@@ -525,6 +552,19 @@ fn nearest_live(rows: &[Row], from: usize) -> Option<usize> {
         .position(|r| r.live)
         .map(|offset| from + offset)
         .or_else(|| rows[..from].iter().rposition(|r| r.live))
+}
+
+/// The nearest row at or after `from` that is already part of the selection,
+/// else the nearest before it. Used when the cursor's row vanishes while other
+/// rows are still selected: rejoining the set is right, while landing on an
+/// unselected row would silently widen it.
+fn nearest_selected(rows: &[Row], from: usize, extra: &HashSet<PathBuf>) -> Option<usize> {
+    let selected = |row: &Row| row.live && extra.contains(&row.path);
+    rows[from..]
+        .iter()
+        .position(selected)
+        .map(|offset| from + offset)
+        .or_else(|| rows[..from].iter().rposition(selected))
 }
 
 /// The next live row after `from` in the given direction, if any.
@@ -547,6 +587,18 @@ impl FlatView {
     /// dimmed by the active narrowing (ADR 0023), in which case no cursor is
     /// drawn and `Enter` has nothing to act on.
     pub fn sync(&mut self, rows: &[Row]) -> Option<usize> {
+        // One pruning rule for the whole selection: what cannot hold it leaves
+        // it (task 074). A collapsed parent, a narrowing that dims a row, and a
+        // deleted file are the same case, not three. Costs nothing in the
+        // single-selection case, which is an empty set.
+        if !self.extra.is_empty() {
+            let live: HashSet<&PathBuf> = rows
+                .iter()
+                .filter(|row| row.live)
+                .map(|row| &row.path)
+                .collect();
+            self.extra.retain(|path| live.contains(path));
+        }
         if rows.is_empty() {
             self.selection = None;
             return None;
@@ -575,7 +627,12 @@ impl FlatView {
         // Either the selection vanished or it just went dim: re-home forward
         // from where it sat, so a narrowing moves the cursor the shortest way.
         let from = origin.unwrap_or(self.last_index).min(rows.len() - 1);
-        let Some(idx) = nearest_live(rows, from) else {
+        let landing = if self.extra.is_empty() {
+            nearest_live(rows, from)
+        } else {
+            nearest_selected(rows, from, &self.extra).or_else(|| nearest_live(rows, from))
+        };
+        let Some(idx) = landing else {
             // Nothing can hold the selection, so nothing *is* selected: the
             // field must be cleared, not merely reported empty, or the painter
             // keeps drawing a cursor on a dim row that answers to no key
@@ -588,26 +645,225 @@ impl FlatView {
     }
 
     /// Points the selection at a path (revealed by search or the socket) and
-    /// scrolls it into view on the next reconcile.
+    /// scrolls it into view on the next reconcile. A deliberate jump, so it
+    /// collapses the selection like any other plain move.
     pub fn focus(&mut self, path: PathBuf) {
+        if !self.extending {
+            self.extra.clear();
+            self.anchor = Some(path.clone());
+        }
+        self.extra.remove(&path);
         self.selection = Some(path);
         self.follow = true;
     }
 
-    fn select(&mut self, rows: &[Row], idx: usize) {
-        self.selection = Some(rows[idx].path.clone());
+    /// Starts a range extension that a later cursor landing completes. Match
+    /// stepping needs this: `focus` arrives frames after the keystroke, once
+    /// the reveal has expanded its way to the target.
+    ///
+    /// The anchor is resolved **now**, before the cursor moves. It can be stale
+    /// — `sync` re-homes a cursor without moving the anchor, and a query can dim
+    /// the row the anchor sits on — and an anchor that is gone or dim falls back
+    /// to where the cursor is standing, which is the only place a range can
+    /// start from. Resolving it afterwards would silently collapse the range to
+    /// the row the cursor had already moved to.
+    pub fn begin_extending(&mut self, rows: &[Row]) {
+        let usable = self
+            .anchor
+            .as_ref()
+            .is_some_and(|path| rows.iter().any(|row| &row.path == path && row.live));
+        if !usable {
+            self.anchor = self.selection.clone();
+        }
+        self.extending = true;
+    }
+
+    /// Ends any extension in progress, so the next cursor landing collapses the
+    /// selection to it.
+    pub fn end_extending(&mut self) {
+        self.extending = false;
+    }
+
+    /// Paints the range from the anchor to wherever the cursor now is, and ends
+    /// the extension. Match stepping reaches its target over several frames —
+    /// ancestors have to be expanded and listed first — so the caller completes
+    /// the extension here, **once**, when the cursor has actually landed. A
+    /// range that kept repainting would silently grow over rows that later
+    /// became live.
+    pub fn finish_extending(&mut self, rows: &[Row]) {
+        if self.extending {
+            self.select_range(rows, self.anchor.clone());
+            self.extending = false;
+        }
+    }
+
+    /// Collapses the selection to the cursor and re-anchors there — the rule
+    /// every unmodified movement obeys. Called before a plain move so it holds
+    /// even when the move goes nowhere (already at an edge, or `→` with nothing
+    /// left to reveal), which a collapse buried inside `select` cannot cover.
+    pub fn collapse_selection(&mut self) {
+        self.extra.clear();
+        self.anchor = self.selection.clone();
+        self.extending = false;
+    }
+
+    pub fn snapshot_selection(&self) -> SelectionSnapshot {
+        SelectionSnapshot {
+            cursor: self.selection.clone(),
+            extra: self.extra.clone(),
+            anchor: self.anchor.clone(),
+        }
+    }
+
+    pub fn restore_selection(&mut self, snapshot: SelectionSnapshot) {
+        self.selection = snapshot.cursor;
+        self.extra = snapshot.extra;
+        self.anchor = snapshot.anchor;
+        self.extending = false;
+    }
+
+    /// Every selected path in tree order — the order every consumer wants
+    /// (copy, the picker, the socket). The cursor is included.
+    pub fn selected(&self, rows: &[Row]) -> Vec<PathBuf> {
+        rows.iter()
+            .filter(|row| self.is_selected(&row.path))
+            .map(|row| row.path.clone())
+            .collect()
+    }
+
+    /// Whether a path is part of the selection — the cursor or one of the
+    /// rows selected around it.
+    pub fn is_selected(&self, path: &Path) -> bool {
+        self.selection.as_deref() == Some(path) || self.extra.contains(path)
+    }
+
+    /// How many rows are selected. `0` only when nothing can hold the
+    /// selection at all.
+    pub fn selection_len(&self) -> usize {
+        usize::from(self.selection.is_some()) + self.extra.len()
+    }
+
+    /// Points the cursor at `idx`, leaving the rest of the selection alone.
+    /// The invariant that `extra` never holds the cursor is restored here, so
+    /// no caller has to think about it.
+    fn set_cursor(&mut self, rows: &[Row], idx: usize) {
+        let path = rows[idx].path.clone();
+        self.extra.remove(&path);
+        self.selection = Some(path);
         self.last_index = idx;
         self.follow = true;
     }
 
-    /// Re-points the selection **without** asking the viewport to follow it.
-    /// Re-resolving a selection is bookkeeping, not movement: rows reshuffle
-    /// constantly as listings arrive and chains form, and treating that as
-    /// movement snaps a freely scrolled viewport back to the selection.
+    /// A plain move: the cursor goes to `idx`, the selection collapses to it,
+    /// and the range anchor resets there. Every ordinary movement — arrow,
+    /// page, edge, click — lands here, so "a plain move clears the set" is
+    /// enforced in one place rather than remembered at each call site.
+    fn select(&mut self, rows: &[Row], idx: usize) {
+        self.set_cursor(rows, idx);
+        self.extra.clear();
+        self.anchor = self.selection.clone();
+        self.extending = false;
+    }
+
+    /// Re-points the cursor **without** asking the viewport to follow it, and
+    /// without disturbing the rest of the selection. Re-resolving a selection
+    /// is bookkeeping, not movement: rows reshuffle constantly as listings
+    /// arrive and chains form, and treating that as movement snaps a freely
+    /// scrolled viewport back to the selection.
     fn select_resolved(&mut self, rows: &[Row], idx: usize) {
         let follow = self.follow;
-        self.select(rows, idx);
+        self.set_cursor(rows, idx);
         self.follow = follow;
+    }
+
+    /// Runs a cursor movement and then paints the range from the anchor to
+    /// wherever the cursor landed — the `Shift` form of any movement. The
+    /// movement itself collapses the selection and re-anchors, so the anchor is
+    /// put back afterwards and the set rebuilt around it.
+    fn extend_with(&mut self, rows: &[Row], movement: impl FnOnce(&mut Self, &[Row])) {
+        self.begin_extending(rows);
+        let anchor = self.anchor.clone();
+        movement(self, rows);
+        self.anchor = anchor;
+        self.extending = true;
+        self.select_range(rows, self.anchor.clone());
+    }
+
+    /// Selects every **live** row between `anchor` and the cursor, inclusive.
+    /// Dim rows inside the span are skipped rather than included: a range
+    /// cannot smuggle an inert row into the selection (ADR 0023). An anchor
+    /// that is gone or has gone dim resets to the cursor.
+    fn select_range(&mut self, rows: &[Row], anchor: Option<PathBuf>) {
+        let Some(cursor) = self.selection.clone() else {
+            return;
+        };
+        let Some(cursor_idx) = rows.iter().position(|row| row.path == cursor) else {
+            return;
+        };
+        let anchor_idx = anchor
+            .as_ref()
+            .and_then(|path| rows.iter().position(|row| &row.path == path))
+            .filter(|&idx| rows[idx].live)
+            .unwrap_or(cursor_idx);
+        self.anchor = Some(rows[anchor_idx].path.clone());
+        let (lo, hi) = (anchor_idx.min(cursor_idx), anchor_idx.max(cursor_idx));
+        self.extra = rows[lo..=hi]
+            .iter()
+            .filter(|row| row.live && row.path != cursor)
+            .map(|row| row.path.clone())
+            .collect();
+    }
+
+    /// `Shift` with a movement key: move the cursor by `delta` live rows and
+    /// extend the range from the anchor to where it lands.
+    pub fn move_by_extending(&mut self, rows: &[Row], delta: isize) {
+        self.extend_with(rows, |view, rows| view.move_by(rows, delta));
+    }
+
+    /// `Shift` with `Home`/`End`: run to an edge and extend to it.
+    pub fn move_to_edge_extending(&mut self, rows: &[Row], first: bool) {
+        self.extend_with(rows, |view, rows| view.move_to_edge(rows, first));
+    }
+
+    /// `Shift`-click: put the cursor on `idx` and extend the range to it from
+    /// the anchor. A dim row is inert, so it cannot end a range either.
+    pub fn extend_to(&mut self, rows: &[Row], idx: usize) {
+        if !rows.get(idx).is_some_and(|row| row.live) {
+            return;
+        }
+        self.extend_with(rows, |view, rows| view.select(rows, idx));
+    }
+
+    /// `Ctrl`-click: add the row to the selection or take it out, and re-anchor
+    /// there. Removing the cursor moves it to the first row still selected in
+    /// tree order; removing the *only* selected row does nothing, because the
+    /// cursor is always selected.
+    pub fn toggle_selected(&mut self, rows: &[Row], idx: usize) {
+        let Some(row) = rows.get(idx).filter(|row| row.live) else {
+            return;
+        };
+        let path = row.path.clone();
+        if self.selection.as_deref() == Some(path.as_path()) {
+            let Some(next) = rows
+                .iter()
+                .position(|row| row.path != path && self.extra.contains(&row.path))
+            else {
+                return; // the sole selection: the cursor has nowhere to go
+            };
+            self.set_cursor(rows, next);
+            self.anchor = self.selection.clone();
+        } else if self.extra.remove(&path) {
+            self.anchor = Some(path);
+        } else {
+            // The row joins the selection and becomes the cursor; the row the
+            // cursor was on stays selected, moving into `extra`.
+            if let Some(previous) = self.selection.take() {
+                self.extra.insert(previous);
+            }
+            self.set_cursor(rows, idx);
+            self.anchor = Some(path);
+        }
+        self.follow = true;
     }
 
     /// Moves the selection by `delta` **live** rows: dim rows are stepped over
@@ -628,6 +884,22 @@ impl FlatView {
             // Nowhere to go, but the keystroke still means "show me where I
             // am": scroll the selection back into view.
             self.follow = true;
+        }
+    }
+
+    /// Moves the selection to the first or last **live** row, and asks the
+    /// viewport to follow. Dim rows are never landed on (ADR 0023), so in a
+    /// free tree `first` reaches the root row — it is a real, selectable row
+    /// and the first one — while under a narrowing it reaches the first match.
+    /// A no-op when nothing can hold the selection at all.
+    pub fn move_to_edge(&mut self, rows: &[Row], first: bool) {
+        let target = if first {
+            rows.iter().position(|r| r.live)
+        } else {
+            rows.iter().rposition(|r| r.live)
+        };
+        if let Some(idx) = target {
+            self.select(rows, idx);
         }
     }
 
@@ -698,6 +970,15 @@ impl FlatView {
     /// A single click on a row's name: selection only — activation is the
     /// double-click's job (ADR 0015). A click on a dim row does nothing, like
     /// every other way of reaching one (ADR 0023).
+    /// A right-click's targeting rule: a click inside the selection leaves it
+    /// alone and the menu acts on all of it; a click outside collapses the
+    /// selection to that row first (ADR 0029).
+    pub fn on_single_click_if_unselected(&mut self, rows: &[Row], idx: usize) {
+        if !rows.get(idx).is_some_and(|row| self.is_selected(&row.path)) {
+            self.on_single_click(rows, idx);
+        }
+    }
+
     pub fn on_single_click(&mut self, rows: &[Row], idx: usize) {
         if rows.get(idx).is_some_and(|row| row.live) {
             self.select(rows, idx);
@@ -878,6 +1159,309 @@ mod tests {
 
     fn row_names(rows: &[Row]) -> Vec<&str> {
         rows.iter().map(|r| r.name.as_str()).collect()
+    }
+
+    /// Rows narrowed to the given absolute paths: everything else is dim, and
+    /// therefore inert (ADR 0023).
+    fn rows_matching(tree: &Tree, hits: &[&str]) -> Vec<Row> {
+        let matched: HashMap<PathBuf, Vec<u32>> = hits
+            .iter()
+            .map(|p| (PathBuf::from(p), Vec::new()))
+            .collect();
+        visible_rows(
+            tree,
+            &Settings::default(),
+            Decor {
+                matched: Some(&matched),
+                ..Decor::default()
+            },
+        )
+    }
+
+    // ---- 074: the selection is a set around the cursor ----
+
+    /// Six rows: r, src, lib.rs, main.rs, .env, readme.md.
+    fn selection_fixture() -> Tree {
+        let mut tree = fixture();
+        tree.set_expanded(Path::new("/r/src"), true);
+        tree
+    }
+
+    fn selected_names(view: &FlatView, rows: &[Row]) -> Vec<String> {
+        view.selected(rows)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn shift_movement_extends_a_range_and_a_plain_move_collapses_it() {
+        let tree = selection_fixture();
+        let rows = rows_plain(&tree);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        assert_eq!(selected_names(&view, &rows), ["r"]);
+
+        view.move_by_extending(&rows, 2);
+        assert_eq!(selected_names(&view, &rows), ["r", "src", "lib.rs"]);
+        // The anchor holds, so shrinking the range works as well as growing it.
+        view.move_by_extending(&rows, -1);
+        assert_eq!(selected_names(&view, &rows), ["r", "src"]);
+        // ...and it can be extended the other way past the anchor.
+        view.move_by_extending(&rows, -1);
+        assert_eq!(selected_names(&view, &rows), ["r"]);
+
+        // Any plain move collapses the set and re-anchors where it lands.
+        view.move_by_extending(&rows, 3);
+        assert_eq!(view.selection_len(), 4);
+        view.move_by(&rows, 1);
+        assert_eq!(selected_names(&view, &rows), [".env"]);
+        assert_eq!(view.selection_len(), 1);
+    }
+
+    #[test]
+    fn a_range_skips_dim_rows_rather_than_including_them() {
+        let tree = selection_fixture();
+        // src and .env are dim, so a range across them cannot pick them up.
+        let rows = rows_matching(&tree, &["/r", "/r/src/lib.rs", "/r/readme.md"]);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r")));
+        view.move_to_edge_extending(&rows, false);
+        assert_eq!(selected_names(&view, &rows), ["r", "lib.rs", "readme.md"]);
+    }
+
+    #[test]
+    fn toggling_adds_and_removes_and_never_empties_the_selection() {
+        let tree = selection_fixture();
+        let rows = rows_plain(&tree);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+
+        // Adding keeps the row the cursor was on and moves the cursor along.
+        view.toggle_selected(&rows, 3); // main.rs
+        assert_eq!(selected_names(&view, &rows), ["r", "main.rs"]);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/main.rs")));
+
+        view.toggle_selected(&rows, 5); // readme.md
+        assert_eq!(selected_names(&view, &rows), ["r", "main.rs", "readme.md"]);
+
+        // Toggling a non-cursor row out leaves the cursor alone.
+        view.toggle_selected(&rows, 3);
+        assert_eq!(selected_names(&view, &rows), ["r", "readme.md"]);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/readme.md")));
+
+        // Toggling the cursor out moves it to a row that is still selected.
+        view.toggle_selected(&rows, 5);
+        assert_eq!(selected_names(&view, &rows), ["r"]);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r")));
+
+        // The sole selection cannot be toggled away: the cursor is always
+        // selected, so there is no empty-with-a-cursor state to reach.
+        view.toggle_selected(&rows, 0);
+        assert_eq!(selected_names(&view, &rows), ["r"]);
+    }
+
+    /// A plain move that goes nowhere still collapses the selection. Without
+    /// this, `Shift+End` followed by a plain `↓` left the whole range selected
+    /// *and* the extension armed, so later rows kept joining it.
+    /// The anchor can be stale: `sync` re-homes a cursor without moving it, and
+    /// a query can dim the row it sits on. Resolving it *before* the cursor
+    /// moves is what keeps a range from silently collapsing to one row — the
+    /// failure that survived every unit test and only showed up in a real
+    /// terminal, where the index arrives after the query is typed.
+    #[test]
+    fn a_stale_anchor_falls_back_to_the_cursor_before_the_range_is_drawn() {
+        let tree = selection_fixture();
+        let rows = rows_plain(&tree);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        // The anchor points at the root, which the narrowing then dims.
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r")));
+
+        let narrowed = rows_matching(&tree, &["/r/src/lib.rs", "/r/readme.md"]);
+        view.sync(&narrowed); // re-homes the cursor to lib.rs; the anchor stays
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/lib.rs")));
+
+        // The real sequence: arm the extension, let a reveal move the cursor
+        // (`focus`, not `select`), then settle the range.
+        view.begin_extending(&narrowed);
+        view.focus(PathBuf::from("/r/readme.md"));
+        view.finish_extending(&narrowed);
+        assert_eq!(selected_names(&view, &narrowed), ["lib.rs", "readme.md"]);
+    }
+
+    #[test]
+    fn a_plain_move_that_hits_an_edge_still_collapses() {
+        let tree = selection_fixture();
+        let rows = rows_plain(&tree);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        view.move_to_edge_extending(&rows, false);
+        assert_eq!(view.selection_len(), 6);
+
+        view.collapse_selection();
+        view.move_by(&rows, 1); // already on the last row: nowhere to go
+        assert_eq!(view.selection_len(), 1);
+        assert_eq!(selected_names(&view, &rows), ["readme.md"]);
+    }
+
+    /// A range is painted once, when the cursor lands — never repeatedly. A
+    /// range that kept repainting grew over rows that were dim when it was made
+    /// and became live afterwards (a search backspaced away, or a watcher delta
+    /// inserting a row inside the span).
+    #[test]
+    fn a_finished_range_does_not_grow_when_dim_rows_come_back() {
+        let tree = selection_fixture();
+        let narrowed = rows_matching(&tree, &["/r", "/r/src/lib.rs"]);
+        let mut view = FlatView::default();
+        view.sync(&narrowed);
+        view.move_to_edge_extending(&narrowed, false);
+        // src and lib.rs's siblings are dim, so only the two matches are in.
+        assert_eq!(selected_names(&view, &narrowed), ["r", "lib.rs"]);
+
+        // The narrowing goes away: every row is live again, but the range was
+        // already settled and must not swallow the rows it skipped.
+        let rows = rows_plain(&tree);
+        view.sync(&rows);
+        view.reconcile(&rows, 10);
+        assert_eq!(selected_names(&view, &rows), ["r", "lib.rs"]);
+    }
+
+    #[test]
+    fn a_dim_row_can_neither_be_toggled_in_nor_end_a_range() {
+        let tree = selection_fixture();
+        let rows = rows_matching(&tree, &["/r", "/r/readme.md"]);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        view.toggle_selected(&rows, 3); // main.rs, dim
+        assert_eq!(selected_names(&view, &rows), ["r"]);
+        view.extend_to(&rows, 3);
+        assert_eq!(selected_names(&view, &rows), ["r"]);
+        // A live row still works both ways.
+        view.extend_to(&rows, 5);
+        assert_eq!(selected_names(&view, &rows), ["r", "readme.md"]);
+    }
+
+    #[test]
+    fn what_cannot_hold_the_selection_leaves_it() {
+        let mut tree = selection_fixture();
+        let rows = rows_plain(&tree);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        view.move_by_extending(&rows, 3);
+        assert_eq!(view.selection_len(), 4);
+
+        // Collapsing src takes its children out of the tree, and out of the
+        // selection with it — the cursor re-homes to the nearest live row.
+        tree.set_expanded(Path::new("/r/src"), false);
+        let rows = rows_plain(&tree);
+        view.sync(&rows);
+        // The cursor's own row went with them, so it rejoins the rows that are
+        // still selected instead of landing on one nobody chose.
+        assert_eq!(selected_names(&view, &rows), ["r", "src"]);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src")));
+
+        // A narrowing dims rows, and a dim row is inert, so it leaves too.
+        let narrowed = rows_matching(&tree, &["/r/readme.md"]);
+        view.sync(&narrowed);
+        assert_eq!(selected_names(&view, &narrowed), ["readme.md"]);
+    }
+
+    #[test]
+    fn the_selection_survives_a_search_it_is_backed_out_of() {
+        let tree = selection_fixture();
+        let rows = rows_plain(&tree);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        view.move_by_extending(&rows, 3);
+        let snapshot = view.snapshot_selection();
+
+        let narrowed = rows_matching(&tree, &["/r/readme.md"]);
+        view.sync(&narrowed);
+        assert_eq!(view.selection_len(), 1);
+
+        view.restore_selection(snapshot);
+        view.sync(&rows);
+        assert_eq!(
+            selected_names(&view, &rows),
+            ["r", "src", "lib.rs", "main.rs"]
+        );
+    }
+
+    // ---- 081: paging and the edge keys ----
+
+    #[test]
+    fn a_page_counts_live_rows_and_clamps_at_both_ends() {
+        let mut tree = fixture();
+        tree.set_expanded(Path::new("/r/src"), true);
+        let rows = rows_plain(&tree);
+        // /r, src, lib.rs, main.rs, .env, readme.md — .git is hidden.
+        assert_eq!(
+            row_names(&rows),
+            ["r", "src", "lib.rs", "main.rs", ".env", "readme.md"]
+        );
+        let mut view = FlatView::default();
+        view.sync(&rows);
+
+        view.move_by(&rows, 3);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/main.rs")));
+        // A page that runs past the end lands on the last row, not short of it.
+        view.move_by(&rows, 3);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/readme.md")));
+        view.move_by(&rows, -99);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r")));
+    }
+
+    #[test]
+    fn a_page_steps_over_dim_rows_without_landing_on_one() {
+        let mut tree = fixture();
+        tree.set_expanded(Path::new("/r/src"), true);
+        // Only the two source files match; everything else is dim and inert.
+        let rows = rows_matching(&tree, &["/r/src/lib.rs", "/r/src/main.rs"]);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/lib.rs")));
+        // A page's worth of movement counts targets, not screen lines, so it
+        // clamps on the last *live* row rather than the last row.
+        view.move_by(&rows, 4);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/main.rs")));
+    }
+
+    #[test]
+    fn the_edges_reach_the_first_and_last_live_row() {
+        let mut tree = fixture();
+        tree.set_expanded(Path::new("/r/src"), true);
+        let rows = rows_plain(&tree);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+
+        view.move_to_edge(&rows, false);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/readme.md")));
+        // The root is a real, selectable row, so Home reaches it — no special
+        // case, and no landing on the first child instead.
+        view.move_to_edge(&rows, true);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r")));
+
+        // Under a narrowing the edges are the first and last *match*.
+        let narrowed = rows_matching(&tree, &["/r/src/main.rs", "/r/readme.md"]);
+        view.move_to_edge(&narrowed, true);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/main.rs")));
+        view.move_to_edge(&narrowed, false);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/readme.md")));
+    }
+
+    #[test]
+    fn the_edges_are_a_no_op_when_nothing_is_live() {
+        let tree = fixture();
+        let rows = rows_matching(&tree, &["/r/nothing-here"]);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        assert_eq!(view.selection, None);
+        view.move_to_edge(&rows, true);
+        assert_eq!(view.selection, None);
+        view.move_to_edge(&rows, false);
+        assert_eq!(view.selection, None);
     }
 
     // ---- 078: the branch column ----

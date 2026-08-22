@@ -6,8 +6,8 @@ Modern interactive file tree for the terminal (Rust + ratatui).
 - **Dev basics — build/test commands, repository map, conventions, changelog, docs upkeep:**
   [`CONTRIBUTING.md`](CONTRIBUTING.md).
 - **Product & architecture spec (binding):** [`docs/design.md`](docs/design.md) — read it before
-  designing or implementing a feature. It defines the scope fence (an explicit feature whitelist
-  and a permanent out-of-scope list) and the load-bearing boundaries.
+  designing or implementing a feature. It defines the scope fence (the identity sentence, judged in
+  two halves) and the load-bearing boundaries.
 
 This file holds the rules an agent must follow that are not already in those docs.
 
@@ -25,8 +25,13 @@ Two boundaries (`docs/design.md`, Architecture) are load-bearing; everything els
 
 ## Constraints and gotchas
 
-- Scope is a whitelist. Reject features on the out-of-scope list in `docs/design.md` (multi-select,
-  verbs/modes, plugins, search-and-replace, drag-and-drop, copy/move files, …).
+- Scope is the identity, judged — there is no list to look a feature up in. Admit one only if the
+  IDEA / VS Code explorer panel has it **and** it survives a narrow terminal pane where every
+  printable belongs to search: both halves of the identity sentence in `docs/design.md`. A different
+  shape — miller columns, a verb language, vim modes — fails whichever neighbouring tool has it.
+  Prohibitions a section of `docs/design.md` states for itself (no plugins, no search-and-replace,
+  no mutation verbs on the socket) stand on their own terms. Unclear cases go to the maintainer;
+  "another file manager has it" is not an argument.
 - Printable characters are permanently reserved for fuzzy search — never add letter hotkeys. The
   context menu is the primary surface for actions.
 - Watch only expanded dirs; never auto-expand, search, or recursively watch ignored dirs.

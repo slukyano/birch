@@ -49,6 +49,15 @@ pub enum InputAction {
     Enter,
     Quit,
     Esc,
+    /// Move the selection a page up or down; the viewport follows (task 081).
+    PageUp,
+    PageDown,
+    /// Move the selection to the first or last reachable row.
+    Home,
+    End,
+    /// `Shift` with a movement key: move the cursor and extend the selection
+    /// from the anchor to where it lands (task 074).
+    Extend(Movement),
     /// A printable character — always search input, never a hotkey
     /// (ADR 0008).
     Char(char),
@@ -60,23 +69,112 @@ pub enum InputAction {
         column: u16,
         row: u16,
     },
-    /// Left button up: completes the armed click, or abandons it.
+    /// Left button up: completes the armed click, or abandons it. The
+    /// modifiers travel with the release, because that is where the click
+    /// takes effect.
     Release {
+        column: u16,
+        row: u16,
+        modifier: ClickModifier,
+    },
+    /// Right button down: arms the menu, opens nothing (ADR 0025 extended to
+    /// the right button — there is one click model, not one per button).
+    RightPress {
+        column: u16,
+        row: u16,
+    },
+    /// Right button up: opens the menu when it lands where the press did.
+    RightRelease {
+        column: u16,
+        row: u16,
+    },
+    /// Pointer motion. Only reported while the context menu is open, which is
+    /// the only time birch asks for motion tracking (task 090 would generalise
+    /// it to the tree).
+    Hover {
         column: u16,
         row: u16,
     },
     Redraw,
 }
 
+/// The cursor movements `Shift` can extend a selection along. `→` and `←` are
+/// absent on purpose: they are structural (expand, split, collapse), and a
+/// range has no meaning attached to them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Movement {
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+}
+
+/// What a modifier held during a click asks for (task 074). Whether a modifier
+/// arrives at all is the terminal's decision — many keep `Shift` for their own
+/// text selection while an application has the mouse — so birch handles what it
+/// is given and never claims a modifier back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ClickModifier {
+    #[default]
+    None,
+    /// Extend the selection from the anchor to this row.
+    Extend,
+    /// Add this row to the selection, or take it out.
+    Toggle,
+}
+
+/// `Shift` extends, `Ctrl` toggles, and `Shift` wins when both are held —
+/// extending is the more specific ask. `Alt` is left alone: it is the modifier
+/// terminals most often bind for themselves.
+fn click_modifier(modifiers: KeyModifiers) -> ClickModifier {
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        ClickModifier::Extend
+    } else if modifiers.contains(KeyModifiers::CONTROL) {
+        ClickModifier::Toggle
+    } else {
+        ClickModifier::None
+    }
+}
+
 pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
     match event {
         Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Some(InputAction::Extend(Movement::Up))
+            }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Some(InputAction::Extend(Movement::Down))
+            }
             KeyCode::Up => Some(InputAction::Up),
             KeyCode::Down => Some(InputAction::Down),
             KeyCode::Right => Some(InputAction::Right),
             KeyCode::Left => Some(InputAction::Left),
             KeyCode::Enter => Some(InputAction::Enter),
             KeyCode::Esc => Some(InputAction::Esc),
+            // Ctrl and Alt fall through to the plain action — `Ctrl-End` means
+            // the end everywhere else, and a key that silently does nothing is
+            // worse than one that does the obvious thing. `Shift` is excluded:
+            // it extends a selection (task 074).
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End => {
+                let movement = match key.code {
+                    KeyCode::PageUp => Movement::PageUp,
+                    KeyCode::PageDown => Movement::PageDown,
+                    KeyCode::Home => Movement::Home,
+                    _ => Movement::End,
+                };
+                Some(if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    InputAction::Extend(movement)
+                } else {
+                    match movement {
+                        Movement::PageUp => InputAction::PageUp,
+                        Movement::PageDown => InputAction::PageDown,
+                        Movement::Home => InputAction::Home,
+                        _ => InputAction::End,
+                    }
+                })
+            }
             KeyCode::Backspace => Some(InputAction::Backspace),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(InputAction::Quit)
@@ -99,6 +197,19 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
             // reports an ambiguous release still resolves correctly, because
             // at most one press is ever armed (ADR 0025).
             MouseEventKind::Up(MouseButton::Left) => Some(InputAction::Release {
+                column: mouse.column,
+                row: mouse.row,
+                modifier: click_modifier(mouse.modifiers),
+            }),
+            MouseEventKind::Down(MouseButton::Right) => Some(InputAction::RightPress {
+                column: mouse.column,
+                row: mouse.row,
+            }),
+            MouseEventKind::Up(MouseButton::Right) => Some(InputAction::RightRelease {
+                column: mouse.column,
+                row: mouse.row,
+            }),
+            MouseEventKind::Moved => Some(InputAction::Hover {
                 column: mouse.column,
                 row: mouse.row,
             }),
@@ -135,6 +246,85 @@ mod tests {
     }
 
     #[test]
+    fn the_navigation_keys_map_and_leave_shift_alone() {
+        for (code, action) in [
+            (KeyCode::PageUp, InputAction::PageUp),
+            (KeyCode::PageDown, InputAction::PageDown),
+            (KeyCode::Home, InputAction::Home),
+            (KeyCode::End, InputAction::End),
+        ] {
+            assert_eq!(
+                map_event(&Event::Key(KeyEvent::from(code)), true),
+                Some(action)
+            );
+            // Ctrl and Alt mean the same thing as the bare key.
+            for modifier in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+                assert_eq!(
+                    map_event(&Event::Key(KeyEvent::new(code, modifier)), true),
+                    Some(action),
+                    "{code:?} with {modifier:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shift_extends_and_ctrl_toggles_on_a_release() {
+        let at = |modifiers| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: 4,
+                row: 2,
+                modifiers,
+            })
+        };
+        let modifier_of = |ev| match map_event(&ev, true) {
+            Some(InputAction::Release { modifier, .. }) => modifier,
+            other => panic!("expected a release, got {other:?}"),
+        };
+        assert_eq!(modifier_of(at(KeyModifiers::NONE)), ClickModifier::None);
+        assert_eq!(modifier_of(at(KeyModifiers::SHIFT)), ClickModifier::Extend);
+        assert_eq!(
+            modifier_of(at(KeyModifiers::CONTROL)),
+            ClickModifier::Toggle
+        );
+        // Extending is the more specific ask, so it wins when both are held.
+        assert_eq!(
+            modifier_of(at(KeyModifiers::SHIFT | KeyModifiers::CONTROL)),
+            ClickModifier::Extend
+        );
+        // Alt is left to the terminal.
+        assert_eq!(modifier_of(at(KeyModifiers::ALT)), ClickModifier::None);
+    }
+
+    #[test]
+    fn shift_turns_a_movement_key_into_an_extension() {
+        for (code, movement) in [
+            (KeyCode::Up, Movement::Up),
+            (KeyCode::Down, Movement::Down),
+            (KeyCode::PageUp, Movement::PageUp),
+            (KeyCode::PageDown, Movement::PageDown),
+            (KeyCode::Home, Movement::Home),
+            (KeyCode::End, Movement::End),
+        ] {
+            assert_eq!(
+                map_event(&Event::Key(KeyEvent::new(code, KeyModifiers::SHIFT)), true),
+                Some(InputAction::Extend(movement)),
+                "{code:?}"
+            );
+        }
+        // The structural arrows have no range meaning, so Shift leaves them
+        // exactly as they are.
+        assert_eq!(
+            map_event(
+                &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT)),
+                true
+            ),
+            Some(InputAction::Right)
+        );
+    }
+
+    #[test]
     fn mouse_respects_toggle() {
         let ev = Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -164,17 +354,21 @@ mod tests {
         );
         assert_eq!(
             map_event(&at(MouseEventKind::Up(MouseButton::Left)), true),
-            Some(InputAction::Release { column: 7, row: 3 })
+            Some(InputAction::Release {
+                column: 7,
+                row: 3,
+                modifier: ClickModifier::None
+            })
         );
-        // Other buttons stay unmapped — the right button belongs to the
-        // context menu, which does not exist yet.
+        // The right button arms and completes the same way — one click model,
+        // not one per button (task 071).
         assert_eq!(
             map_event(&at(MouseEventKind::Down(MouseButton::Right)), true),
-            None
+            Some(InputAction::RightPress { column: 7, row: 3 })
         );
         assert_eq!(
             map_event(&at(MouseEventKind::Up(MouseButton::Right)), true),
-            None
+            Some(InputAction::RightRelease { column: 7, row: 3 })
         );
         // With the mouse disabled, neither reaches the app.
         assert_eq!(
