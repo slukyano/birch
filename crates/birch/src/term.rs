@@ -44,6 +44,20 @@ fn out(stderr: bool) -> TermOut {
 
 pub type Term = Terminal<CrosstermBackend<TermOut>>;
 
+/// Turns pointer-motion reporting (SGR 1003) on or off. Enabled only while the
+/// context menu is open: a menu that does not light the entry under the pointer
+/// cannot be used with a mouse, and the tree should not pay the event volume
+/// for a feature it does not have yet (task 090).
+///
+/// Written raw because crossterm's `EnableMouseCapture` bundles a fixed set of
+/// modes and offers no way to add this one on its own.
+pub fn set_motion_tracking(terminal: &mut Term, on: bool) {
+    let sequence: &[u8] = if on { b"\x1b[?1003h" } else { b"\x1b[?1003l" };
+    let writer = terminal.backend_mut();
+    let _ = writer.write_all(sequence);
+    let _ = writer.flush();
+}
+
 pub fn enter(mouse: bool, stderr: bool) -> io::Result<Term> {
     enable_raw_mode()?;
     let result = (|| {

@@ -14,6 +14,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use birch_core::action::{Action, ActionContext, ActionTarget};
 use birch_core::git::{self, GitCmd, GitEvent, GitState};
 use birch_core::protocol::{PathForm, Request, Response, SettingKey, SettingValue, Verb};
 use birch_core::search::{self, IndexCmd, IndexEvent, Match, SearchIndex, search};
@@ -24,6 +25,7 @@ use birch_core::{
 };
 use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row, SelectionSnapshot};
 use birch_tui::input::{self, InputAction};
+use birch_tui::menu::Menu;
 use birch_tui::render;
 use birch_tui::theme::Theme;
 use ratatui::layout::Rect;
@@ -121,6 +123,12 @@ struct App {
     multi: bool,
     input_paused: Arc<AtomicBool>,
     click_timer: input::ClickTimer,
+    /// The open context menu, if any. Holds ordering and a highlight; what its
+    /// entries *do* lives in the action layer (ADR 0029).
+    menu: Option<Menu>,
+    /// A right-press waiting for its release, and the tree row it landed on —
+    /// `None` for a press below the last row, which targets the root.
+    armed_right: Option<(u16, u16)>,
     /// The armed press: which row a left button-down landed on, and whether it
     /// landed in the chevron zone. A click completes only when the release
     /// matches both (ADR 0025). Keyed on the real path, so a snapshot arriving
@@ -209,6 +217,16 @@ where
     }
 }
 
+/// The open menu. Only called from paths that have just established there is
+/// one, so the panic is unreachable rather than a policy.
+fn menu_mut(menu: &mut Option<Menu>) -> &mut Menu {
+    menu.as_mut().expect("the menu is open")
+}
+
+fn menu_ref(menu: &Option<Menu>) -> &Menu {
+    menu.as_ref().expect("the menu is open")
+}
+
 pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathBuf>> {
     let AppWiring {
         root,
@@ -259,6 +277,8 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathB
         multi,
         input_paused,
         click_timer: input::ClickTimer::default(),
+        menu: None,
+        armed_right: None,
         armed_press: None,
         last_rematch: None,
         rows_len: 0,
@@ -447,6 +467,11 @@ impl App {
         }
         self.status.clear(); // status messages are transient
 
+        // The menu is a layer over the tree, so it sees input first (ADR 0029).
+        if self.menu.is_some() {
+            return self.handle_menu_input(terminal, events, action);
+        }
+
         // Search editing works the same in both modes.
         match action {
             InputAction::Char(c) => {
@@ -622,6 +647,23 @@ impl App {
                 );
                 self.resolve_release(&rows, hit, modifier, Instant::now())
             }
+            // The press only arms: the menu opens on the release, on the row
+            // the press started on — the left button's rule with no exception
+            // carved for the right one (ADR 0025, extended by ADR 0029).
+            InputAction::RightPress { column, row } => {
+                self.armed_right = Some((column, row));
+                NavEffect::None
+            }
+            InputAction::RightRelease { column, row } => {
+                let armed = self.armed_right.take();
+                if armed == Some((column, row)) {
+                    self.open_menu(terminal, &rows, column, row);
+                }
+                NavEffect::None
+            }
+            // Motion is only ever reported while the menu is open, and the
+            // menu handles its own input above.
+            InputAction::Hover { .. } => NavEffect::None,
             // Scrolling returned above, from the count-only fast path.
             InputAction::ScrollUp
             | InputAction::ScrollDown
@@ -1069,6 +1111,193 @@ impl App {
         }
     }
 
+    // ---- the context menu (071) and the action layer (ADR 0029) ----
+
+    /// The selection as the action layer sees it: paths in tree order, reduced
+    /// to the facts an availability rule uses.
+    fn action_targets(&self, rows: &[Row]) -> Vec<ActionTarget> {
+        let selected = self.view.selected(rows);
+        rows.iter()
+            .filter(|row| selected.contains(&row.path))
+            .map(|row| ActionTarget {
+                path: row.path.clone(),
+                is_dir: row.kind.is_dir(),
+                missing: row.missing,
+            })
+            .collect()
+    }
+
+    /// Opens the menu on a right-click. The selection is only disturbed when it
+    /// has to be: a click inside it acts on all of it, a click outside collapses
+    /// to that row first, and a click below the last row collapses to the root.
+    /// A dimmed row is inert here as everywhere (ADR 0023).
+    fn open_menu(&mut self, terminal: &mut term::Term, rows: &[Row], column: u16, row: u16) {
+        let hit = render::hit_test(
+            rows,
+            &self.view,
+            render::Chrome {
+                settings: &self.settings,
+                theme: &Theme::for_id(self.settings.theme),
+                branch_axis: self.branch_axis(),
+            },
+            area(terminal),
+            column,
+            row,
+        );
+        match hit {
+            Some((idx, _)) => {
+                let Some(hit_row) = rows.get(idx) else { return };
+                if !hit_row.live {
+                    return;
+                }
+                self.view.on_single_click_if_unselected(rows, idx);
+            }
+            // Below the last row: the root becomes the target, which is what
+            // makes "new file in the root" reachable with nothing useful
+            // selected.
+            None => {
+                if let Some(root_idx) = rows.iter().position(|r| r.path == self.root)
+                    && rows[root_idx].live
+                {
+                    self.view.on_single_click(rows, root_idx);
+                } else {
+                    return;
+                }
+            }
+        }
+        let rows = self.rows();
+        let targets = self.action_targets(&rows);
+        let context = ActionContext {
+            targets: &targets,
+            picker: self.mode.is_pick(),
+        };
+        if let Some(menu) = Menu::open(context, column, row) {
+            self.menu = Some(menu);
+            // A menu that does not light the entry under the pointer cannot be
+            // used with a mouse; the tree does not pay for this the rest of the
+            // time (task 090).
+            if self.settings.mouse {
+                term::set_motion_tracking(terminal, true);
+            }
+        }
+    }
+
+    fn close_menu(&mut self, terminal: &mut term::Term) {
+        if self.menu.take().is_some() && self.settings.mouse {
+            term::set_motion_tracking(terminal, false);
+        }
+    }
+
+    /// Input while the menu is open. Returns true when birch should quit.
+    fn handle_menu_input(
+        &mut self,
+        terminal: &mut term::Term,
+        events: &Receiver<AppEvent>,
+        action: InputAction,
+    ) -> bool {
+        let layout = {
+            let area = area(terminal);
+            let Some(menu) = self.menu.as_mut() else {
+                return false;
+            };
+            menu.layout(area.x, area.y, area.width, area.height)
+        };
+        let mut invoke = None;
+        match action {
+            InputAction::Esc => {
+                self.close_menu(terminal);
+                return false;
+            }
+            // Typing is always search (ADR 0008), with no exception for a menu:
+            // a layer that redefines the keyboard is how a modal language
+            // starts. The menu closes and the character reaches the query.
+            InputAction::Char(c) => {
+                self.close_menu(terminal);
+                self.search_push(c);
+                return false;
+            }
+            InputAction::Up => menu_mut(&mut self.menu).step(false),
+            InputAction::Down => menu_mut(&mut self.menu).step(true),
+            InputAction::Home => menu_mut(&mut self.menu).go_to_edge(true),
+            InputAction::End => menu_mut(&mut self.menu).go_to_edge(false),
+            InputAction::Enter => invoke = menu_mut(&mut self.menu).selected_action(),
+            InputAction::Hover { column, row } => {
+                if let Some(index) = menu_ref(&self.menu).hit(layout, column, row) {
+                    menu_mut(&mut self.menu).highlight(index);
+                }
+            }
+            InputAction::Press { column, row } => {
+                // A press outside closes on the spot: there is no armed-click
+                // dance to run for dismissal.
+                if !menu_ref(&self.menu).covers(layout, column, row) {
+                    self.close_menu(terminal);
+                }
+            }
+            InputAction::Release { column, row, .. } => {
+                if let Some(index) = menu_ref(&self.menu).hit(layout, column, row) {
+                    menu_mut(&mut self.menu).highlight(index);
+                    invoke = menu_mut(&mut self.menu).selected_action();
+                }
+            }
+            // Everything else — scrolling, resizes, the right button again —
+            // leaves the menu alone.
+            _ => {}
+        }
+        let Some(action) = invoke else {
+            return false;
+        };
+        self.close_menu(terminal);
+        self.perform(terminal, events, action)
+    }
+
+    /// The one way an action is performed. Hotkeys, the mouse, the menu, and
+    /// the socket all arrive here; nothing reaches an operation another way
+    /// (ADR 0029). Returns true when birch should quit.
+    fn perform(
+        &mut self,
+        terminal: &mut term::Term,
+        events: &Receiver<AppEvent>,
+        action: Action,
+    ) -> bool {
+        let rows = self.rows();
+        let targets = self.action_targets(&rows);
+        if !action.available(ActionContext {
+            targets: &targets,
+            picker: self.mode.is_pick(),
+        }) {
+            return false;
+        }
+        match action {
+            Action::Open => {
+                let effect = self.activate(&rows, None);
+                match effect {
+                    NavEffect::Open(path) => {
+                        if self.mode.is_pick() {
+                            self.picked = vec![path];
+                        } else if self.perform_open(terminal, events, &path) {
+                            return true;
+                        }
+                    }
+                    NavEffect::Message(message) => self.status = message,
+                    NavEffect::RequestExpand(path) => {
+                        let _ = self.source_cmds.send(SourceCmd::Expand(path));
+                    }
+                    NavEffect::None => {}
+                }
+                self.expansion_dirty = true;
+            }
+            Action::RevealRootHere => {
+                if let Some(target) = targets.first() {
+                    let response = self.set_root(target.path.clone());
+                    if !response.ok {
+                        self.status = response.error.unwrap_or_default();
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Why nothing happened when there is no selection to act on.
     fn nothing_selectable_message(&self) -> String {
         match &self.search {
@@ -1130,6 +1359,8 @@ impl App {
     /// mode restores the pre-search view); with nothing to dismiss, Esc
     /// quits — the picker without a pick, the tree like Ctrl-C.
     fn on_esc(&mut self) -> bool {
+        // Esc backs out one layer at a time (ADR 0012); the menu is now the
+        // outermost, so the order is menu → search → quit.
         match self.search.take() {
             Some(state) => {
                 // Both modes restore the pre-search view now: the picker keeps
@@ -1404,13 +1635,25 @@ impl App {
         let bottom = self.bottom_line();
         let branch_axis = self.branch_axis();
         let theme = Theme::for_id(self.settings.theme);
-        let (view, settings) = (&self.view, &self.settings);
+        let area = area(terminal);
+        // The menu is laid out here and drawn from the same result, so the
+        // painted rows and the clickable ones cannot drift apart.
+        let menu_layout = self
+            .menu
+            .as_mut()
+            .map(|menu| menu.layout(area.x, area.y, area.width, area.height));
+        let (view, settings, menu) = (&self.view, &self.settings, &self.menu);
         let chrome = render::Chrome {
             settings,
             theme: &theme,
             branch_axis,
         };
-        terminal.draw(|frame| render::draw(frame, &rows, view, chrome, &bottom))?;
+        terminal.draw(|frame| {
+            render::draw(frame, &rows, view, chrome, &bottom);
+            if let (Some(menu), Some(layout)) = (menu, menu_layout) {
+                render::draw_menu(frame, menu, layout, &theme);
+            }
+        })?;
         Ok(())
     }
 
@@ -1772,6 +2015,8 @@ mod tests {
             multi: false,
             input_paused: Arc::new(AtomicBool::new(false)),
             click_timer: input::ClickTimer::default(),
+            menu: None,
+            armed_right: None,
             armed_press: None,
             last_rematch: None,
             rows_len: 0,
@@ -3509,6 +3754,84 @@ mod ctl_tests {
             h.app.activate(&rows, None);
             assert_eq!(h.app.picked.len(), expected, "multi = {multi}");
         }
+    }
+
+    // ---- 071: the menu targets the selection ----
+
+    /// Right-clicking inside the selection leaves it alone and acts on all of
+    /// it; outside it, the selection collapses to that row first (ADR 0029).
+    #[test]
+    fn a_right_click_only_disturbs_the_selection_when_it_must() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("a.txt", NodeKind::File),
+                ("b.txt", NodeKind::File),
+                ("c.txt", NodeKind::File),
+            ],
+        );
+        let rows = h.app.rows();
+        h.app.view.focus("/r/a.txt".into());
+        h.app.view.move_by_extending(&rows, 1); // a.txt + b.txt
+
+        // Inside the selection: untouched, and the menu sees both rows.
+        h.app.view.on_single_click_if_unselected(&rows, 1);
+        assert_eq!(h.app.action_targets(&rows).len(), 2);
+
+        // Outside it: the selection collapses to the clicked row.
+        h.app.view.on_single_click_if_unselected(&rows, 3);
+        let targets = h.app.action_targets(&rows);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].path, PathBuf::from("/r/c.txt"));
+    }
+
+    /// The projection is what the menu contains: a file offers Open alone, a
+    /// directory offers Reveal Root Here as well, and a plural selection drops
+    /// the single-target action.
+    #[test]
+    fn the_menu_is_generated_from_what_is_available() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("src", NodeKind::Dir), ("a.txt", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+
+        h.app.view.focus("/r/src".into());
+        let targets = h.app.action_targets(&rows);
+        let context = ActionContext {
+            targets: &targets,
+            picker: false,
+        };
+        assert!(Action::Open.available(context));
+        assert!(Action::RevealRootHere.available(context));
+
+        h.app.view.focus("/r/a.txt".into());
+        let targets = h.app.action_targets(&rows);
+        let context = ActionContext {
+            targets: &targets,
+            picker: false,
+        };
+        assert!(Action::Open.available(context));
+        assert!(
+            !Action::RevealRootHere.available(context),
+            "a file cannot become a root"
+        );
+
+        h.app.view.focus("/r/src".into());
+        h.app.view.move_by_extending(&rows, 1);
+        let targets = h.app.action_targets(&rows);
+        let context = ActionContext {
+            targets: &targets,
+            picker: false,
+        };
+        assert!(
+            !Action::RevealRootHere.available(context),
+            "re-rooting is single-target"
+        );
     }
 
     #[test]

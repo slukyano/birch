@@ -7,10 +7,13 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Clear, Padding, Paragraph};
+
+use birch_core::action::MenuRow;
 
 use crate::flat_view::{FlatView, Row};
 use crate::icons;
+use crate::menu::{Menu, MenuLayout};
 use crate::theme::{BadgeStyle, FolderStyle, GuideStyle, SelectionStyle, Theme};
 
 pub const INDENT_WIDTH: u16 = 2;
@@ -184,6 +187,92 @@ fn layout(area: Rect, chrome: Chrome, rows: usize) -> Layout {
 /// The tree gets everything above the one-line status bar.
 pub fn tree_viewport_height(area: Rect) -> usize {
     area.height.saturating_sub(1) as usize
+}
+
+/// Paints the context menu over the tree (ADR 0029). Drawn last, into the same
+/// `Rect`, so the tree beneath is not re-laid-out and `hit_test` geometry is
+/// untouched. The caller lays the menu out and passes the result in, so the
+/// painted rows and the clickable ones are the same rows by construction.
+///
+/// The menu is a bordered box rather than a coloured panel: the border is what
+/// separates it from the tree, so no theme has to grow a menu background.
+pub fn draw_menu(frame: &mut Frame, menu: &Menu, layout: MenuLayout, theme: &Theme) {
+    if layout.width < 3 || layout.height < 3 {
+        return;
+    }
+    let area = Rect {
+        x: layout.x,
+        y: layout.y,
+        width: layout.width,
+        height: layout.height,
+    };
+    let canvas = match theme.palette.app_bg {
+        Some(bg) => Style::default().bg(bg),
+        None => Style::default(),
+    };
+    let content = layout.content_width();
+    let lines: Vec<Line<'static>> = menu
+        .rows()
+        .iter()
+        .enumerate()
+        .skip(menu.scroll())
+        .take(layout.visible_rows())
+        .map(|(index, row)| match row {
+            MenuRow::Separator => Line::from(Span::styled(
+                "\u{2500}".repeat(content),
+                Style::default().fg(theme.palette.guide),
+            )),
+            MenuRow::Entry(action) => {
+                let accel = if layout.accelerators {
+                    action.accelerator().unwrap_or("")
+                } else {
+                    ""
+                };
+                let room = content.saturating_sub(accel.chars().count());
+                let label = truncate(action.label(), room);
+                let pad = room.saturating_sub(label.chars().count());
+                let mut style = canvas;
+                if index == menu.highlighted() {
+                    style = style.bg(theme.palette.selection_bg);
+                    if let Some(fg) = theme.palette.selection_fg {
+                        style = style.fg(fg);
+                    }
+                }
+                let mut spans = vec![
+                    Span::styled(label, style),
+                    Span::styled(" ".repeat(pad), style),
+                ];
+                if !accel.is_empty() {
+                    spans.push(Span::styled(
+                        accel.to_string(),
+                        style.add_modifier(Modifier::DIM),
+                    ));
+                }
+                Line::from(spans)
+            }
+        })
+        .collect();
+    // Clear whatever the tree painted here first: the box is opaque.
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_style(Style::default().fg(theme.palette.guide))
+        .padding(Padding::horizontal(1))
+        .style(canvas);
+    frame.render_widget(Paragraph::new(lines).block(block).style(canvas), area);
+}
+
+/// Cuts a label to `width` columns, marking the cut with `…` so a truncated
+/// entry never reads as a different, shorter action.
+fn truncate(label: &str, width: usize) -> String {
+    if label.chars().count() <= width {
+        return label.to_string();
+    }
+    if width <= 1 {
+        return "\u{2026}".repeat(width);
+    }
+    let mut out: String = label.chars().take(width - 1).collect();
+    out.push('\u{2026}');
+    out
 }
 
 pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bottom_line: &str) {

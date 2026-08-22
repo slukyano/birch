@@ -49,7 +49,7 @@ birch ctl <verb> [...]    # control a running instance (see Control socket)
 - **Compact folders** (VS Code-style): pure single-child dir chains render as one row, `a/b/c`, separators dimmed. Rules:
   - A chain compacts iff each dir's only *visible* child is a single dir (visibility-aware: hidden-file settings affect tree shape).
   - Compaction is a **render-layer transform**. The real tree, watcher, git, search, and ops all speak real paths; compaction happens at paint time only.
-  - Keyboard treats a chain as one node (the tail) — until `→` on an expanded chain **splits** it into individual member rows; collapsing a member re-fuses the chain from that point (ADR 0014). Splits are session-local. Mouse segment-clicks target individual dirs (matters for context-menu scoping).
+  - Keyboard treats a chain as one node (the tail) — until `→` on an expanded chain **splits** it into individual member rows; collapsing a member re-fuses the chain from that point (ADR 0014). Splits are session-local. Every surface resolves a chain row to its **tail** — selection, `get-path`, the copy variants, and the context menu alike; reaching an intermediate directory means splitting the chain first (ADR 0029).
   - F2 on a chain inline-edits the full `a/b/c` fragment (this is rename-with-path reused).
   - Live updates split/fuse chains in place as children appear/disappear.
 
@@ -93,7 +93,7 @@ Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and 
 | `←` on dir / into parent | Collapse / jump to parent |
 | `Enter` on file | Open (see Opening files). **Enter always opens — never contextual.** |
 | any printable char | Fuzzy filename search |
-| `Esc` | Back out: clear search / close menu; at top level, quit |
+| `Esc` | Back out one layer: close the context menu, else clear the search; at top level, quit (ADR 0012) |
 | `F2` | Rename (inline) |
 | `Delete` | Delete (to trash) |
 | `Ctrl-N` | New file / dir |
@@ -109,25 +109,27 @@ Printable characters are permanently reserved for search — no letter hotkeys, 
 - **A click completes on release** (ADR 0025): the press arms, and the click acts only when the button is released on the same row, in the same zone. Releasing anywhere else abandons it, so a click can be revoked by sliding off. The double-click window measures release to release — two complete clicks.
 - **`Ctrl`-click toggles** a row in or out of the selection; **`Shift`-click** extends the range from the anchor to it. Both are handled whenever the terminal forwards the modifier — many terminals keep `Shift` for their own text selection while an application has the mouse (ghostty's `mouse-shift-capture` defaults to `false`), and birch never claims it back. `Shift` with the arrow keys always works.
 - **Scroll wheel**: `--scroll-lines` rows per tick, 3 by default (1–10).
-- **Hover highlight** (SGR 1003 motion tracking).
-- **Right-click → context menu** (keyboard works inside it: arrows/Enter/Esc):
+- **Hover highlight** (SGR 1003 motion tracking): on inside the context menu, which is the only place motion is asked for today. Hover in the tree is `090-hover-highlight-in-the-tree`.
+- **Right-click → context menu**, which is a **projection of the action layer** (ADR 0029), not an authored list: actions declare a label, an accelerator, and an availability rule over the selection, and the menu draws whichever are available. **An action that does not exist yet is absent, not greyed** — the menu grows as its contents land, and no task that adds an action edits the menu. Its full intended shape, in groups (a separator is drawn between any two groups that survive):
 
 ```
-Open
-Open with…            (later)
+Open                  ↵
+Open with…            (034)
 ──────────
-New File…             ^N
-Rename…               F2
-Delete                ⌦
+New File…             ^N     (029)
+Rename…               F2     (029)
+Delete                ⌦      (029)
 ──────────
-Copy Name
-Copy Relative Path    ^⇧C
-Copy Absolute Path
+Copy Name                    (028)
+Copy Relative Path    ^⇧C    (028)
+Copy Absolute Path           (028)
 ──────────
 Reveal Root Here
 ```
 
-- Right-click below the tree → menu targeting the root.
+- **Opening it follows the left button's rule**: a right-press arms, and the menu opens on the release on the row the press started on (ADR 0025, extended). Keyboard works inside it — `↑`/`↓` step entries and skip separators, `Home`/`End` reach the ends, `Enter` invokes, `Esc` closes. **A printable character closes the menu and types into the search**: ADR 0008 has no exception, and a layer that redefines the keyboard is how a modal language starts.
+- **It targets the selection, and only disturbs it when it must**: a right-click inside the current selection acts on all of it, a click outside collapses the selection to that row first, and a click below the last row collapses to the root. A dimmed row is inert here as everywhere (ADR 0023).
+- **Geometry**: drawn as a bordered box over the tree, shifted left to fit at the right edge (rather than flipped, which in a narrow pane throws it across the whole width), flipped upward at the bottom, and clamped-and-scrolled in a pane too short to hold it. Accelerators are dropped before labels ellipsise.
 - **Text-selection trade-off**: mouse capture disables native drag-to-copy. Mitigations: most terminals pass `Shift`-drag through to their own selection while an application holds the mouse (documented in `--help`) — it is the terminal's decision, not birch's; Copy Path in the menu covers the real use case.
 - No drag-and-drop. Inside tmux, mouse requires tmux mouse mode (FAQ, not a bug).
 

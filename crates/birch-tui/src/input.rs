@@ -77,6 +77,24 @@ pub enum InputAction {
         row: u16,
         modifier: ClickModifier,
     },
+    /// Right button down: arms the menu, opens nothing (ADR 0025 extended to
+    /// the right button — there is one click model, not one per button).
+    RightPress {
+        column: u16,
+        row: u16,
+    },
+    /// Right button up: opens the menu when it lands where the press did.
+    RightRelease {
+        column: u16,
+        row: u16,
+    },
+    /// Pointer motion. Only reported while the context menu is open, which is
+    /// the only time birch asks for motion tracking (task 090 would generalise
+    /// it to the tree).
+    Hover {
+        column: u16,
+        row: u16,
+    },
     Redraw,
 }
 
@@ -182,6 +200,18 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
                 column: mouse.column,
                 row: mouse.row,
                 modifier: click_modifier(mouse.modifiers),
+            }),
+            MouseEventKind::Down(MouseButton::Right) => Some(InputAction::RightPress {
+                column: mouse.column,
+                row: mouse.row,
+            }),
+            MouseEventKind::Up(MouseButton::Right) => Some(InputAction::RightRelease {
+                column: mouse.column,
+                row: mouse.row,
+            }),
+            MouseEventKind::Moved => Some(InputAction::Hover {
+                column: mouse.column,
+                row: mouse.row,
             }),
             MouseEventKind::ScrollUp => Some(InputAction::ScrollUp),
             MouseEventKind::ScrollDown => Some(InputAction::ScrollDown),
@@ -330,15 +360,15 @@ mod tests {
                 modifier: ClickModifier::None
             })
         );
-        // Other buttons stay unmapped — the right button belongs to the
-        // context menu, which does not exist yet.
+        // The right button arms and completes the same way — one click model,
+        // not one per button (task 071).
         assert_eq!(
             map_event(&at(MouseEventKind::Down(MouseButton::Right)), true),
-            None
+            Some(InputAction::RightPress { column: 7, row: 3 })
         );
         assert_eq!(
             map_event(&at(MouseEventKind::Up(MouseButton::Right)), true),
-            None
+            Some(InputAction::RightRelease { column: 7, row: 3 })
         );
         // With the mouse disabled, neither reaches the app.
         assert_eq!(

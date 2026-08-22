@@ -934,6 +934,15 @@ impl FlatView {
     /// A single click on a row's name: selection only — activation is the
     /// double-click's job (ADR 0015). A click on a dim row does nothing, like
     /// every other way of reaching one (ADR 0023).
+    /// A right-click's targeting rule: a click inside the selection leaves it
+    /// alone and the menu acts on all of it; a click outside collapses the
+    /// selection to that row first (ADR 0029).
+    pub fn on_single_click_if_unselected(&mut self, rows: &[Row], idx: usize) {
+        if !rows.get(idx).is_some_and(|row| self.is_selected(&row.path)) {
+            self.on_single_click(rows, idx);
+        }
+    }
+
     pub fn on_single_click(&mut self, rows: &[Row], idx: usize) {
         if rows.get(idx).is_some_and(|row| row.live) {
             self.select(rows, idx);

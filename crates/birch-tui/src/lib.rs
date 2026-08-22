@@ -8,6 +8,7 @@
 pub mod flat_view;
 pub mod icons;
 pub mod input;
+pub mod menu;
 pub mod render;
 pub mod theme;
 
