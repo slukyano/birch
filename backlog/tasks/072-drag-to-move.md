@@ -13,7 +13,9 @@ the way Finder and the IDE explorers do.
 
 [The design doc](../../docs/design.md) forbids this three times over, and the fence is binding:
 
-- **"Permanently out of scope: … drag-and-drop move"** (the identity section's whitelist);
+- **"No move (see below)"** (File operations) — no longer a permanent scope prohibition since
+  [ADR 0028](../../docs/adr/0028-the-identity-is-the-scope-fence.md), but still the section's own
+  stated decision, argued from rename-to-a-path covering the 80%;
 - **"No drag-and-drop"** (the mouse section);
 - **"Exactly four: rename, delete, new file, new dir. No move (see below), no copy"** (file
   operations), where the rationale is that *rename-to-a-path* already covers move: editing a row

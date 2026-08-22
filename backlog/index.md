@@ -39,9 +39,9 @@ okf_version: "0.1"
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
 * [Show how much a filter actually matches](tasks/070-show-filter-match-counts.md) - Per-folder or total match counts, so a filtered browse knows where to go.
 * [Add the context menu](tasks/071-add-context-menu.md) - The right-click action surface, split out of the 0.5 bundle so it can land before the ops it hosts.
-* [Move files and folders by dragging](tasks/072-drag-to-move.md) - Drag a row onto a directory to move it; blocked on a scope-fence amendment, since drag-and-drop move is on the permanent out-of-scope list.
+* [Move files and folders by dragging](tasks/072-drag-to-move.md) - Drag a row onto a directory to move it; arguable since ADR 0028, against the File operations section's own "No move".
 * [Show a hotkey reference](tasks/073-hotkey-reference.md) - In-app discoverability: always-on footer vs. summoned overlay, with `?` unavailable (printables are search).
-* [Support multi-selection](tasks/074-add-multi-selection.md) - Shift/Ctrl range and toggle, mouse and keyboard; blocked on a scope-fence amendment, since multi-select is on the permanent out-of-scope list.
+* [Support multi-selection](tasks/074-add-multi-selection.md) - Shift/Ctrl range and toggle, mouse and keyboard; admitted by ADR 0028.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
 

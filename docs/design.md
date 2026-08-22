@@ -6,11 +6,12 @@ Lean and beautiful interactive file tree for the terminal.
 
 birch does exactly what an IDE file tree does, and nothing else.
 
-It is the IDEA / VS Code explorer panel, living in a terminal pane next to your editor. That sentence is both the feature list and the scope fence:
+It is the IDEA / VS Code explorer panel, living in a terminal pane next to your editor. That sentence is the whole scope fence, and it has two halves that must both hold ([ADR 0028](adr/0028-the-identity-is-the-scope-fence.md)):
 
-**In scope (the whitelist):** tree view, icons, git status, open file, fuzzy find, content search, rename / delete / new file / new dir, copy name/path, compact folders, live updates, mouse.
+- **The panel's job.** Does the IDEA / VS Code explorer panel do this? The panel is a tree of files plus the operations reached from a row — not a file manager, not a diff viewer, not a shell, not a second navigation model.
+- **The pane's medium.** Does it survive a narrow terminal pane where every printable character belongs to search ([ADR 0008](adr/0008-q-types-into-search.md))? A feature needing width, a second axis, a modal state, or a letter hotkey fails here however ordinary it is inside an IDE.
 
-**Permanently out of scope:** miller columns, verbs or command language, vim modes, multi-select, bulk operations, copy/duplicate files, drag-and-drop move, search-and-replace, archive browsing, permissions editing, plugin API.
+**What that is today:** tree view, icons, git status, open file, fuzzy find, content search, multi-select, rename / delete / new file / new dir, copy name/path, compact folders, live updates, mouse. That line describes the current surface; it gates nothing. A feature absent from it is not thereby out of scope — the identity decides. Prohibitions stated by a section below (no plugins, no search-and-replace, no mutation verbs on the socket, no copy, no move) stand on their own terms.
 
 Contrast with neighbors:
 
@@ -174,7 +175,7 @@ Content search swaps the pane's **source** (see Architecture): same tree widget,
 
 ## File operations
 
-Exactly four: **rename, delete, new file, new dir.** No move (see below), no copy, no multi-select, no op-history/undo stack.
+Exactly four: **rename, delete, new file, new dir.** No move (see below), no copy, no op-history/undo stack. Whether an operation accepts one target or several is settled per operation, when that operation is designed.
 
 - **Rename (F2)**: inline row editing — the selected row becomes a text input (never a bottom command bar; prompt bars grow verbs). Editing to a path (`../other/name.ts`) silently performs a move — rename-with-path is the 80% of "move" without the complexity cliff. Plain `rename()`; no `git mv` magic (git rename detection handles it).
 - **New file (Ctrl-N)**: inline input in the target dir. `foo/bar/baz.ts` creates intermediate dirs; trailing slash (`foo/`) creates a dir. One binding, three ops (VS Code's trick). On a compacted chain, creates in the tail. No dedicated new-dir key.
@@ -235,7 +236,7 @@ A running birch instance exposes a Unix domain socket; `birch ctl` (a subcommand
 - **Host-dictated rendezvous**: `birch --socket <path>` binds exactly there, skipping default addressing (`--no-socket` skips binding entirely). A host that spawns birch shouldn't have to *discover* what it created — it picks the path and already knows it. `birch ctl --socket <path>` targets it. This is the load-bearing flag for host adapters.
 - **Lifecycle**: graceful exit on SIGHUP/SIGTERM (host closes pane → clean death, socket unlinked).
 - **Protocol**: newline-delimited JSON request/response with a `v` field. **Additive-only evolution; clients tolerate unknown fields.** Host adapters may be maintained out-of-tree on their own release cadence — the protocol is a public API commitment, not an internal detail.
-- **Verbs** (closed set — the whitelist applies to the protocol too):
+- **Verbs** (a closed set, for its own reason: the protocol is a public API and stays small):
 
 | Verb | Effect |
 |---|---|
