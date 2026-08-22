@@ -75,10 +75,6 @@ birch uses [Conventional Commits](https://www.conventionalcommits.org/):
 `<type>(<scope>): <subject>` — types `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`,
 `style`; scope by crate or component (`core`, `tui`, `ctl`, …), omitted for cross-cutting changes.
 
-**No links into a private tool or session** — a chat transcript, an agent run, an internal tracker.
-The history is public and permanent, and a URL that resolves for one person is noise for everyone
-else. Whatever a link would have explained belongs in the message.
-
 ## Changelog
 
 User-visible changes get a [`CHANGELOG.md`](CHANGELOG.md) entry under the matching
