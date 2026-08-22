@@ -21,7 +21,10 @@ Three facts constrain the shape, and each was measured rather than assumed:
 
 1. **`trash`'s restore is not available on macOS.** `os_limited::restore_all` is compiled only for
    Windows and Freedesktop systems (`trash-5.2.6/src/lib.rs:345`). So the one operation with a way
-   back is the one birch cannot drive programmatically.
+   back is the one birch cannot drive programmatically. (Since ADR 0031's amendment of the same
+   date, Finder's Put Back is gone too, so on macOS the way back is opening the trash and dragging
+   the file out. The status line therefore says *where* the files went, which is the only actionable
+   thing there is to say.)
 2. **`Ctrl-Z` is free.** Raw mode runs `cfmakeraw`, which clears `ISIG`, so `Ctrl-Z` has never
    suspended birch and never could. `093-undo-a-file-operation` worried that binding it would cost
    the user suspend; it costs nothing. It is a control character, so [ADR 0008](0008-q-types-into-search.md)

@@ -28,9 +28,10 @@ serde_json = "1"
 toml = "1"
 signal-hook = "0.3"
 unicode-segmentation = "1"
-# Delete goes to the platform trash (ADR 0031): macOS records put-back
-# information and the XDG spec wants .trashinfo records and a per-mount trash
-# directory, none of which a rename into a folder reproduces.
+# Delete goes to the platform trash (ADR 0031): the XDG spec wants .trashinfo
+# records and a per-mount trash directory, which a rename into a folder does
+# not reproduce. On macOS birch selects `DeleteMethod::NsFileManager` over the
+# crate's Finder default — see `ops::trash_context`.
 trash = { version = "5", default-features = false }
 
 # The profile that 'dist' will build with

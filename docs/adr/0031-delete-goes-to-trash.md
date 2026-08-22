@@ -38,9 +38,19 @@ reaches.**
 3. **Confirmation is `Enter` / `Esc`** on the status line, never `y`/`n`
    ([ADR 0030](0030-the-inline-editor-is-the-only-mode.md)).
 4. **Trash is provided by the `trash` crate**, not by moving files into a folder. The platform
-   behaviour is not a rename: macOS records put-back information, and the XDG specification requires
-   `.trashinfo` records and a per-mount trash directory with its own collision rules. Reimplementing
-   that is a way to lose files quietly.
+   behaviour is not a rename: the XDG specification requires `.trashinfo` records and a per-mount
+   trash directory with its own collision rules. Reimplementing that is a way to lose files quietly.
+
+   *Amended 2026-08-22:* **on macOS birch selects `DeleteMethod::NsFileManager`**, not the crate's
+   `Finder` default. Finder's method runs `osascript -e 'tell application "Finder" to delete …'`,
+   which plays Finder's delete sound on every call and needs Automation permission. That permission
+   can be **denied**, and a denial surfaces as a trash failure — pushing the user into decision 5's
+   "the trash could not take it, delete permanently?" prompt for a reason that has nothing to do
+   with the trash. The cost is Finder's **Put Back**: a trashed file still sits in the trash and can
+   be dragged out, but no longer remembers where it came from. This paragraph originally cited
+   put-back as a reason to prefer the crate; that reason is withdrawn, the XDG half stands, and
+   [ADR 0033](0033-undo-is-a-session-stack.md) is where the consequence lands — delete was already
+   the step undo could not reverse, and it is now the step nothing reverses automatically.
 5. **Trash failure is never silently upgraded to a permanent delete.** When trash is unavailable the
    user is told, and the permanent delete happens only on their confirmation.
 

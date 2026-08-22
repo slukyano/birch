@@ -5332,6 +5332,12 @@ mod ctl_tests {
 
     /// A scratch tree on the real filesystem, since operations write to it.
     fn scratch(tag: &str) -> PathBuf {
+        // No test reaches the developer's real trash. Installed here rather
+        // than per-test because every test that trashes builds a scratch
+        // directory first, so future ones inherit it.
+        birch_core::ops::redirect_trash_for_tests(
+            std::env::temp_dir().join(format!("birch-test-trash-{}", std::process::id())),
+        );
         let path = std::env::temp_dir().join(format!(
             "birch-app-{}-{tag}-{:?}",
             std::process::id(),

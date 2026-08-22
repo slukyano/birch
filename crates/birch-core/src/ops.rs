@@ -142,12 +142,72 @@ pub struct Removal {
 /// Moves paths to the platform trash. Stops at the first failure — a partial
 /// delete is reported, never silent.
 pub fn trash(paths: &[PathBuf]) -> Removal {
+    if let Some(directory) = REDIRECT.get() {
+        return remove_each(paths, |path| move_aside(path, directory));
+    }
+    let context = trash_context();
     remove_each(paths, |path| {
         // Every failure here means the same thing to a user: the trash could
         // not take it, so the only way to remove it is permanent — which is a
         // question for them, not a fallback to take silently (ADR 0031).
-        trash::delete(path).map_err(|e| OpError::NoTrash(e.to_string()))
+        context
+            .delete(path)
+            .map_err(|e| OpError::NoTrash(e.to_string()))
     })
+}
+
+/// The trash to delete into.
+///
+/// On macOS the crate's default is `DeleteMethod::Finder`, which runs
+/// `osascript -e 'tell application "Finder" to delete …'`. That costs two
+/// things: Finder plays its delete sound on every call, and driving Finder
+/// needs Automation permission — which the user can **deny**, and a denial
+/// turns into a `NoTrash` failure, pushing birch into the "the trash could not
+/// take it, delete permanently?" prompt for a reason that has nothing to do
+/// with the trash.
+///
+/// `NsFileManager` is silent, faster, and needs no permission. What it gives up
+/// is Finder's **Put Back**, which is the only restore a macOS user has —
+/// `trash`'s own `os_limited::restore_all` is not compiled for macOS at all.
+/// A trashed file still sits in the trash and can be dragged out; it no longer
+/// remembers where it came from. ADR 0031 records that trade.
+fn trash_context() -> trash::TrashContext {
+    #[allow(unused_mut)]
+    let mut context = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        context.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    context
+}
+
+/// Sends removals to `directory` instead of the platform trash.
+///
+/// **For tests only.** A suite that deletes into the developer's real trash
+/// fills it a few files per run and — before the switch above — played a sound
+/// each time. Set once per test binary; later calls are ignored.
+pub fn redirect_trash_for_tests(directory: PathBuf) {
+    let _ = REDIRECT.set(directory);
+}
+
+static REDIRECT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The redirect's stand-in for trashing: move the path into `directory`,
+/// suffixing on collision so a suite that trashes the same name twice does not
+/// fail on the second.
+fn move_aside(path: &Path, directory: &Path) -> Result<(), OpError> {
+    fs::create_dir_all(directory)?;
+    let name = display(path);
+    let mut target = directory.join(&name);
+    for n in 1.. {
+        if !occupied(&target) {
+            break;
+        }
+        target = directory.join(format!("{name}.{n}"));
+    }
+    fs::rename(path, &target)?;
+    Ok(())
 }
 
 /// Deletes paths outright, with no way back. Reached only after an explicit
@@ -294,6 +354,12 @@ mod tests {
                 std::process::id(),
                 std::thread::current().id()
             ));
+            // No test reaches the developer's real trash. Installed here rather
+            // than per-test because every test that trashes builds a scratch
+            // directory first, so future ones inherit it.
+            redirect_trash_for_tests(
+                std::env::temp_dir().join(format!("birch-test-trash-{}", std::process::id())),
+            );
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).unwrap();
             Dir(path)

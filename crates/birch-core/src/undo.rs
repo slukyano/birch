@@ -172,6 +172,9 @@ mod tests {
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("birch-undo-{tag}-{}", std::process::id()));
+        ops::redirect_trash_for_tests(
+            std::env::temp_dir().join(format!("birch-test-trash-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
