@@ -117,8 +117,8 @@ depends on nothing here, and `029`, which the rest of the sprint waits on.
 trigger at all — a gap that grows with every action this sprint adds to it.
 
 Branch `sprint/021`, base `main`. **Nine implementation commits** on top of the approved design
-merge, plus this close-out. 328 tests pass; `cargo fmt --check` and
-`cargo clippy --all-targets -- -D warnings` clean.
+merge; the rest of the branch is close-out bookkeeping. 328 tests pass, up from 316 before the
+review round; `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
 
 **This is the sprint where birch began writing to the user's filesystem.** Everything before it read
 the tree, painted it, and reported paths; a wrong answer was wrong on screen. From here a wrong
@@ -134,7 +134,7 @@ Weight is size **and** importance **and** future impact together.
 | `072-drag-to-move` | **major** | Drag a row onto a directory to move it. A drag is a click that left its row, so ADR 0025's model already tracks it with no threshold. Delivered as designed — and spring-loading turned out to need no carve-out, because the never-auto-expand rule is scoped to *ignored* directories and search already auto-expands. |
 | `028-add-copy-paths` | **mid** | Copy name, root-relative path, or absolute path, newline-joined in tree order for several rows. One clipboard transport per copy, chosen the way Neovim chooses it. Two changes from what `docs/design.md` sketched: the three-tier fallback cannot be built, because OSC 52 is a one-way write with no failure to react to; and `Ctrl-Shift-C` is **dropped**, being the same byte as `Ctrl-C`, which quits. |
 | `092-open-the-menu-from-the-keyboard` | **mid** | `Shift-F10` and the `Menu` key open the menu at the cursor row without disturbing the selection. **Added to scope after the sprint opened**, once it was clear the menu had exactly one trigger and a host that swallows right-click made it unreachable. |
-| `034-add-open-with` | **minor** | `Open` names the program it will run, and `Open system` hands the path to the desktop's handler. Rewritten during design from the task's "Open with…" framing: the config array and the submenu were both dropped in favour of two rows and **no config surface at all**. |
+| `034-add-open-with` | **minor** | `Open` names the program it will run, and `Open system` hands the path to the desktop's handler — absent when the resolved command already is that handler, on a multi-row selection, and in `--pick`. Rewritten during design from the task's "Open with…" framing: the config array and the submenu were both dropped in favour of two rows and **no config surface at all**. |
 
 All five were delivered; none was dropped or reduced.
 
@@ -186,7 +186,7 @@ below came to be fixed rather than shipped.
 10. A trailing space hid a trailing slash, giving a file where a directory was asked for.
 11. A phantom row one line past the viewport left the editor **open and invisible** — exactly what ADR 0030 admits the mode for not being.
 12. A whitespace-only name was dropped in silence.
-13. Native clipboard children were never reaped.
+13. Native clipboard children were never reaped, so `pbcopy` and `wl-copy` piled up as zombies. Waiting inline would hang on `xclip`, which stays resident to serve the X11 selection, so a thread does the waiting.
 14. Two dead parameters kept only to satisfy a signature.
 
 # Verification
@@ -203,7 +203,7 @@ Hands-on, all run and observed:
 - **`029`** — on disk: `Ctrl-N` made nested intermediates and a trailing-slash directory, `F2` renamed, and `Delete` asked before acting — `Esc` left the file alone, `Enter` moved it to the trash.
 - **`034`** — a scripted open command wrote a marker file when the menu's first row was invoked. `Open system` is **not** driven: it would launch a real application on the machine running the check.
 - **`072`** — real SGR press, drag and release moved `a.txt` into `sub`; a second drag onto a directory already holding that name was refused with the file left where it was.
-- **`vhs` frames** of the two new visual states, which caught two things the driven checks could not: the inline edit field sat two columns left of every name around it, and the delete confirmation was too long for an 80-column pane, let alone the 30-column one birch is designed for.
+- **`vhs` frames** of the two new visual states, which caught two things the driven checks could not: the inline edit field sat two columns left of every name around it, and the delete confirmation overran an 80-column pane entirely. The prompt was shortened and front-loaded — but at roughly 50 columns it **still truncates in the 30-column pane birch is designed for**, which no wording fixes: a file name, a question, and a key do not fit. What survives the cut is the question, which is the half that matters.
 
 # Remaining limitations and highlights
 
@@ -213,6 +213,8 @@ Hands-on, all run and observed:
 - **Edge auto-scroll during a drag needs the pointer to keep moving.** Holding still at the pane's edge does not keep scrolling, because motion events only arrive when the pointer moves; a timer would be machinery this event loop needs for nothing else.
 - **A drop refuses rather than offering a new name.** `029`'s editor makes that possible later; a drop that sometimes opens a text field is a surprising drop.
 - **Which mouse modifiers arrive is the terminal's decision.** ghostty's `mouse-shift-capture` defaults to `false`, so `Shift`-click never reaches birch there. Nothing in the behaviour depends on the answer.
+- **birch gained a runtime dependency**, `trash`, which pulls `objc2`/`windows` bindings into the lockfile. It is new supply-chain surface in `birch-core` — the crate whose whole discipline is building without ratatui — accepted because the platform trash is not a rename into a folder and reimplementing the XDG spec is a way to lose files quietly (ADR 0031).
+- **`Delete` now acts while a search is open.** It deletes the selected match, where forward-`Delete` was previously inert. That follows from `Delete` acting on the selection, but it is a destructive key that used to do nothing.
 - **A very large copy may be truncated.** Terminals and tmux cap OSC 52 payloads, and birch neither chunks nor warns — consistent with the design's position that nothing here can know a copy failed.
 
 # Session log

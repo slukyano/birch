@@ -144,8 +144,15 @@ fn spawn(text: &str, tool: NativeTool) -> io::Result<()> {
         stdin.write_all(text.as_bytes())?;
     }
     drop(child.stdin.take());
-    // `xclip` forks and stays resident to serve the X11 selection, so waiting
-    // for it would hang; the write is what matters and it has landed.
+    // Waiting here would hang: `xclip` forks and stays resident to serve the
+    // X11 selection. But nothing reaps a `Child` on drop either, so `pbcopy`
+    // and `wl-copy` — which exit at once — would pile up as zombies for the
+    // life of the process. A thread does the waiting instead: it costs nothing
+    // for a gesture a person performs by hand, and it outlives only as long as
+    // the tool itself does.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 
