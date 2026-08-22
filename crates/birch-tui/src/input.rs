@@ -61,6 +61,13 @@ pub enum InputAction {
     /// Open the context menu at the cursor row (task 092). The right button is
     /// the other way in, and the only one before this.
     OpenMenu,
+    /// Rename the selection inline (`F2`).
+    Rename,
+    /// Create a file or directory inline (`Ctrl-N`); a trailing slash makes a
+    /// directory, so one binding covers three operations.
+    NewFile,
+    /// Move the selection to the trash (`Delete`).
+    Delete,
     /// A printable character — always search input, never a hotkey
     /// (ADR 0008).
     Char(char),
@@ -188,6 +195,16 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
                 Some(InputAction::OpenMenu)
             }
             KeyCode::Menu => Some(InputAction::OpenMenu),
+            KeyCode::F(2) => Some(InputAction::Rename),
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputAction::NewFile)
+            }
+            // Forward delete. On an Apple keyboard the key labelled *Delete*
+            // sends Backspace, which belongs to the search, so the gesture
+            // there is `Fn`-`Delete`; binding Backspace to a destructive action
+            // whose meaning depended on whether a search was open would be a
+            // contextual hazard, and the menu is the discoverable path.
+            KeyCode::Delete => Some(InputAction::Delete),
             KeyCode::Backspace => Some(InputAction::Backspace),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(InputAction::Quit)
@@ -355,6 +372,36 @@ mod tests {
         assert_eq!(
             map_event(&Event::Key(KeyEvent::from(KeyCode::F(10))), true),
             None
+        );
+    }
+
+    #[test]
+    fn the_operations_have_the_keys_the_design_doc_names() {
+        for (code, action) in [
+            (KeyCode::F(2), InputAction::Rename),
+            (KeyCode::Delete, InputAction::Delete),
+        ] {
+            assert_eq!(
+                map_event(&Event::Key(KeyEvent::from(code)), true),
+                Some(action)
+            );
+        }
+        assert_eq!(
+            map_event(
+                &Event::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+                true
+            ),
+            Some(InputAction::NewFile)
+        );
+        // A bare `n` is search input like every other printable (ADR 0008).
+        assert_eq!(
+            map_event(&Event::Key(KeyEvent::from(KeyCode::Char('n'))), true),
+            Some(InputAction::Char('n'))
+        );
+        // Backspace stays the search's, on every platform.
+        assert_eq!(
+            map_event(&Event::Key(KeyEvent::from(KeyCode::Backspace)), true),
+            Some(InputAction::Backspace)
         );
     }
 

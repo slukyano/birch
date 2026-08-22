@@ -94,7 +94,7 @@ Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and 
 | `Enter` on file | Open (see Opening files). **Enter always opens — never contextual.** |
 | any printable char | Fuzzy filename search |
 | `Shift-F10` / `Menu` | Open the context menu at the cursor row, without disturbing the selection. On an Apple keyboard the `Menu` key does not exist and `F10` is Mute, so the gesture is `Fn`-`Shift`-`F10` unless standard function keys are enabled. |
-| `Esc` | Back out one layer: close the context menu, else clear the search; at top level, quit (ADR 0012) |
+| `Esc` | Back out one layer: cancel an inline edit or a confirmation, else close the context menu, else clear the search; at top level, quit (ADR 0012, ADR 0030) |
 | `F2` | Rename (inline) |
 | `Delete` | Delete (to trash) |
 | `Ctrl-N` | New file / dir |
@@ -183,11 +183,13 @@ Content search swaps the pane's **source** (see Architecture): same tree widget,
 
 ## File operations
 
-Exactly four: **rename, delete, new file, new dir.** No move (see below), no copy, no op-history/undo stack. Whether an operation accepts one target or several is settled per operation, when that operation is designed.
+Exactly four: **rename, delete, new file, new dir.** No copy, no op-history/undo stack (`093-undo-a-file-operation` reopens the latter). Whether an operation accepts one target or several is settled per operation: **delete takes the whole selection**, while rename and create take exactly one — a rename edits one row, and several rows do not name one directory to create in. All four are unavailable in `--pick`, where mutations are disabled.
+
+**Typing while an edit is open reaches the field, not the search.** [ADR 0030](adr/0030-the-inline-editor-is-the-only-mode.md) reads [ADR 0008](adr/0008-q-types-into-search.md) as it was always meant — printables go to whatever text field is focused, and an edit focuses a different one — so no letter becomes a command. The inline editor is birch's **only** mode, admissible because it is self-evident, transient, and singly-exited; a second one has to clear the same bar.
 
 - **Rename (F2)**: inline row editing — the selected row becomes a text input (never a bottom command bar; prompt bars grow verbs). Editing to a path (`../other/name.ts`) silently performs a move — rename-with-path is the 80% of "move" without the complexity cliff. Plain `rename()`; no `git mv` magic (git rename detection handles it).
 - **New file (Ctrl-N)**: inline input in the target dir. `foo/bar/baz.ts` creates intermediate dirs; trailing slash (`foo/`) creates a dir. One binding, three ops (VS Code's trick). On a compacted chain, creates in the tail. No dedicated new-dir key.
-- **Delete (⌦)**: **to trash** (macOS trash / XDG trash spec) — undoable beats confirmable. Confirmation only where trash can't help, and **git-aware**: deleting a *tracked* file is nearly free (recoverable from repo, shows as deleted badge — the git integration doubles as a safety net); deleting an *untracked* file gets the friction and says why.
+- **Delete (⌦)**: **to trash** (macOS trash / XDG trash spec) — undoable beats confirmable. There are two safety nets, and the friction goes where neither reaches ([ADR 0031](adr/0031-delete-goes-to-trash.md)): a selection whose every path is *tracked* in git deletes immediately, since it is recoverable twice over; anything *untracked* confirms once, because it exists nowhere else and a trash can be emptied; and when the trash is unavailable the confirmation says the delete is permanent. A trash failure is never silently upgraded. **Confirmations answer to `Enter` and `Esc`, never `y`/`n`** — a letter answering a prompt is the letter command ADR 0008 forbids. On an Apple keyboard the key labelled *Delete* sends Backspace, which belongs to the search, so the gesture there is `Fn`-`Delete`.
 - Ops and the watcher share the tree-delta stream: the op layer suppresses/owns watcher events for paths it is mutating (no flicker, no selection jumps mid-edit).
 - Mutations are **human-initiated only** — no socket verbs, and disabled by default in `--pick` mode.
 

@@ -13,6 +13,12 @@ use std::path::PathBuf;
 pub enum Action {
     /// Open a file, or expand/collapse a directory. In the picker it confirms.
     Open,
+    /// Create a file or directory under the target, inline.
+    NewFile,
+    /// Rename the target inline. An input carrying separators moves it.
+    Rename,
+    /// Move the selection to the platform trash (ADR 0031).
+    Delete,
     /// Copy the selection's file name to the clipboard.
     CopyName,
     /// Copy the selection's path, relative to the birch root.
@@ -56,6 +62,13 @@ pub struct ActionContext<'a> {
 }
 
 impl Action {
+    /// Whether the action writes to the filesystem. Mutations are
+    /// human-initiated: they never appear in the picker and never on the
+    /// socket.
+    pub fn mutates(self) -> bool {
+        matches!(self, Action::NewFile | Action::Rename | Action::Delete)
+    }
+
     /// The form of path a copy action writes, or `None` for anything that is
     /// not a copy.
     pub fn copy_form(self) -> Option<CopyForm> {
@@ -72,6 +85,9 @@ impl Action {
     pub fn label(self) -> &'static str {
         match self {
             Action::Open => "Open",
+            Action::NewFile => "New File\u{2026}",
+            Action::Rename => "Rename\u{2026}",
+            Action::Delete => "Delete",
             Action::CopyName => "Copy Name",
             Action::CopyRelativePath => "Copy Relative Path",
             Action::CopyAbsolutePath => "Copy Absolute Path",
@@ -84,6 +100,9 @@ impl Action {
     pub fn accelerator(self) -> Option<&'static str> {
         match self {
             Action::Open => Some("\u{21b5}"),
+            Action::NewFile => Some("^N"),
+            Action::Rename => Some("F2"),
+            Action::Delete => Some("\u{2326}"),
             // `Ctrl-Shift-C` is not bindable: in the legacy key encoding birch
             // decodes with, `Shift` has no representation alongside a control
             // character, so it is the same byte as `Ctrl-C` — which quits.
@@ -101,12 +120,24 @@ impl Action {
         if targets.is_empty() || targets.iter().any(|target| target.missing) {
             return false;
         }
+        // Mutations are human-initiated and disabled in the picker
+        // (`docs/design.md`), which is what `picker` exists to say.
+        if context.picker && self.mutates() {
+            return false;
+        }
         match self {
             // Open acts on the **cursor**, exactly as `Enter` does, so it is
             // offered for any selection: the menu entry and the key agree, and
             // neither opens N files. An action that fans out over the selection
             // arrives with the task that needs it.
             Action::Open => true,
+            // Renaming edits one row, and creating needs one directory to
+            // create in — several selected rows name neither.
+            Action::NewFile | Action::Rename => targets.len() == 1,
+            // Delete is the plural one, and the one trash makes safe
+            // (ADR 0031). Arity is per operation, which is what task 074 left
+            // to each of them to settle.
+            Action::Delete => true,
             // A copy reads paths and writes nothing, so any selection will do.
             Action::CopyName | Action::CopyRelativePath | Action::CopyAbsolutePath => true,
             // Re-rooting is a single-target move by nature, and only a
@@ -122,8 +153,7 @@ impl Action {
 /// no row, and no separator (ADR 0029: an unavailable action is absent).
 pub const MENU_GROUPS: &[&[Action]] = &[
     &[Action::Open],
-    // New File… / Rename… / Delete — 029-add-file-operations.
-    &[],
+    &[Action::NewFile, Action::Rename, Action::Delete],
     &[
         Action::CopyName,
         Action::CopyRelativePath,
@@ -181,31 +211,45 @@ mod tests {
         }
     }
 
-    const COPIES: [MenuRow; 3] = [
-        MenuRow::Entry(Action::CopyName),
-        MenuRow::Entry(Action::CopyRelativePath),
-        MenuRow::Entry(Action::CopyAbsolutePath),
-    ];
-
-    #[test]
-    fn a_directory_offers_re_rooting_and_a_file_does_not() {
-        let dir = [target("/r/src", true)];
-        let mut expected = vec![MenuRow::Entry(Action::Open), MenuRow::Separator];
-        expected.extend(COPIES);
-        expected.extend([MenuRow::Separator, MenuRow::Entry(Action::RevealRootHere)]);
-        assert_eq!(menu_rows(context(&dir)), expected);
-
-        // A file cannot become a root, so its group vanishes — and the
-        // separator that would have divided it goes with it.
-        let file = [target("/r/main.rs", false)];
-        let mut expected = vec![MenuRow::Entry(Action::Open), MenuRow::Separator];
-        expected.extend(COPIES);
-        assert_eq!(menu_rows(context(&file)), expected);
+    fn entries(targets: &[ActionTarget]) -> Vec<Action> {
+        menu_rows(context(targets))
+            .into_iter()
+            .filter_map(|row| match row {
+                MenuRow::Entry(action) => Some(action),
+                MenuRow::Separator => None,
+            })
+            .collect()
     }
 
     #[test]
-    fn a_copy_reads_paths_so_any_selection_offers_it() {
+    fn a_directory_offers_re_rooting_and_a_file_does_not() {
+        assert!(entries(&[target("/r/src", true)]).contains(&Action::RevealRootHere));
+        let file = [target("/r/main.rs", false)];
+        assert!(
+            !entries(&file).contains(&Action::RevealRootHere),
+            "a file cannot become a root"
+        );
+        // The group whose only action vanished takes its separator with it.
+        assert_ne!(menu_rows(context(&file)).last(), Some(&MenuRow::Separator));
+    }
+
+    #[test]
+    fn arity_is_settled_per_operation() {
+        let one = [target("/r/a", false)];
         let many = [target("/r/a", false), target("/r/b", false)];
+        for action in [Action::NewFile, Action::Rename] {
+            assert!(action.available(context(&one)), "{action:?} takes one");
+            assert!(
+                !action.available(context(&many)),
+                "{action:?} takes only one"
+            );
+        }
+        // Re-rooting takes one *directory*, which is stricter again.
+        assert!(Action::RevealRootHere.available(context(&[target("/r/src", true)])));
+        assert!(!Action::RevealRootHere.available(context(&one)));
+        // Delete is the plural one, and the one trash makes safe (ADR 0031).
+        assert!(Action::Delete.available(context(&many)));
+        // A copy reads paths and writes nothing, so any selection offers it.
         for action in [
             Action::CopyName,
             Action::CopyRelativePath,
@@ -218,11 +262,27 @@ mod tests {
     }
 
     #[test]
+    fn no_mutation_is_offered_in_the_picker() {
+        let targets = [target("/r/src", true)];
+        let picker = ActionContext {
+            targets: &targets,
+            picker: true,
+        };
+        for action in [Action::NewFile, Action::Rename, Action::Delete] {
+            assert!(action.mutates(), "{action:?}");
+            assert!(!action.available(picker), "{action:?} in the picker");
+        }
+        // Reading is still fine there.
+        for action in [Action::Open, Action::CopyName, Action::RevealRootHere] {
+            assert!(!action.mutates(), "{action:?}");
+            assert!(action.available(picker), "{action:?} in the picker");
+        }
+    }
+
+    #[test]
     fn re_rooting_is_single_target_and_nothing_acts_on_a_missing_row() {
         let two = [target("/r/src", true), target("/r/docs", true)];
-        let mut expected = vec![MenuRow::Entry(Action::Open), MenuRow::Separator];
-        expected.extend(COPIES);
-        assert_eq!(menu_rows(context(&two)), expected);
+        assert!(!entries(&two).contains(&Action::RevealRootHere));
 
         let missing = [ActionTarget {
             path: PathBuf::from("/r/gone.rs"),

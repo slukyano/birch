@@ -64,6 +64,20 @@ pub fn write_raw(terminal: &mut Term, bytes: &[u8]) {
     let _ = writer.flush();
 }
 
+/// Puts a visible caret at a screen position. Only an inline edit does this:
+/// the tree draws its own cursor as a highlight, and a blinking caret with no
+/// text field under it would be a lie.
+pub fn show_caret(terminal: &mut Term, x: u16, y: u16) {
+    write_raw(
+        terminal,
+        format!("\x1b[{};{}H\x1b[?25h", y + 1, x + 1).as_bytes(),
+    );
+}
+
+pub fn hide_caret(terminal: &mut Term) {
+    write_raw(terminal, b"\x1b[?25l");
+}
+
 pub fn enter(mouse: bool, stderr: bool) -> io::Result<Term> {
     enable_raw_mode()?;
     let result = (|| {

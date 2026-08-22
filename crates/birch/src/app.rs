@@ -14,9 +14,11 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use birch_core::FileStatus;
 use birch_core::action::{Action, ActionContext, ActionTarget, CopyForm};
 use birch_core::clipboard;
 use birch_core::git::{self, GitCmd, GitEvent, GitState};
+use birch_core::ops;
 use birch_core::protocol::{PathForm, Request, Response, SettingKey, SettingValue, Verb};
 use birch_core::search::{self, IndexCmd, IndexEvent, Match, SearchIndex, search};
 use birch_core::watcher::{WatchCmd, WatchEvent};
@@ -24,6 +26,7 @@ use birch_core::{
     Filter, NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree,
     TreeDelta, persist, settings,
 };
+use birch_tui::edit::{EditKind, Editor};
 use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row, SelectionSnapshot};
 use birch_tui::input::{self, InputAction};
 use birch_tui::menu::Menu;
@@ -132,6 +135,13 @@ struct App {
     /// Keyed on the row, not the cell, so a pointer that drifts a column
     /// between press and release still opens the menu (ADR 0025).
     armed_right: Option<Option<PathBuf>>,
+    /// The open inline editor: birch's only mode (ADR 0030). While one is open
+    /// printables reach it rather than the search, because they go to whatever
+    /// text field is focused.
+    edit: Option<Editor>,
+    /// A pending destructive answer. Only ever `Enter` or `Esc` — a letter
+    /// answering a prompt is the letter command ADR 0008 forbids.
+    confirm: Option<Confirm>,
     /// A `Shift` extension waiting for its match reveal to converge. The range
     /// is painted once, when the cursor lands, rather than every frame.
     pending_extend: bool,
@@ -223,6 +233,16 @@ where
     }
 }
 
+/// A destructive question waiting for an answer. The prompt says what and why;
+/// `Enter` performs it and `Esc` does nothing (ADR 0030).
+struct Confirm {
+    prompt: String,
+    paths: Vec<PathBuf>,
+    /// True when the trash already refused, so the delete would be permanent.
+    /// A trash failure is never silently upgraded (ADR 0031).
+    permanent: bool,
+}
+
 /// What performing an action leaves for the caller to do. `perform` stays free
 /// of the terminal — opening a file hands the tty over, and an OSC 52 copy is a
 /// sequence only the render layer can write.
@@ -233,6 +253,17 @@ enum Performed {
     Open(PathBuf),
     /// An escape sequence the caller should write to the terminal.
     Write(String),
+}
+
+/// Names a set of paths for a message: one by name, several by count.
+fn describe(paths: &[PathBuf]) -> String {
+    match paths {
+        [one] => one.file_name().map_or_else(
+            || one.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        many => format!("{} items", many.len()),
+    }
 }
 
 /// What was copied, for the status line. The count matters and the form is what
@@ -327,6 +358,8 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathB
         click_timer: input::ClickTimer::default(),
         menu: None,
         armed_right: None,
+        edit: None,
+        confirm: None,
         pending_extend: false,
         armed_press: None,
         last_rematch: None,
@@ -516,7 +549,17 @@ impl App {
         }
         self.status.clear(); // status messages are transient
 
-        // The menu is a layer over the tree, so it sees input first (ADR 0029).
+        // Layers see input before the tree, outermost first: a confirmation,
+        // then an edit, then the menu. `Esc` therefore backs out of them in
+        // that order (ADR 0012, extended by ADR 0030).
+        if self.confirm.is_some() {
+            self.handle_confirm_input(action);
+            return false;
+        }
+        if self.edit.is_some() {
+            self.handle_edit_input(action);
+            return false;
+        }
         if self.menu.is_some() {
             return self.handle_menu_input(terminal, events, action);
         }
@@ -740,6 +783,18 @@ impl App {
             // Motion is only ever reported while the menu is open, and the
             // menu handles its own input above.
             InputAction::Hover { .. } => NavEffect::None,
+            InputAction::Rename => {
+                self.begin_edit(&rows, Action::Rename);
+                NavEffect::None
+            }
+            InputAction::NewFile => {
+                self.begin_edit(&rows, Action::NewFile);
+                NavEffect::None
+            }
+            InputAction::Delete => {
+                self.begin_delete(&rows);
+                NavEffect::None
+            }
             // The keyboard route in (task 092). Unlike a right-click it has no
             // pointer to reconcile with the selection, so it disturbs nothing:
             // it opens on whatever is already selected.
@@ -1479,6 +1534,14 @@ impl App {
                     }
                 }
             }
+            Action::Rename | Action::NewFile => {
+                let rows = self.rows();
+                self.begin_edit(&rows, action);
+            }
+            Action::Delete => {
+                let rows = self.rows();
+                self.begin_delete(&rows);
+            }
             // Handled above, before the match: every copy shares one path.
             Action::CopyName | Action::CopyRelativePath | Action::CopyAbsolutePath => {}
         }
@@ -1538,6 +1601,188 @@ impl App {
     /// exactly what once left a pick sitting until the next keystroke.
     fn finished(&self, quit: bool) -> bool {
         quit || !self.picked.is_empty()
+    }
+
+    // ---- the inline editor and the delete confirmation (029) ----
+
+    /// Opens an editor over the cursor row (rename) or as a phantom under the
+    /// target directory (create). Nothing touches the tree until `Enter`.
+    fn begin_edit(&mut self, rows: &[Row], action: Action) {
+        let targets = self.action_targets(rows);
+        if !action.available(ActionContext {
+            targets: &targets,
+            picker: self.mode.is_pick(),
+        }) {
+            return;
+        }
+        let Some(target) = targets.first() else {
+            return;
+        };
+        self.edit = Some(match action {
+            Action::Rename => {
+                let name = rows
+                    .iter()
+                    .find(|row| row.path == target.path)
+                    .map_or_else(String::new, |row| row.name.clone());
+                Editor::rename(target.path.clone(), &name)
+            }
+            // A create needs a directory: a selected file names its parent.
+            _ => Editor::create(if target.is_dir {
+                target.path.clone()
+            } else {
+                target.path.parent().unwrap_or(&self.root).to_path_buf()
+            }),
+        });
+    }
+
+    /// Input while an editor is open. Printables reach the field rather than
+    /// the search, which is ADR 0008 read as it was always meant: they go to
+    /// whatever text field is focused, and an edit focuses a different one.
+    fn handle_edit_input(&mut self, action: InputAction) {
+        match action {
+            InputAction::Esc => self.edit = None,
+            InputAction::Enter => {
+                if let Some(editor) = self.edit.take() {
+                    self.commit_edit(&editor);
+                }
+            }
+            editing => {
+                let Some(editor) = self.edit.as_mut() else {
+                    return;
+                };
+                match editing {
+                    InputAction::Char(c) => editor.insert(c),
+                    InputAction::Backspace => editor.backspace(),
+                    InputAction::Delete => editor.delete(),
+                    InputAction::Left => editor.left(),
+                    InputAction::Right => editor.right(),
+                    InputAction::Home => editor.home(),
+                    InputAction::End => editor.end(),
+                    // Everything else leaves the field alone rather than acting
+                    // on the tree behind it.
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn commit_edit(&mut self, editor: &Editor) {
+        let input = editor.buffer();
+        if input.trim().is_empty() {
+            return;
+        }
+        let result = match editor.kind() {
+            EditKind::Rename { path } => ops::rename(path, input),
+            EditKind::Create { parent } => ops::create(parent, input),
+        };
+        match result {
+            Ok(deltas) => {
+                for delta in deltas {
+                    self.tree.apply(delta);
+                }
+                self.expansion_dirty = true;
+            }
+            Err(e) => self.status = e.to_string(),
+        }
+    }
+
+    /// Starts a delete. Tracked files go straight to the trash — recoverable
+    /// twice over, and a prompt there is theatre. Anything untracked asks
+    /// first, because it exists nowhere else and a trash can be emptied
+    /// (ADR 0031).
+    fn begin_delete(&mut self, rows: &[Row]) {
+        let targets = self.action_targets(rows);
+        if !Action::Delete.available(ActionContext {
+            targets: &targets,
+            picker: self.mode.is_pick(),
+        }) {
+            return;
+        }
+        let paths: Vec<PathBuf> = targets.iter().map(|t| t.path.clone()).collect();
+        let untracked = paths.iter().filter(|path| self.is_untracked(path)).count();
+        if untracked == 0 {
+            self.trash_now(paths);
+            return;
+        }
+        let what = describe(&paths);
+        self.confirm = Some(Confirm {
+            // Terse on purpose: birch's status line is one row of a narrow side
+            // pane, and the question is what has to survive truncation. `Esc`
+            // backs out everywhere in birch, so only the affirmative is stated.
+            prompt: format!("Delete {what}? {untracked} untracked. Enter to confirm."),
+            paths,
+            permanent: false,
+        });
+    }
+
+    /// Whether git has no copy of this path. A path git has never heard of is
+    /// absent from its status, so "untracked" is the status it reports for one
+    /// it knows is not committed; a directory is judged by what it holds.
+    fn is_untracked(&self, path: &Path) -> bool {
+        let Some(git) = &self.git_state else {
+            // Outside a repository nothing is recoverable from git.
+            return true;
+        };
+        if path.is_dir() {
+            return git.dir_status(path) == Some(FileStatus::Untracked)
+                || git.status_of(path) == Some(FileStatus::Untracked);
+        }
+        git.status_of(path) == Some(FileStatus::Untracked)
+    }
+
+    fn trash_now(&mut self, paths: Vec<PathBuf>) {
+        match ops::trash(&paths) {
+            Ok(deltas) => {
+                let what = describe(&paths);
+                for delta in deltas {
+                    self.tree.apply(delta);
+                }
+                self.status = format!("Moved {what} to the trash");
+                self.expansion_dirty = true;
+            }
+            // Never silently upgraded to a permanent delete: the user is told,
+            // and it happens only on their confirmation (ADR 0031).
+            Err(ops::OpError::NoTrash(_)) => {
+                let what = describe(&paths);
+                self.confirm = Some(Confirm {
+                    prompt: format!("No trash — delete {what} permanently? Enter to confirm."),
+                    paths,
+                    permanent: true,
+                });
+            }
+            Err(e) => self.status = e.to_string(),
+        }
+    }
+
+    /// `Enter` performs it, `Esc` abandons it, and nothing else answers —
+    /// a letter answering a prompt is the letter command ADR 0008 forbids.
+    fn handle_confirm_input(&mut self, action: InputAction) {
+        match action {
+            InputAction::Esc => {
+                self.confirm = None;
+            }
+            InputAction::Enter => {
+                let Some(confirm) = self.confirm.take() else {
+                    return;
+                };
+                if confirm.permanent {
+                    let what = describe(&confirm.paths);
+                    match ops::delete_permanently(&confirm.paths) {
+                        Ok(deltas) => {
+                            for delta in deltas {
+                                self.tree.apply(delta);
+                            }
+                            self.status = format!("Deleted {what}");
+                            self.expansion_dirty = true;
+                        }
+                        Err(e) => self.status = e.to_string(),
+                    }
+                } else {
+                    self.trash_now(confirm.paths);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Why nothing happened when there is no selection to act on.
@@ -1896,16 +2141,34 @@ impl App {
             theme: &theme,
             branch_axis,
         };
+        let editor = &self.edit;
+        let mut caret = None;
         terminal.draw(|frame| {
             render::draw(frame, &rows, view, chrome, &bottom);
+            // The editor sits over the tree and under the menu; the two are
+            // never open together, so the order only fixes a convention.
+            if let Some(editor) = editor {
+                caret = render::draw_edit(frame, &rows, view, chrome, editor);
+            }
             if let (Some(menu), Some(layout)) = (menu, menu_layout) {
                 render::draw_menu(frame, menu, layout, &theme);
             }
         })?;
+        // A visible caret is what makes the edit self-evident, which is the
+        // property that makes it an admissible mode at all (ADR 0030).
+        match caret {
+            Some((x, y)) => term::show_caret(terminal, x, y),
+            None => term::hide_caret(terminal),
+        }
         Ok(())
     }
 
     fn bottom_line(&self) -> String {
+        // A pending question owns the line until it is answered: it is the only
+        // thing on screen that is waiting for the user (ADR 0031).
+        if let Some(confirm) = &self.confirm {
+            return confirm.prompt.clone();
+        }
         let base = if let Some(state) = &self.search {
             let n = state.matches.len();
             // Same counter in both modes; only the prompt marker differs, so a
@@ -2265,6 +2528,8 @@ mod tests {
             click_timer: input::ClickTimer::default(),
             menu: None,
             armed_right: None,
+            edit: None,
+            confirm: None,
             pending_extend: false,
             armed_press: None,
             last_rematch: None,
@@ -4325,22 +4590,30 @@ mod ctl_tests {
         // Arrows step entries and skip the rule between the groups; Home/End
         // reach the ends.
         open(&mut h.app);
-        // Rows: Open · ── · Copy Name · Copy Relative · Copy Absolute · ── ·
-        // Reveal Root Here. Stepping crosses both rules without landing on one.
+        // Derived from the menu itself: the projection grows as actions land,
+        // and this test is about traversal rather than about which rows exist.
+        let entries: Vec<Action> = menu_ref(&h.app.menu)
+            .rows()
+            .iter()
+            .filter_map(|row| match row {
+                birch_core::action::MenuRow::Entry(action) => Some(*action),
+                birch_core::action::MenuRow::Separator => None,
+            })
+            .collect();
+        assert!(entries.len() >= 3, "several groups to cross");
+
+        // Stepping crosses the rules without ever landing on one.
         assert_eq!(h.app.menu_input(area, InputAction::Down), MenuStep::Keep);
-        assert_eq!(
-            menu_ref(&h.app.menu).selected_action(),
-            Some(Action::CopyName)
-        );
+        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(entries[1]));
         h.app.menu_input(area, InputAction::Up);
-        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(Action::Open));
+        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(entries[0]));
         h.app.menu_input(area, InputAction::End);
         assert_eq!(
             menu_ref(&h.app.menu).selected_action(),
-            Some(Action::RevealRootHere)
+            entries.last().copied()
         );
         h.app.menu_input(area, InputAction::Home);
-        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(Action::Open));
+        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(entries[0]));
 
         // Enter invokes what is highlighted; Esc closes and changes nothing.
         assert_eq!(
@@ -4365,6 +4638,9 @@ mod ctl_tests {
 
         // Hover moves the highlight; a press inside keeps the menu, a press
         // outside dismisses it.
+        let hovered = menu_ref(&h.app.menu)
+            .action_at(2)
+            .expect("row 2 is the next group's first entry");
         h.app.menu_input(
             area,
             InputAction::Hover {
@@ -4372,10 +4648,7 @@ mod ctl_tests {
                 row: layout.y + 3,
             },
         );
-        assert_eq!(
-            menu_ref(&h.app.menu).selected_action(),
-            Some(Action::CopyName)
-        );
+        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(hovered));
         assert_eq!(
             h.app.menu_input(
                 area,
@@ -4412,10 +4685,7 @@ mod ctl_tests {
             row: layout.y + 3,
             modifier: input::ClickModifier::None,
         };
-        assert_eq!(
-            h.app.menu_input(area, entry),
-            MenuStep::Invoke(Action::CopyName)
-        );
+        assert_eq!(h.app.menu_input(area, entry), MenuStep::Invoke(hovered));
 
         // A right-click elsewhere moves the menu rather than stranding it.
         open(&mut h.app);
@@ -4552,6 +4822,161 @@ mod ctl_tests {
         // Scrolled out of the viewport, there is nowhere to put it.
         h.app.view.scroll = 99;
         assert_eq!(h.app.cursor_point(pane(), &rows), None);
+    }
+
+    /// A scratch tree on the real filesystem, since operations write to it.
+    fn scratch(tag: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "birch-app-{}-{tag}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path.canonicalize().unwrap()
+    }
+
+    fn rooted(root: &Path, entries: &[(&str, NodeKind)]) -> super::tests::Harness {
+        let mut h = harness(Mode::Tree);
+        h.app.root = root.to_path_buf();
+        h.app.tree = Tree::new(root.to_path_buf());
+        h.app.tree.set_expanded(root, true);
+        h.app.tree.apply(TreeDelta::Snapshot {
+            dir: root.to_path_buf(),
+            entries: entries
+                .iter()
+                .map(|(name, kind)| birch_core::Entry {
+                    name: (*name).into(),
+                    kind: *kind,
+                })
+                .collect(),
+        });
+        h
+    }
+
+    /// Typing goes to the field rather than the search, `Enter` commits, and
+    /// nothing touches the tree until it does (ADR 0030).
+    #[test]
+    fn an_inline_rename_only_touches_disk_on_enter() {
+        let root = scratch("rename");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.join("a.txt"));
+
+        h.app.begin_edit(&rows, Action::Rename);
+        assert!(h.app.edit.is_some(), "the field is open");
+        // A printable reaches the field, not the search.
+        h.app.handle_edit_input(InputAction::Char('b'));
+        assert!(h.app.search.is_none(), "typing did not start a search");
+        assert!(root.join("a.txt").exists(), "nothing has happened yet");
+
+        h.app.handle_edit_input(InputAction::Enter);
+        assert!(h.app.edit.is_none());
+        assert!(root.join("ab.txt").exists() && !root.join("a.txt").exists());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_abandoned_edit_leaves_nothing_behind() {
+        let root = scratch("abandon");
+        let mut h = rooted(&root, &[]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.clone());
+
+        h.app.begin_edit(&rows, Action::NewFile);
+        for c in "ghost.txt".chars() {
+            h.app.handle_edit_input(InputAction::Char(c));
+        }
+        h.app.handle_edit_input(InputAction::Esc);
+        assert!(h.app.edit.is_none());
+        assert!(!root.join("ghost.txt").exists(), "Esc wrote nothing");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn creating_makes_intermediates_and_a_trailing_slash_makes_a_directory() {
+        let root = scratch("create");
+        let mut h = rooted(&root, &[]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.clone());
+
+        for (input, check) in [("deep/deeper/c.txt", false), ("sub/", true)] {
+            h.app.begin_edit(&rows, Action::NewFile);
+            for c in input.chars() {
+                h.app.handle_edit_input(InputAction::Char(c));
+            }
+            h.app.handle_edit_input(InputAction::Enter);
+            let made = root.join(input.trim_end_matches('/'));
+            assert_eq!(made.is_dir(), check, "{input}");
+            assert!(made.exists(), "{input}");
+        }
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Outside a repository nothing is recoverable from git, so a delete asks
+    /// first — and `Esc` means it did not happen (ADR 0031).
+    #[test]
+    fn deleting_an_untracked_path_asks_first() {
+        let root = scratch("delete");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.join("a.txt"));
+
+        h.app.begin_delete(&rows);
+        let confirm = h.app.confirm.as_ref().expect("it asked");
+        assert!(confirm.prompt.contains("a.txt") && confirm.prompt.contains("Enter"));
+        assert!(!confirm.permanent, "the trash is available here");
+        assert_eq!(
+            h.app.bottom_line(),
+            confirm.prompt,
+            "the question owns the line"
+        );
+
+        // A letter is not an answer — only Enter and Esc are (ADR 0030).
+        h.app.handle_confirm_input(InputAction::Char('y'));
+        assert!(h.app.confirm.is_some(), "a letter answered nothing");
+        assert!(root.join("a.txt").exists());
+
+        h.app.handle_confirm_input(InputAction::Esc);
+        assert!(h.app.confirm.is_none());
+        assert!(root.join("a.txt").exists(), "Esc deleted nothing");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_confirmed_delete_moves_the_path_to_the_trash() {
+        let root = scratch("trash");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.join("a.txt"));
+
+        h.app.begin_delete(&rows);
+        h.app.handle_confirm_input(InputAction::Enter);
+        assert!(h.app.confirm.is_none());
+        assert!(!root.join("a.txt").exists(), "it left the tree");
+        assert!(
+            h.app.status.contains("trash"),
+            "the status says where it went: {:?}",
+            h.app.status
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_set_of_paths_is_named_by_count() {
+        assert_eq!(describe(&[PathBuf::from("/r/a.txt")]), "a.txt");
+        assert_eq!(
+            describe(&[PathBuf::from("/r/a"), PathBuf::from("/r/b")]),
+            "2 items"
+        );
     }
 
     #[test]

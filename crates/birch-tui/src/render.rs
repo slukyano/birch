@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 
 use birch_core::action::MenuRow;
 
+use crate::edit::{EditKind, Editor};
 use crate::flat_view::{FlatView, Row};
 use crate::icons;
 use crate::menu::{Menu, MenuLayout};
@@ -273,6 +274,72 @@ fn truncate(label: &str, width: usize) -> String {
     let mut out: String = label.chars().take(width - 1).collect();
     out.push('\u{2026}');
     out
+}
+
+/// Paints the inline editor over the tree (ADR 0030) — over the row being
+/// renamed, or as a phantom row under the directory being created in. Drawn
+/// after the tree and before the menu, into the same `Rect`, so the row
+/// geometry underneath is untouched and an edit never shifts the tree.
+///
+/// Returns the caret's screen position, for the caller to place the cursor.
+pub fn draw_edit(
+    frame: &mut Frame,
+    rows: &[Row],
+    view: &FlatView,
+    chrome: Chrome,
+    editor: &Editor,
+) -> Option<(u16, u16)> {
+    let area = frame.area();
+    let geometry = layout(area, chrome, rows.len());
+    let viewport = geometry.viewport;
+    if viewport == 0 {
+        return None;
+    }
+    // A rename draws on its row; a create draws on the line *after* its parent,
+    // which is where the new child will appear.
+    let (anchor, depth, offset) = match editor.kind() {
+        EditKind::Rename { path } => {
+            let index = rows.iter().position(|row| &row.path == path)?;
+            (index, rows[index].depth, 0)
+        }
+        EditKind::Create { parent } => {
+            let index = rows.iter().position(|row| &row.path == parent)?;
+            (index, rows[index].depth + 1, 1)
+        }
+    };
+    let line = anchor.checked_sub(view.scroll)? + offset;
+    if line >= viewport {
+        return None;
+    }
+
+    let theme = chrome.theme;
+    // The field starts where a row's *label* does, not where its indent does:
+    // the glyph columns between them are part of the row, and an edit that
+    // ignored them would sit two columns left of every name around it.
+    let glyphs: usize = glyph_column_spans(theme, chrome.settings, &rows[anchor])
+        .iter()
+        .map(|span| span.content.chars().count())
+        .sum();
+    let x = geometry.tree.x + depth as u16 * INDENT_WIDTH + glyphs as u16;
+    let y = geometry.tree.y + line as u16;
+    let width = geometry.tree.width.saturating_sub(x - geometry.tree.x);
+    if width == 0 {
+        return None;
+    }
+    let field = Rect {
+        x,
+        y,
+        width,
+        height: 1,
+    };
+    let style = Style::default().bg(theme.palette.selection_bg);
+    frame.render_widget(Clear, field);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(editor.buffer().to_string(), style))).style(style),
+        field,
+    );
+    let caret = editor.cursor_chars() as u16;
+    (caret < width).then_some((x + caret, y))
 }
 
 pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bottom_line: &str) {
