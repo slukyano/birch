@@ -1822,8 +1822,11 @@ impl App {
     /// available on every platform birch runs on — but it is still recorded, so
     /// that `Ctrl-Z` after a delete says where the files went instead of
     /// silently reversing whatever happened *before* it.
-    fn remember_trash(&mut self, what: &str) {
-        self.history.push(undo::Step::Trashed { what: what.into() });
+    fn remember_removal(&mut self, what: &str, permanent: bool) {
+        self.history.push(undo::Step::Removed {
+            what: what.into(),
+            permanent,
+        });
         self.refresh_undo_label();
     }
 
@@ -1922,7 +1925,7 @@ impl App {
         let removed = self.apply_removal(&removal);
         let Some(failure) = removal.failed else {
             let what = describe(&paths);
-            self.remember_trash(&what);
+            self.remember_removal(&what, false);
             self.status = format!("Moved {what} to the trash");
             return;
         };
@@ -1982,6 +1985,14 @@ impl App {
                 if confirm.permanent {
                     let removal = ops::delete_permanently(&confirm.paths);
                     let removed = self.apply_removal(&removal);
+                    if !removed.is_empty() {
+                        // Recorded even though it can never be reversed. This
+                        // is the step most worth recording: the files are gone
+                        // for good, and a user who reaches for `Ctrl-Z` here
+                        // must be told that rather than have the *previous*
+                        // operation quietly undone beneath them (ADR 0033).
+                        self.remember_removal(&describe(&removed), true);
+                    }
                     self.status = match removal.failed {
                         Some(e) if removed.is_empty() => e.to_string(),
                         Some(e) => format!("Deleted {} — then {e}", describe(&removed)),

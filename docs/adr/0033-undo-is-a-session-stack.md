@@ -45,10 +45,12 @@ Three facts constrain the shape, and each was measured rather than assumed:
 4. **Undoing a create trashes what it made**, rather than unlinking it, for the same reason
    ADR 0031 sends deletes to the trash. It takes back the *shallowest* path the create announced:
    `a/b/c.txt` typed into an empty tree made `a`, and removing only `c.txt` would leave the rest.
-5. **A delete records a step that cannot be reversed**, and reversing it says where the files went.
-   It is *not* omitted from the stack: if a delete recorded nothing, `Ctrl-Z` after one would
-   silently reverse whatever happened *before* it — a destructive surprise, which is the one thing
-   undo must never be.
+5. **Every removal records a step that cannot be reversed**, and reversing it says what became of
+   the files — in the trash, or gone for good. Neither is *omitted* from the stack: if a removal
+   recorded nothing, `Ctrl-Z` after one would silently reverse whatever happened *before* it — a
+   destructive surprise, which is the one thing undo must never be. This matters most for the
+   **permanent** delete, which is the case where the files really are unrecoverable and so the case
+   where a user is most likely to reach for `Ctrl-Z` on reflex.
 6. **No redo.** A stack that invites redo is a history model, and birch does not own one.
 
 # Consequences

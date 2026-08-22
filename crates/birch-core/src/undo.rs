@@ -38,8 +38,10 @@ pub enum Step {
     /// the file may have been written to since birch made it, and destroying
     /// work birch never saw is not what undo means.
     Created { path: PathBuf },
-    /// Paths that went to the trash, which is where they stay.
-    Trashed { what: String },
+    /// Paths birch removed and cannot bring back: moved to the trash, whose
+    /// restore is not available on every platform birch runs on, or deleted
+    /// outright. Recorded rather than omitted — see [`History::undo`].
+    Removed { what: String, permanent: bool },
 }
 
 impl Step {
@@ -58,7 +60,7 @@ impl Step {
             }
             Step::Moved { pairs } => format!("Move of {} items", pairs.len()),
             Step::Created { path } => format!("New {}", name(path)),
-            Step::Trashed { what } => format!("Delete of {what}"),
+            Step::Removed { what, .. } => format!("Delete of {what}"),
         }
     }
 }
@@ -102,9 +104,18 @@ impl History {
     pub fn undo(&mut self) -> Option<Undone> {
         let step = self.steps.pop()?;
         Some(match step {
-            Step::Trashed { what } => Undone {
+            // Reversing a removal is impossible, and saying so *is* the point:
+            // a delete that recorded nothing would let this `Ctrl-Z` reverse
+            // whatever happened before it, and the user pressing it has just
+            // deleted something. It consumes the step, so a second press
+            // reaches the operation underneath.
+            Step::Removed { what, permanent } => Undone {
                 deltas: Vec::new(),
-                message: format!("{what} is in the trash — restore it from there"),
+                message: if permanent {
+                    format!("{what} was deleted permanently — nothing can bring it back")
+                } else {
+                    format!("{what} is in the trash — restore it from there")
+                },
                 failed: None,
             },
             Step::Created { path } => {
@@ -231,8 +242,9 @@ mod tests {
         history.push(Step::Moved {
             pairs: vec![("/r/a.txt".into(), "/r/b.txt".into())],
         });
-        history.push(Step::Trashed {
+        history.push(Step::Removed {
             what: "notes.md".into(),
+            permanent: false,
         });
 
         let undone = history.undo().expect("there was a step");
@@ -245,6 +257,21 @@ mod tests {
         assert!(
             matches!(history.next(), Some(Step::Moved { .. })),
             "and the rename is still there for the next Ctrl-Z"
+        );
+    }
+
+    #[test]
+    fn a_permanent_delete_says_so_rather_than_offering_the_trash() {
+        let mut history = History::default();
+        history.push(Step::Removed {
+            what: "notes.md".into(),
+            permanent: true,
+        });
+        let undone = history.undo().expect("there was a step");
+        assert!(
+            undone.message.contains("nothing can bring it back"),
+            "it does not send the user to a trash the file never reached: {}",
+            undone.message
         );
     }
 
