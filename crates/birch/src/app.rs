@@ -740,6 +740,19 @@ impl App {
             // Motion is only ever reported while the menu is open, and the
             // menu handles its own input above.
             InputAction::Hover { .. } => NavEffect::None,
+            // The keyboard route in (task 092). Unlike a right-click it has no
+            // pointer to reconcile with the selection, so it disturbs nothing:
+            // it opens on whatever is already selected.
+            InputAction::OpenMenu => {
+                if let Some(point) = self.cursor_point(area(terminal), &rows)
+                    && let Some(cursor) = self.view.selection.clone()
+                    && self.open_menu(&rows, Some(cursor), point.0, point.1)
+                    && self.settings.mouse
+                {
+                    term::set_motion_tracking(terminal, true);
+                }
+                NavEffect::None
+            }
             // Scrolling returned above, from the count-only fast path.
             InputAction::ScrollUp
             | InputAction::ScrollDown
@@ -1240,6 +1253,26 @@ impl App {
     /// Opens the menu on a right-click. The selection is only disturbed when it
     /// has to be: a click inside it acts on all of it, a click outside collapses
     /// to that row first, and a click below the last row collapses to the root.
+    /// Where a keyboard-opened menu should appear: the cursor row's own line,
+    /// at the column its text starts on. Column zero would hang the menu off
+    /// the far left of a deep row, reading as part of the tree rather than as
+    /// something attached to the selection. `None` when the cursor is not on
+    /// screen or nothing can hold the selection at all.
+    fn cursor_point(&self, area: Rect, rows: &[Row]) -> Option<(u16, u16)> {
+        let cursor = self.view.selection.as_deref()?;
+        let index = rows.iter().position(|row| row.path == cursor)?;
+        let viewport = render::tree_viewport_height(area);
+        let offset = index.checked_sub(self.view.scroll)?;
+        if offset >= viewport {
+            return None;
+        }
+        let indent = rows[index].depth as u16 * render::INDENT_WIDTH;
+        Some((
+            area.x + indent.min(area.width.saturating_sub(1)),
+            area.y + offset as u16,
+        ))
+    }
+
     /// Returns true when a menu opened, so the caller can turn motion tracking
     /// on. Terminal-free: opening a menu is a decision about rows, and only the
     /// tracking is I/O. `right_target` has already refused the points where a
@@ -4460,6 +4493,65 @@ mod ctl_tests {
             Performed::Write(_) | Performed::Nothing
         ));
         assert_eq!(h.app.status, "Copied name");
+    }
+
+    /// The keyboard route in has no pointer to reconcile with the selection, so
+    /// unlike a right-click outside it, it disturbs nothing.
+    #[test]
+    fn opening_the_menu_from_the_keyboard_leaves_the_selection_alone() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("a.txt", NodeKind::File),
+                ("b.txt", NodeKind::File),
+                ("c.txt", NodeKind::File),
+            ],
+        );
+        let rows = h.app.rows();
+        h.app.view.focus("/r/a.txt".into());
+        h.app.view.move_by_extending(&rows, 1);
+        assert_eq!(h.app.view.selection_len(), 2);
+
+        let point = h
+            .app
+            .cursor_point(pane(), &rows)
+            .expect("the cursor is on screen");
+        assert!(
+            h.app
+                .open_menu(&rows, h.app.view.selection.clone(), point.0, point.1)
+        );
+        assert_eq!(
+            h.app.view.selection_len(),
+            2,
+            "the selection survives the menu opening"
+        );
+        assert_eq!(h.app.action_targets(&rows).len(), 2);
+    }
+
+    /// The menu lands on the cursor's own row, indented to where its text
+    /// starts rather than at column zero.
+    #[test]
+    fn the_keyboard_menu_opens_at_the_cursor_row() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("src", NodeKind::Dir)]);
+        drain_expands(&h.source_rx);
+        feed(&mut h.app, "/r/src", &[("main.rs", NodeKind::File)]);
+        h.app.tree.set_expanded(Path::new("/r/src"), true);
+        let rows = h.app.rows();
+
+        // Rows: /r (depth 0), src (1), main.rs (2).
+        h.app.view.focus("/r".into());
+        assert_eq!(h.app.cursor_point(pane(), &rows), Some((0, 0)));
+        h.app.view.focus("/r/src/main.rs".into());
+        let (x, y) = h.app.cursor_point(pane(), &rows).expect("on screen");
+        assert_eq!(y, 2, "the cursor's own row");
+        assert_eq!(x, 2 * render::INDENT_WIDTH, "indented to the row's text");
+
+        // Scrolled out of the viewport, there is nowhere to put it.
+        h.app.view.scroll = 99;
+        assert_eq!(h.app.cursor_point(pane(), &rows), None);
     }
 
     #[test]

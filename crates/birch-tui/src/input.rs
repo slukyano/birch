@@ -58,6 +58,9 @@ pub enum InputAction {
     /// `Shift` with a movement key: move the cursor and extend the selection
     /// from the anchor to where it lands (task 074).
     Extend(Movement),
+    /// Open the context menu at the cursor row (task 092). The right button is
+    /// the other way in, and the only one before this.
+    OpenMenu,
     /// A printable character — always search input, never a hotkey
     /// (ADR 0008).
     Char(char),
@@ -175,6 +178,16 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
                     }
                 })
             }
+            // `Shift-F10` is the Windows and Linux convention for a context
+            // menu, and function keys travel as CSI sequences that *do* carry
+            // a modifier — unlike `Ctrl` with a letter, where `Shift` has no
+            // representation at all (task 091). The `Menu` key is the same
+            // convention on keyboards that have one; Apple keyboards do not,
+            // which is why it cannot be the only binding.
+            KeyCode::F(10) if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Some(InputAction::OpenMenu)
+            }
+            KeyCode::Menu => Some(InputAction::OpenMenu),
             KeyCode::Backspace => Some(InputAction::Backspace),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(InputAction::Quit)
@@ -321,6 +334,27 @@ mod tests {
                 true
             ),
             Some(InputAction::Right)
+        );
+    }
+
+    #[test]
+    fn the_context_menu_has_a_keyboard_trigger() {
+        assert_eq!(
+            map_event(
+                &Event::Key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT)),
+                true
+            ),
+            Some(InputAction::OpenMenu)
+        );
+        assert_eq!(
+            map_event(&Event::Key(KeyEvent::from(KeyCode::Menu)), true),
+            Some(InputAction::OpenMenu)
+        );
+        // Plain F10 is not bound — the convention is the modified form, and an
+        // unmodified function key is worth keeping free.
+        assert_eq!(
+            map_event(&Event::Key(KeyEvent::from(KeyCode::F(10))), true),
+            None
         );
     }
 

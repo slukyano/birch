@@ -93,6 +93,7 @@ Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and 
 | `←` on dir / into parent | Collapse / jump to parent |
 | `Enter` on file | Open (see Opening files). **Enter always opens — never contextual.** |
 | any printable char | Fuzzy filename search |
+| `Shift-F10` / `Menu` | Open the context menu at the cursor row, without disturbing the selection. On an Apple keyboard the `Menu` key does not exist and `F10` is Mute, so the gesture is `Fn`-`Shift`-`F10` unless standard function keys are enabled. |
 | `Esc` | Back out one layer: close the context menu, else clear the search; at top level, quit (ADR 0012) |
 | `F2` | Rename (inline) |
 | `Delete` | Delete (to trash) |
@@ -126,6 +127,7 @@ Copy Absolute Path           (028)
 Reveal Root Here
 ```
 
+- **It opens from the keyboard too**, with `Shift-F10` or the `Menu` key, at the cursor row. A right-click has to reconcile a pointer with the selection; a keyboard trigger has no such conflict and moves nothing.
 - **Opening it follows the left button's rule**: a right-press arms, and the menu opens on the release on the row the press started on (ADR 0025, extended). Keyboard works inside it — `↑`/`↓` step entries and skip separators, `Home`/`End` reach the ends, `Enter` invokes, `Esc` closes. **A printable character closes the menu and types into the search**: ADR 0008 has no exception, and a layer that redefines the keyboard is how a modal language starts.
 - **It targets the selection, and only disturbs it when it must**: a right-click inside the current selection acts on all of it, a click outside collapses the selection to that row first, and a click below the last row collapses to the root. A dimmed row is inert here as everywhere (ADR 0023).
 - **Geometry**: drawn as a bordered box over the tree, shifted left to fit at the right edge (rather than flipped, which in a narrow pane throws it across the whole width), flipped upward at the bottom, and clamped-and-scrolled in a pane too short to hold it. Accelerators are dropped before labels ellipsise.
