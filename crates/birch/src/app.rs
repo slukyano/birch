@@ -22,7 +22,7 @@ use birch_core::{
     Filter, NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree,
     TreeDelta, persist, settings,
 };
-use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row};
+use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row, SelectionSnapshot};
 use birch_tui::input::{self, InputAction};
 use birch_tui::render;
 use birch_tui::theme::Theme;
@@ -48,6 +48,9 @@ pub struct AppWiring {
     pub settings: Settings,
     pub open_cmd: OpenCmd,
     pub mode: Mode,
+    /// `--pick --multi` (task 074). Ignored outside picker mode, where
+    /// multi-select is always available.
+    pub multi: bool,
     pub events: Receiver<AppEvent>,
     pub source_cmds: Sender<SourceCmd>,
     pub watch_cmds: Sender<WatchCmd>,
@@ -71,7 +74,7 @@ struct SearchState {
     /// Path → matched char indices into the simple name (empty for path-mode
     /// hits, meaning whole-name highlight).
     matched_set: HashMap<PathBuf, Vec<u32>>,
-    saved_selection: Option<PathBuf>,
+    saved_selection: SelectionSnapshot,
     saved_scroll: usize,
 }
 
@@ -109,7 +112,13 @@ struct App {
     restore_expanded: HashSet<PathBuf>,
     expansion_dirty: bool,
     last_saved_expanded: Vec<PathBuf>,
-    picked: Option<PathBuf>,
+    /// Confirmed paths, in tree order. Empty until `Enter` picks; more than
+    /// one only under `--multi`.
+    picked: Vec<PathBuf>,
+    /// `--pick --multi`: multi-select is enabled in the picker and every
+    /// selected path is printed. Off, the picker behaves exactly as it always
+    /// has, and a selection the mode cannot output is not offered.
+    multi: bool,
     input_paused: Arc<AtomicBool>,
     click_timer: input::ClickTimer,
     /// The armed press: which row a left button-down landed on, and whether it
@@ -200,7 +209,7 @@ where
     }
 }
 
-pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<PathBuf>> {
+pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathBuf>> {
     let AppWiring {
         root,
         settings,
@@ -215,6 +224,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         socket,
         filter,
         input_paused,
+        multi,
     } = wiring;
 
     let mut app = App {
@@ -245,7 +255,8 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Option<Pa
         restore_expanded: HashSet::new(),
         expansion_dirty: false,
         last_saved_expanded: Vec::new(),
-        picked: None,
+        picked: Vec::new(),
+        multi,
         input_paused,
         click_timer: input::ClickTimer::default(),
         armed_press: None,
@@ -465,6 +476,21 @@ impl App {
             return false;
         }
 
+        // Without a plural selection to build, `Shift` with a movement key is
+        // just that movement: the picker without `--multi` behaves exactly as
+        // it always has, rather than building a set it cannot output.
+        let action = match action {
+            InputAction::Extend(movement) if !self.selection_is_plural() => match movement {
+                input::Movement::Up => InputAction::Up,
+                input::Movement::Down => InputAction::Down,
+                input::Movement::PageUp => InputAction::PageUp,
+                input::Movement::PageDown => InputAction::PageDown,
+                input::Movement::Home => InputAction::Home,
+                input::Movement::End => InputAction::End,
+            },
+            other => other,
+        };
+
         let rows = self.rows();
         // One page is the viewport less a row of overlap: the row at the bottom
         // edge becomes the row at the top, which is the only reason a page is
@@ -478,16 +504,35 @@ impl App {
         // (task 081).
         let match_count = self.search.as_ref().map_or(0, |state| state.matches.len()) as isize;
         if match_count > 0 {
-            let step = match action {
-                InputAction::Up => Some((-1, true)),
-                InputAction::Down => Some((1, true)),
-                InputAction::PageUp => Some((-page, false)),
-                InputAction::PageDown => Some((page, false)),
-                InputAction::Home => Some((-match_count, false)),
-                InputAction::End => Some((match_count, false)),
+            // `Shift` extends over matches, by the same unit rule: under a
+            // narrowing the thing a movement key moves by is a match.
+            let extend = matches!(action, InputAction::Extend(_));
+            let movement = match action {
+                InputAction::Extend(movement) => Some(movement),
+                InputAction::Up => Some(input::Movement::Up),
+                InputAction::Down => Some(input::Movement::Down),
+                InputAction::PageUp => Some(input::Movement::PageUp),
+                InputAction::PageDown => Some(input::Movement::PageDown),
+                InputAction::Home => Some(input::Movement::Home),
+                InputAction::End => Some(input::Movement::End),
                 _ => None,
             };
-            if let Some((delta, wrap)) = step {
+            if let Some(movement) = movement {
+                let (delta, wrap) = match movement {
+                    input::Movement::Up => (-1, true),
+                    input::Movement::Down => (1, true),
+                    input::Movement::PageUp => (-page, false),
+                    input::Movement::PageDown => (page, false),
+                    input::Movement::Home => (-match_count, false),
+                    input::Movement::End => (match_count, false),
+                };
+                // Stepping reaches its target over several frames, so the
+                // extension is armed here and painted once the cursor lands.
+                if extend {
+                    self.view.begin_extending();
+                } else {
+                    self.view.end_extending();
+                }
                 self.step_match(delta, wrap);
                 return false;
             }
@@ -520,6 +565,20 @@ impl App {
                 self.view.move_to_edge(&rows, false);
                 NavEffect::None
             }
+            // `Shift` with a movement key extends the range from the anchor
+            // (task 074); the movement itself is the same one the bare key
+            // makes, so the two can never disagree about where the cursor goes.
+            InputAction::Extend(movement) => {
+                match movement {
+                    input::Movement::Up => self.view.move_by_extending(&rows, -1),
+                    input::Movement::Down => self.view.move_by_extending(&rows, 1),
+                    input::Movement::PageUp => self.view.move_by_extending(&rows, -page),
+                    input::Movement::PageDown => self.view.move_by_extending(&rows, page),
+                    input::Movement::Home => self.view.move_to_edge_extending(&rows, true),
+                    input::Movement::End => self.view.move_to_edge_extending(&rows, false),
+                }
+                NavEffect::None
+            }
             InputAction::Right => self.view.on_right(&mut self.tree, &rows),
             InputAction::Left => {
                 self.view.on_left(&mut self.tree, &rows);
@@ -544,7 +603,11 @@ impl App {
                 self.arm_press(&rows, hit);
                 NavEffect::None
             }
-            InputAction::Release { column, row } => {
+            InputAction::Release {
+                column,
+                row,
+                modifier,
+            } => {
                 let hit = render::hit_test(
                     &rows,
                     &self.view,
@@ -557,7 +620,7 @@ impl App {
                     column,
                     row,
                 );
-                self.resolve_release(&rows, hit, Instant::now())
+                self.resolve_release(&rows, hit, modifier, Instant::now())
             }
             // Scrolling returned above, from the count-only fast path.
             InputAction::ScrollUp
@@ -589,13 +652,13 @@ impl App {
                 if self.mode.is_pick() {
                     // Unreachable by construction (activate picks first in
                     // picker mode), kept as a guard: never exec in a picker.
-                    self.picked = Some(path);
+                    self.picked = vec![path];
                 } else if self.perform_open(terminal, events, &path) {
                     return true;
                 }
             }
         }
-        self.picked.is_some()
+        !self.picked.is_empty()
     }
 
     /// The one open execution path — hotkeys, mouse, and the socket verb all
@@ -670,23 +733,19 @@ impl App {
                 None => Response::err("reveal needs a path"),
             },
             Verb::GetPath => match self.view.selection.clone() {
-                Some(sel) => {
-                    let data = match request.form.unwrap_or_default() {
-                        PathForm::Name => sel
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| sel.display().to_string()),
-                        PathForm::Rel => {
-                            let rel = sel.strip_prefix(&self.root).unwrap_or(&sel);
-                            if rel.as_os_str().is_empty() {
-                                ".".into() // the root itself
-                            } else {
-                                rel.display().to_string()
-                            }
-                        }
-                        PathForm::Abs => sel.display().to_string(),
-                    };
-                    Response::ok(Some(data))
+                Some(cursor) => {
+                    let form = request.form.unwrap_or_default();
+                    // `data` stays exactly what it has always been — one path,
+                    // the cursor — and `paths` carries the whole selection in
+                    // tree order beside it (task 074). Redefining `data` would
+                    // not be additive evolution (ADR 0011).
+                    let paths = self
+                        .view
+                        .selected(&self.rows())
+                        .iter()
+                        .map(|path| self.format_path(path, form))
+                        .collect();
+                    Response::ok_selection(self.format_path(&cursor, form), paths)
                 }
                 None => Response::err("no selection"),
             },
@@ -873,6 +932,7 @@ impl App {
         &mut self,
         rows: &[Row],
         hit: Option<(usize, bool)>,
+        modifier: input::ClickModifier,
         now: Instant,
     ) -> NavEffect {
         let armed = self.armed_press.take();
@@ -884,7 +944,27 @@ impl App {
             self.click_timer.disarm();
             return NavEffect::None;
         }
+        // A modified click is a selection gesture and nothing else: it never
+        // activates, so it disarms any pending double-click. Whether the
+        // modifier arrives at all is the terminal's decision — many keep
+        // `Shift` for their own text selection (task 074).
+        if self.selection_is_plural() && modifier != input::ClickModifier::None {
+            self.click_timer.disarm();
+            match modifier {
+                input::ClickModifier::Extend => self.view.extend_to(rows, idx),
+                input::ClickModifier::Toggle => self.view.toggle_selected(rows, idx),
+                input::ClickModifier::None => {}
+            }
+            return NavEffect::None;
+        }
         self.resolve_click(rows, idx, on_chevron, now)
+    }
+
+    /// Whether more than one row may be selected at once: always in the tree,
+    /// and in the picker only under `--multi`, where a plural selection has
+    /// somewhere to go (task 074).
+    fn selection_is_plural(&self) -> bool {
+        !self.mode.is_pick() || self.multi
     }
 
     /// Click decision (ADR 0015): a chevron click toggles (each completed
@@ -944,16 +1024,48 @@ impl App {
             }
             if !browsing_click {
                 if click.is_some() {
-                    // A picking click also moves the selection there.
+                    // A picking click also moves the selection there — and
+                    // collapses it, so a click always confirms what it lands on.
                     self.view.focus(row.path.clone());
                 }
-                self.picked = Some(row.path.clone());
+                let selected = self.view.selected(rows);
+                // Nothing selected is ever dropped silently: a row the filter
+                // does not confirm refuses the whole pick and says which one.
+                if let Some(unpickable) = rows
+                    .iter()
+                    .find(|row| selected.contains(&row.path) && !row.pickable)
+                {
+                    return NavEffect::Message(format!(
+                        "{} does not match the filter",
+                        unpickable.name
+                    ));
+                }
+                self.picked = selected;
                 return NavEffect::None;
             }
         }
         match click {
             Some((idx, on_chevron)) => self.view.on_click(&mut self.tree, rows, idx, on_chevron),
             None => self.view.on_enter(&mut self.tree, rows),
+        }
+    }
+
+    /// One path in the form the request asked for.
+    fn format_path(&self, path: &Path, form: PathForm) -> String {
+        match form {
+            PathForm::Name => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string()),
+            PathForm::Rel => {
+                let rel = path.strip_prefix(&self.root).unwrap_or(path);
+                if rel.as_os_str().is_empty() {
+                    ".".into() // the root itself
+                } else {
+                    rel.display().to_string()
+                }
+            }
+            PathForm::Abs => path.display().to_string(),
         }
     }
 
@@ -989,7 +1101,7 @@ impl App {
                 query: String::new(),
                 matches: Vec::new(),
                 matched_set: HashMap::new(),
-                saved_selection: self.view.selection.clone(),
+                saved_selection: self.view.snapshot_selection(),
                 saved_scroll: self.view.scroll,
             });
         }
@@ -1022,7 +1134,7 @@ impl App {
             Some(state) => {
                 // Both modes restore the pre-search view now: the picker keeps
                 // the tree, so it has a view worth putting back (ADR 0023).
-                self.view.selection = state.saved_selection;
+                self.view.restore_selection(state.saved_selection);
                 self.view.scroll = state.saved_scroll;
                 self.pending_reveal = None;
                 false
@@ -1656,7 +1768,8 @@ mod tests {
             restore_expanded: HashSet::new(),
             expansion_dirty: false,
             last_saved_expanded: Vec::new(),
-            picked: None,
+            picked: Vec::new(),
+            multi: false,
             input_paused: Arc::new(AtomicBool::new(false)),
             click_timer: input::ClickTimer::default(),
             armed_press: None,
@@ -2085,7 +2198,7 @@ mod tests {
         // A fresh session: sync lands on row 0, and Enter picks the root —
         // the explicit "this dir" answer.
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r")]);
     }
 
     #[test]
@@ -2100,25 +2213,25 @@ mod tests {
         let rows = h.app.rows();
         let sub_idx = rows.iter().position(|r| r.name == "sub").unwrap();
         h.app.activate(&rows, Some((sub_idx, true)));
-        assert!(h.app.picked.is_none(), "chevron click browses");
+        assert!(h.app.picked.is_empty(), "chevron click browses");
         assert!(h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded);
         let rows = h.app.rows();
         h.app.activate(&rows, Some((sub_idx, false)));
-        assert!(h.app.picked.is_none(), "name click browses (collapses)");
+        assert!(h.app.picked.is_empty(), "name click browses (collapses)");
         assert!(!h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded);
 
         // File clicks pick.
         let rows = h.app.rows();
         let file_idx = rows.iter().position(|r| r.name == "file.txt").unwrap();
         h.app.activate(&rows, Some((file_idx, false)));
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/file.txt")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/file.txt")]);
 
         // Enter picks whatever is selected — a dir included.
-        h.app.picked = None;
+        h.app.picked.clear();
         let rows = h.app.rows();
         h.app.view.focus("/r/sub".into());
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/sub")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/sub")]);
     }
 
     #[test]
@@ -2189,17 +2302,17 @@ mod tests {
             h.app.resolve_click(&rows, 1, true, t0),
             NavEffect::None | NavEffect::RequestExpand(_)
         ));
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
         assert!(h.app.tree.node_at(Path::new("/r/src")).unwrap().expanded);
         // A completed double-click on a directory browses it too — only Enter
         // confirms a directory, so exploratory clicks never pick by accident.
         h.app
             .resolve_click(&rows, 1, false, t0 + Duration::from_millis(100));
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
         // Enter on the same row picks it.
         let rows = h.app.rows();
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/src")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/src")]);
     }
 
     #[test]
@@ -2230,7 +2343,7 @@ mod tests {
             Some(Path::new("/r/src/main.rs"))
         );
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/src/main.rs")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/src/main.rs")]);
     }
 
     /// Applies a glob filter to a harness, as `--filter`/`--filter-mode` do.
@@ -2277,12 +2390,12 @@ mod tests {
             effect,
             NavEffect::Message("src does not match the filter".into())
         );
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
 
         // Enter on the matching file picks it.
         h.app.view.focus("/r/notes.md".into());
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/notes.md")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/notes.md")]);
     }
 
     #[test]
@@ -2313,7 +2426,7 @@ mod tests {
         // The mouse cannot land on it, and it cannot be picked.
         h.app.resolve_click(&rows, dim, false, Instant::now());
         assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/c.md")));
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
     }
 
     #[test]
@@ -2367,7 +2480,7 @@ mod tests {
 
         h.app.view.focus("/r/src".into());
         h.app.activate(&rows, None);
-        assert_eq!(h.app.picked.as_deref(), Some(Path::new("/r/src")));
+        assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/src")]);
     }
 
     #[test]
@@ -2626,7 +2739,7 @@ mod tests {
 
         // A click on a dim row neither selects nor picks.
         h.app.resolve_click(&rows, dim, false, Instant::now());
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/keep.md")),
@@ -2648,7 +2761,7 @@ mod tests {
         assert!(h.app.view.sync(&rows).is_none());
         let effect = h.app.activate(&rows, None);
         assert_eq!(effect, NavEffect::Message("no matches".into()));
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
         // Independent-review finding: reporting "no selection" is not enough —
         // the field itself must be cleared, or the painter keeps drawing a
         // cursor on a dim row that answers to no key.
@@ -2906,8 +3019,12 @@ mod tests {
         );
         let rows = h.app.rows();
         press(&mut h.app, &rows, 2, false);
-        h.app
-            .resolve_release(&rows, Some((2, false)), Instant::now());
+        h.app.resolve_release(
+            &rows,
+            Some((2, false)),
+            input::ClickModifier::None,
+            Instant::now(),
+        );
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(rows[2].path.as_path())
@@ -2926,8 +3043,12 @@ mod tests {
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
         press(&mut h.app, &rows, 1, false);
-        h.app
-            .resolve_release(&rows, Some((2, false)), Instant::now());
+        h.app.resolve_release(
+            &rows,
+            Some((2, false)),
+            input::ClickModifier::None,
+            Instant::now(),
+        );
         assert_eq!(
             h.app.view.selection, before,
             "sliding off the pressed row revokes the click"
@@ -2942,7 +3063,8 @@ mod tests {
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
         press(&mut h.app, &rows, 1, false);
-        h.app.resolve_release(&rows, None, Instant::now());
+        h.app
+            .resolve_release(&rows, None, input::ClickModifier::None, Instant::now());
         assert_eq!(h.app.view.selection, before);
     }
 
@@ -2952,8 +3074,12 @@ mod tests {
         feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
-        h.app
-            .resolve_release(&rows, Some((1, false)), Instant::now());
+        h.app.resolve_release(
+            &rows,
+            Some((1, false)),
+            input::ClickModifier::None,
+            Instant::now(),
+        );
         assert_eq!(h.app.view.selection, before);
     }
 
@@ -2965,8 +3091,12 @@ mod tests {
         let rows = h.app.rows();
         let expanded = h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded;
         press(&mut h.app, &rows, 1, true);
-        h.app
-            .resolve_release(&rows, Some((1, false)), Instant::now());
+        h.app.resolve_release(
+            &rows,
+            Some((1, false)),
+            input::ClickModifier::None,
+            Instant::now(),
+        );
         assert_eq!(
             h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded,
             expanded,
@@ -2981,16 +3111,21 @@ mod tests {
         let rows = h.app.rows();
         let t0 = Instant::now();
         press(&mut h.app, &rows, 1, false);
-        h.app.resolve_release(&rows, Some((1, false)), t0);
-        assert!(h.app.picked.is_none(), "one click only selects");
+        h.app
+            .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
+        assert!(h.app.picked.is_empty(), "one click only selects");
         // A second press without its release must not activate.
         press(&mut h.app, &rows, 1, false);
-        assert!(h.app.picked.is_none());
-        h.app
-            .resolve_release(&rows, Some((1, false)), t0 + Duration::from_millis(100));
+        assert!(h.app.picked.is_empty());
+        h.app.resolve_release(
+            &rows,
+            Some((1, false)),
+            input::ClickModifier::None,
+            t0 + Duration::from_millis(100),
+        );
         assert_eq!(
-            h.app.picked.as_deref(),
-            Some(rows[1].path.as_path()),
+            h.app.picked.as_slice(),
+            [rows[1].path.clone()],
             "two complete clicks activate"
         );
     }
@@ -3002,15 +3137,17 @@ mod tests {
         let rows = h.app.rows();
         let t0 = Instant::now();
         press(&mut h.app, &rows, 1, false);
-        h.app.resolve_release(&rows, Some((1, false)), t0);
+        h.app
+            .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
         press(&mut h.app, &rows, 1, false);
         // Beyond the window: a slow second click is two singles, not a double.
         h.app.resolve_release(
             &rows,
             Some((1, false)),
+            input::ClickModifier::None,
             t0 + input::DOUBLE_CLICK_WINDOW + Duration::from_millis(1),
         );
-        assert!(h.app.picked.is_none());
+        assert!(h.app.picked.is_empty());
     }
 
     #[test]
@@ -3024,16 +3161,25 @@ mod tests {
         let rows = h.app.rows();
         let t0 = Instant::now();
         press(&mut h.app, &rows, 1, false);
-        h.app.resolve_release(&rows, Some((1, false)), t0);
+        h.app
+            .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
         // A press released elsewhere is an intervening click: it resets.
         press(&mut h.app, &rows, 1, false);
-        h.app
-            .resolve_release(&rows, Some((2, false)), t0 + Duration::from_millis(50));
+        h.app.resolve_release(
+            &rows,
+            Some((2, false)),
+            input::ClickModifier::None,
+            t0 + Duration::from_millis(50),
+        );
         press(&mut h.app, &rows, 1, false);
-        h.app
-            .resolve_release(&rows, Some((1, false)), t0 + Duration::from_millis(100));
+        h.app.resolve_release(
+            &rows,
+            Some((1, false)),
+            input::ClickModifier::None,
+            t0 + Duration::from_millis(100),
+        );
         assert!(
-            h.app.picked.is_none(),
+            h.app.picked.is_empty(),
             "the abandoned click reset the double"
         );
     }
@@ -3302,6 +3448,67 @@ mod ctl_tests {
             h.app.ctl_response(request(Verb::GetRoot)).0.data.as_deref(),
             Some("/r")
         );
+    }
+
+    /// Task 074: `data` keeps carrying exactly one path — the cursor — and
+    /// `paths` carries the whole selection beside it, so a client that has
+    /// never heard of `paths` is unaffected (ADR 0011, additive-only).
+    #[test]
+    fn get_path_reports_the_cursor_in_data_and_the_selection_in_paths() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("a.txt", NodeKind::File),
+                ("b.txt", NodeKind::File),
+                ("c.txt", NodeKind::File),
+            ],
+        );
+        h.app.view.focus("/r/a.txt".into());
+        let response = h.app.ctl_response(request(Verb::GetPath)).0;
+        assert_eq!(response.data.as_deref(), Some("a.txt"));
+        assert_eq!(response.paths, Some(vec!["a.txt".into()]));
+
+        // Extend upward, so the cursor is *not* the first selected path: `data`
+        // must still be the cursor, not `paths[0]`.
+        h.app.view.focus("/r/c.txt".into());
+        let rows = h.app.rows();
+        h.app.view.move_by_extending(&rows, -2);
+        let response = h.app.ctl_response(request(Verb::GetPath)).0;
+        assert_eq!(response.data.as_deref(), Some("a.txt"));
+        assert_eq!(
+            response.paths,
+            Some(vec!["a.txt".into(), "b.txt".into(), "c.txt".into()])
+        );
+    }
+
+    /// The picker without `--multi` is exactly what it always was: `Shift` with
+    /// a movement key is just that movement, and Enter confirms one path.
+    #[test]
+    fn the_picker_is_single_select_without_multi() {
+        for (multi, expected) in [(false, 1), (true, 3)] {
+            let mut h = harness(Mode::Pick);
+            h.app.multi = multi;
+            feed(
+                &mut h.app,
+                "/r",
+                &[
+                    ("a.txt", NodeKind::File),
+                    ("b.txt", NodeKind::File),
+                    ("c.txt", NodeKind::File),
+                ],
+            );
+            let rows = h.app.rows();
+            h.app.view.focus("/r/a.txt".into());
+            if multi {
+                h.app.view.move_by_extending(&rows, 2);
+            } else {
+                h.app.view.move_by(&rows, 2);
+            }
+            h.app.activate(&rows, None);
+            assert_eq!(h.app.picked.len(), expected, "multi = {multi}");
+        }
     }
 
     #[test]

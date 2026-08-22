@@ -207,16 +207,23 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
         ..area
     };
 
-    let selected = view.selection.as_deref();
+    let cursor = view.selection.as_deref();
+    // With one row selected every theme renders exactly as it always has. The
+    // accent bar appears on the cursor row in a `FullRow` theme only while
+    // there is more than one row selected — that is, only when there is
+    // something to tell apart (task 074).
+    let multi = view.selection_len() > 1;
     let mut lines = Vec::with_capacity(viewport);
     let mut badges = Vec::with_capacity(viewport);
-    let mut selected_visible: Option<u16> = None;
+    let mut selected_visible: Vec<u16> = Vec::new();
     for (i, row) in rows.iter().skip(view.scroll).take(viewport).enumerate() {
-        let is_selected = selected == Some(row.path.as_path());
+        let is_selected = view.is_selected(&row.path);
         if is_selected {
-            selected_visible = Some(i as u16);
+            selected_visible.push(i as u16);
         }
-        lines.push(row_line(theme, settings, row, is_selected));
+        let accent = cursor == Some(row.path.as_path())
+            && (multi || theme.selection == SelectionStyle::SoftBarAccent);
+        lines.push(row_line(theme, settings, row, is_selected, accent));
         badges.push(badge_line(
             theme,
             row,
@@ -278,7 +285,7 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
     // a search match — keep it: washing over them would leave their dark
     // foreground on a dark row, i.e. invisible text on the very row the
     // selection sits on.
-    if let Some(i) = selected_visible {
+    for i in selected_visible {
         let y = tree_area.y + i;
         let wash = theme.palette.selection_bg;
         let buffer = frame.buffer_mut();
@@ -299,9 +306,15 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
 /// active theme, and whether the row is selected — the same geometry
 /// `hit_test` mirrors (guides and the accent bar occupy the existing indent
 /// columns, never shifting the chevron).
-fn row_line(theme: &Theme, settings: &Settings, row: &Row, selected: bool) -> Line<'static> {
+fn row_line(
+    theme: &Theme,
+    settings: &Settings,
+    row: &Row,
+    selected: bool,
+    accent: bool,
+) -> Line<'static> {
     let name_style = name_style(theme, row);
-    let mut spans = indent_spans(theme, row, selected);
+    let mut spans = indent_spans(theme, row, accent);
     spans.extend(glyph_column_spans(theme, settings, row));
     spans.extend(label_spans(theme, row, name_style));
     if let Some(annotation) = &row.annotation {
@@ -461,21 +474,22 @@ fn status_span(theme: &Theme, row: &Row) -> Vec<Span<'static>> {
 }
 
 /// The ancestor-indent columns (`INDENT_WIDTH` each). Renders the theme's
-/// guide glyph, and — for a selected row under `SoftBarAccent` — turns the
-/// outermost column into the left accent bar (`▏`), keeping the total width
-/// identical so `hit_test` geometry is unchanged.
+/// guide glyph, and — when `accent` is set — turns the outermost column into
+/// the left accent bar (`▏`), keeping the total width identical so `hit_test`
+/// geometry is unchanged. The caller decides: the cursor row under
+/// `SoftBarAccent`, or the cursor row of a multi-selection in any theme.
 ///
 /// The outermost column (`level 0`) is never a guide: it is the root's spine,
 /// which always runs full-height and is uninformative. It is the selection
-/// accent bar (selected row, `SoftBarAccent`) or two blank spaces. Guides
-/// (`Indent` lines and `Connectors`) begin at `level >= 1`.
+/// accent bar or two blank spaces. Guides (`Indent` lines and `Connectors`)
+/// begin at `level >= 1`.
 ///
 /// A depth-0 (root) row has no indent columns, so its accent bar cannot be
 /// drawn without clobbering the chevron; the soft background still marks it.
-fn indent_spans(theme: &Theme, row: &Row, selected: bool) -> Vec<Span<'static>> {
+fn indent_spans(theme: &Theme, row: &Row, accent: bool) -> Vec<Span<'static>> {
     let depth = row.depth;
     let guide_style = Style::default().fg(theme.palette.guide);
-    let accent = selected && theme.selection == SelectionStyle::SoftBarAccent;
+
     // Depth fade (guide_fade = floor): lerp guide -> floor over levels 1..=4,
     // clamped at the floor so deep trees never lose their guides.
     let level_style = |level: usize| -> Style {
@@ -904,7 +918,7 @@ mod tests {
 
         // A whole selected row also carries the soft selection background.
         let r = row("deep", NodeKind::File, 1);
-        let line = row_line(&theme, &Settings::default(), &r, true);
+        let line = row_line(&theme, &Settings::default(), &r, true, true);
         assert_eq!(line.style.bg, Some(theme.palette.selection_bg));
     }
 

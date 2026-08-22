@@ -28,8 +28,10 @@ use crate::app::Mode;
 ///
 /// Run `birch ctl --help` to control a running instance over its socket.
 ///
-/// Tip: mouse capture disables the terminal's drag-to-copy; hold Shift while
-/// dragging to select text natively.
+/// Tip: mouse capture disables the terminal's drag-to-copy. Most terminals let
+/// Shift-drag through to their own text selection while an application holds
+/// the mouse — that is the terminal's choice, and birch never claims Shift
+/// back. Where Shift does reach birch, Shift-click extends the selection.
 #[derive(Parser, Debug)]
 #[command(name = "birch", version, about)]
 struct Cli {
@@ -135,6 +137,18 @@ struct Cli {
     /// exits. Search behaves exactly as in the tree.
     #[arg(long)]
     pick: bool,
+
+    /// Pick several entries: Shift and Ctrl select more than one row, and
+    /// Enter prints every selected path, one per line. Without it --pick is
+    /// single-select and prints exactly one line, so existing recipes such as
+    /// `nvim "$(birch --pick)"` keep working.
+    #[arg(long, requires = "pick")]
+    multi: bool,
+
+    /// Separate picked paths with NUL instead of a newline. Newlines are legal
+    /// in file names, so this is the unambiguous form of --multi output.
+    #[arg(long, requires = "multi")]
+    print0: bool,
 
     /// Only show (and, in --pick, only confirm) entries matching this glob.
     /// Repeatable; an entry matching any pattern passes. Patterns read as in a
@@ -477,17 +491,27 @@ fn main() -> ExitCode {
             socket,
             filter,
             input_paused,
+            multi: cli.multi,
         },
     );
     term::leave(mouse, picker);
 
     match result {
-        Ok(Some(picked)) => {
-            println!("{}", picked.display());
+        Ok(picked) if !picked.is_empty() => {
+            // One path per line, or NUL-separated under --print0. A newline is
+            // a legal character in a file name, so a multi-path newline
+            // contract is only decodable with --print0 behind it.
+            let separator = if cli.print0 { '\0' } else { '\n' };
+            let mut out = String::new();
+            for path in &picked {
+                out.push_str(&path.display().to_string());
+                out.push(separator);
+            }
+            print!("{out}");
             ExitCode::SUCCESS
         }
-        Ok(None) if picker => ExitCode::FAILURE, // quit without a pick
-        Ok(None) => ExitCode::SUCCESS,
+        Ok(_) if picker => ExitCode::FAILURE, // quit without a pick
+        Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("birch: {e}");
             ExitCode::FAILURE

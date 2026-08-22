@@ -55,6 +55,9 @@ pub enum InputAction {
     /// Move the selection to the first or last reachable row.
     Home,
     End,
+    /// `Shift` with a movement key: move the cursor and extend the selection
+    /// from the anchor to where it lands (task 074).
+    Extend(Movement),
     /// A printable character — always search input, never a hotkey
     /// (ADR 0008).
     Char(char),
@@ -66,17 +69,66 @@ pub enum InputAction {
         column: u16,
         row: u16,
     },
-    /// Left button up: completes the armed click, or abandons it.
+    /// Left button up: completes the armed click, or abandons it. The
+    /// modifiers travel with the release, because that is where the click
+    /// takes effect.
     Release {
         column: u16,
         row: u16,
+        modifier: ClickModifier,
     },
     Redraw,
+}
+
+/// The cursor movements `Shift` can extend a selection along. `→` and `←` are
+/// absent on purpose: they are structural (expand, split, collapse), and a
+/// range has no meaning attached to them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Movement {
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+}
+
+/// What a modifier held during a click asks for (task 074). Whether a modifier
+/// arrives at all is the terminal's decision — many keep `Shift` for their own
+/// text selection while an application has the mouse — so birch handles what it
+/// is given and never claims a modifier back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ClickModifier {
+    #[default]
+    None,
+    /// Extend the selection from the anchor to this row.
+    Extend,
+    /// Add this row to the selection, or take it out.
+    Toggle,
+}
+
+/// `Shift` extends, `Ctrl` toggles, and `Shift` wins when both are held —
+/// extending is the more specific ask. `Alt` is left alone: it is the modifier
+/// terminals most often bind for themselves.
+fn click_modifier(modifiers: KeyModifiers) -> ClickModifier {
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        ClickModifier::Extend
+    } else if modifiers.contains(KeyModifiers::CONTROL) {
+        ClickModifier::Toggle
+    } else {
+        ClickModifier::None
+    }
 }
 
 pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
     match event {
         Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Some(InputAction::Extend(Movement::Up))
+            }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Some(InputAction::Extend(Movement::Down))
+            }
             KeyCode::Up => Some(InputAction::Up),
             KeyCode::Down => Some(InputAction::Down),
             KeyCode::Right => Some(InputAction::Right),
@@ -87,16 +139,24 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
             // the end everywhere else, and a key that silently does nothing is
             // worse than one that does the obvious thing. `Shift` is excluded:
             // it extends a selection (task 074).
-            KeyCode::PageUp if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                Some(InputAction::PageUp)
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End => {
+                let movement = match key.code {
+                    KeyCode::PageUp => Movement::PageUp,
+                    KeyCode::PageDown => Movement::PageDown,
+                    KeyCode::Home => Movement::Home,
+                    _ => Movement::End,
+                };
+                Some(if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    InputAction::Extend(movement)
+                } else {
+                    match movement {
+                        Movement::PageUp => InputAction::PageUp,
+                        Movement::PageDown => InputAction::PageDown,
+                        Movement::Home => InputAction::Home,
+                        _ => InputAction::End,
+                    }
+                })
             }
-            KeyCode::PageDown if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                Some(InputAction::PageDown)
-            }
-            KeyCode::Home if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                Some(InputAction::Home)
-            }
-            KeyCode::End if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(InputAction::End),
             KeyCode::Backspace => Some(InputAction::Backspace),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(InputAction::Quit)
@@ -121,6 +181,7 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
             MouseEventKind::Up(MouseButton::Left) => Some(InputAction::Release {
                 column: mouse.column,
                 row: mouse.row,
+                modifier: click_modifier(mouse.modifiers),
             }),
             MouseEventKind::ScrollUp => Some(InputAction::ScrollUp),
             MouseEventKind::ScrollDown => Some(InputAction::ScrollDown),
@@ -174,13 +235,63 @@ mod tests {
                     "{code:?} with {modifier:?}"
                 );
             }
-            // Shift is reserved for range selection (task 074).
+        }
+    }
+
+    #[test]
+    fn shift_extends_and_ctrl_toggles_on_a_release() {
+        let at = |modifiers| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: 4,
+                row: 2,
+                modifiers,
+            })
+        };
+        let modifier_of = |ev| match map_event(&ev, true) {
+            Some(InputAction::Release { modifier, .. }) => modifier,
+            other => panic!("expected a release, got {other:?}"),
+        };
+        assert_eq!(modifier_of(at(KeyModifiers::NONE)), ClickModifier::None);
+        assert_eq!(modifier_of(at(KeyModifiers::SHIFT)), ClickModifier::Extend);
+        assert_eq!(
+            modifier_of(at(KeyModifiers::CONTROL)),
+            ClickModifier::Toggle
+        );
+        // Extending is the more specific ask, so it wins when both are held.
+        assert_eq!(
+            modifier_of(at(KeyModifiers::SHIFT | KeyModifiers::CONTROL)),
+            ClickModifier::Extend
+        );
+        // Alt is left to the terminal.
+        assert_eq!(modifier_of(at(KeyModifiers::ALT)), ClickModifier::None);
+    }
+
+    #[test]
+    fn shift_turns_a_movement_key_into_an_extension() {
+        for (code, movement) in [
+            (KeyCode::Up, Movement::Up),
+            (KeyCode::Down, Movement::Down),
+            (KeyCode::PageUp, Movement::PageUp),
+            (KeyCode::PageDown, Movement::PageDown),
+            (KeyCode::Home, Movement::Home),
+            (KeyCode::End, Movement::End),
+        ] {
             assert_eq!(
                 map_event(&Event::Key(KeyEvent::new(code, KeyModifiers::SHIFT)), true),
-                None,
-                "{code:?} with shift"
+                Some(InputAction::Extend(movement)),
+                "{code:?}"
             );
         }
+        // The structural arrows have no range meaning, so Shift leaves them
+        // exactly as they are.
+        assert_eq!(
+            map_event(
+                &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT)),
+                true
+            ),
+            Some(InputAction::Right)
+        );
     }
 
     #[test]
@@ -213,7 +324,11 @@ mod tests {
         );
         assert_eq!(
             map_event(&at(MouseEventKind::Up(MouseButton::Left)), true),
-            Some(InputAction::Release { column: 7, row: 3 })
+            Some(InputAction::Release {
+                column: 7,
+                row: 3,
+                modifier: ClickModifier::None
+            })
         );
         // Other buttons stay unmapped — the right button belongs to the
         // context menu, which does not exist yet.

@@ -89,6 +89,14 @@ pub struct Response {
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
+    /// Every selected path, in tree order and in the requested form
+    /// (task 074). Additive: `data` keeps carrying exactly one path — the
+    /// cursor — because redefining an existing field is not additive
+    /// evolution, and a client that has never heard of `paths` still works.
+    /// A single selection is a one-element array, so clients need no special
+    /// case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -99,6 +107,20 @@ impl Response {
             v: VERSION,
             ok: true,
             data,
+            paths: None,
+            error: None,
+        }
+    }
+
+    /// A reply that carries the whole selection: `data` is the **cursor** —
+    /// which need not be the first selected row — and `paths` is every
+    /// selected path in tree order.
+    pub fn ok_selection(cursor: String, paths: Vec<String>) -> Self {
+        Self {
+            v: VERSION,
+            ok: true,
+            data: Some(cursor),
+            paths: Some(paths),
             error: None,
         }
     }
@@ -108,6 +130,7 @@ impl Response {
             v: VERSION,
             ok: false,
             data: None,
+            paths: None,
             error: Some(message.into()),
         }
     }

@@ -36,6 +36,9 @@ Arrows navigate: `→` expands a folder, splits a compacted chain, or else moves
 or jumps to the parent. `PgUp`/`PgDn` move a page and `Home`/`End` jump to the ends. `Enter` opens a
 file (or toggles a directory). Type anything for a fuzzy search. `Esc` or `Ctrl-C` quit.
 
+Hold `Shift` with any of those movement keys to select a range of rows, and `Ctrl`-click to add a
+row to the selection or take it out.
+
 ## Install
 
 **Homebrew** (recommended):
@@ -98,6 +101,16 @@ stdout carries only the picked path.
 ```sh
 nvim "$(birch --pick)"        # pick a file to open
 cd "$(birch --pick)"          # pick a directory to cd into
+```
+
+`--multi` picks several: `Shift` with the movement keys selects a range, `Ctrl`-click adds or
+removes a row, and `Enter` prints every selected path, one per line. It is opt-in precisely so the
+recipes above keep working — plain `--pick` prints exactly one line. Add `--print0` to separate with
+`NUL` instead, which is the only unambiguous form when a file name may itself contain a newline.
+
+```sh
+birch --pick --multi | xargs -d '\n' nvim -p     # open the picked files in tabs
+birch --pick --multi --print0 | xargs -0 wc -l   # newline-proof
 ```
 
 ### Filtering
@@ -224,6 +237,7 @@ birch ctl set git off          # flip a setting: hidden | ignored | noise | icon
                                #   scrollbar | theme <id> | scroll-lines <1-10> |
                                #   badges <right|left|none|auto> | branch-badges
 birch ctl get-path --abs       # print the current selection
+birch ctl get-path --abs --all # ...or every selected path, one per line
 birch ctl quit                 # exit the instance
 ```
 

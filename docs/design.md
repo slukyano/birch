@@ -31,6 +31,7 @@ birch [<options>] [<dir>]
 
 ```
 birch --pick [<dir>]      # picker mode: Enter prints the selection and exits
+birch --pick --multi      # ...several: one path per line (--print0 to NUL-separate)
 birch --filter '*.md'     # glob filter (repeatable); --filter-mode hide|skip
 birch ctl <verb> [...]    # control a running instance (see Control socket)
 ```
@@ -86,6 +87,7 @@ Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and 
 | `↑` / `↓` | Move selection (during a search: step matches, in tree order) |
 | `PgUp` / `PgDn` | Move selection a page — the viewport less a row of overlap — and let the viewport follow (during a search: a page's worth of matches). Clamps at the ends where `↑`/`↓` wrap. |
 | `Home` / `End` | Move selection to the first / last row (during a search: the first / last match) |
+| `Shift` + `↑` `↓` `PgUp` `PgDn` `Home` `End` | Extend the selection from the anchor to where the cursor lands, over live rows only. Any unmodified move collapses the selection back to one row. |
 | `→` | **Always moves or reveals** (task 060): a collapsed dir expands; an expanded chain splits into member rows; otherwise the selection advances to the next row. Nothing happens only on the last row. |
 | `Enter` on dir | Toggle expand/collapse |
 | `←` on dir / into parent | Collapse / jump to parent |
@@ -105,6 +107,7 @@ Printable characters are permanently reserved for search — no letter hotkeys, 
 
 - **Single-click selects; double-click activates** (ADR 0015 — reversed from the original VS Code-school single-click-activates). In a host pane, a click meant to focus the pane — or just to point — arrives as a normal click, so the first click must be harmless: it only moves selection. A second click on the same row within 450 ms is Enter's twin (open file / toggle dir). Clicking a dir's chevron toggles without moving selection; each chevron click is its own toggle.
 - **A click completes on release** (ADR 0025): the press arms, and the click acts only when the button is released on the same row, in the same zone. Releasing anywhere else abandons it, so a click can be revoked by sliding off. The double-click window measures release to release — two complete clicks.
+- **`Ctrl`-click toggles** a row in or out of the selection; **`Shift`-click** extends the range from the anchor to it. Both are handled whenever the terminal forwards the modifier — many terminals keep `Shift` for their own text selection while an application has the mouse (ghostty's `mouse-shift-capture` defaults to `false`), and birch never claims it back. `Shift` with the arrow keys always works.
 - **Scroll wheel**: `--scroll-lines` rows per tick, 3 by default (1–10).
 - **Hover highlight** (SGR 1003 motion tracking).
 - **Right-click → context menu** (keyboard works inside it: arrows/Enter/Esc):
@@ -125,7 +128,7 @@ Reveal Root Here
 ```
 
 - Right-click below the tree → menu targeting the root.
-- **Text-selection trade-off**: mouse capture disables native drag-to-copy. Mitigations: Shift-click passes through to the terminal (documented in `--help`); Copy Path in the menu covers the real use case.
+- **Text-selection trade-off**: mouse capture disables native drag-to-copy. Mitigations: most terminals pass `Shift`-drag through to their own selection while an application holds the mouse (documented in `--help`) — it is the terminal's decision, not birch's; Copy Path in the menu covers the real use case.
 - No drag-and-drop. Inside tmux, mouse requires tmux mouse mode (FAQ, not a bug).
 
 ### Opening files
@@ -243,7 +246,7 @@ A running birch instance exposes a Unix domain socket; `birch ctl` (a subcommand
 | Verb | Effect |
 |---|---|
 | `reveal <path>` | Expand to and select path (editor → tree reverse integration) |
-| `get-path [--name\|--rel\|--abs]` | Print current selection |
+| `get-path [--name\|--rel\|--abs] [--all]` | Print current selection; `--all` prints every selected path, one per line. On the wire `data` always carries exactly one path — the cursor — and `paths` carries the whole selection beside it. |
 | `get-root` | Print root |
 | `set <setting> <value>` | Runtime toggles: hidden, ignored, compact, icons, search case, … |
 | `set-root <dir>` | Re-root |

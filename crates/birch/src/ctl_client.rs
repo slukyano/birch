@@ -44,6 +44,10 @@ enum VerbCmd {
         /// Print the absolute path.
         #[arg(long)]
         abs: bool,
+        /// Print every selected path, one per line, in tree order. Without it
+        /// exactly one path is printed — the cursor — as it always has been.
+        #[arg(long)]
+        all: bool,
     },
     /// Print the tree root.
     GetRoot,
@@ -121,10 +125,22 @@ pub fn run(rest: &[OsString]) -> ExitCode {
         return ExitCode::from(2);
     };
 
+    // `--all` reads the additive `paths` array; everything else reads `data`,
+    // which carries exactly one path whether or not the array is there.
+    let all = matches!(&cli.verb, VerbCmd::GetPath { all: true, .. });
     match roundtrip(&socket, &request) {
         Ok(response) if response.ok => {
-            if let Some(data) = response.data {
-                println!("{data}");
+            match (all, response.paths) {
+                (true, Some(paths)) => {
+                    for path in paths {
+                        println!("{path}");
+                    }
+                }
+                _ => {
+                    if let Some(data) = response.data {
+                        println!("{data}");
+                    }
+                }
             }
             ExitCode::SUCCESS
         }
@@ -155,7 +171,12 @@ fn build_request(verb: &VerbCmd) -> Result<Request, String> {
             request.path = Some(absolutize(path)?);
             request
         }
-        VerbCmd::GetPath { name, rel: _, abs } => {
+        VerbCmd::GetPath {
+            name,
+            rel: _,
+            abs,
+            all: _,
+        } => {
             let mut request = Request::new(Verb::GetPath);
             request.form = Some(if *name {
                 PathForm::Name
