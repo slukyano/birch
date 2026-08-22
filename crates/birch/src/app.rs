@@ -24,7 +24,7 @@ use birch_core::search::{self, IndexCmd, IndexEvent, Match, SearchIndex, search}
 use birch_core::watcher::{WatchCmd, WatchEvent};
 use birch_core::{
     Filter, NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree,
-    TreeDelta, persist, settings,
+    TreeDelta, persist, settings, undo,
 };
 use birch_tui::edit::{EditKind, Editor};
 use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row, SelectionSnapshot};
@@ -142,6 +142,13 @@ struct App {
     /// A pending destructive answer. Only ever `Enter` or `Esc` — a letter
     /// answering a prompt is the letter command ADR 0008 forbids.
     confirm: Option<Confirm>,
+    /// What birch has done that it can take back (task 093). Session-only: it
+    /// goes with the process, by design rather than by omission.
+    history: undo::History,
+    /// The next step's description, kept beside the history so building an
+    /// `ActionContext` — which happens on every menu open and every hotkey —
+    /// borrows a string instead of formatting one.
+    undo_label: Option<String>,
     /// A drag in flight: the paths being moved, and the directory currently
     /// under the pointer. A drag begins when the pointer leaves the row the
     /// press started on — ADR 0025 already tracks which row that was, so there
@@ -278,6 +285,19 @@ enum Performed {
 }
 
 /// Names a set of paths for a message: one by name, several by count.
+/// The path a delta announced. How the app learns what an operation actually
+/// produced, without the op layer growing a second return value for undo's
+/// benefit — and it is the *announced* path, so a create that made
+/// `a/b/c.txt` from nothing reports `a`, which is what taking it back means.
+fn added_path(delta: &TreeDelta) -> Option<PathBuf> {
+    match delta {
+        TreeDelta::Added { parent, entries } => {
+            entries.first().map(|entry| parent.join(&entry.name))
+        }
+        _ => None,
+    }
+}
+
 fn describe(paths: &[PathBuf]) -> String {
     match paths {
         [one] => one.file_name().map_or_else(
@@ -382,6 +402,8 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathB
         armed_right: None,
         edit: None,
         confirm: None,
+        history: undo::History::default(),
+        undo_label: None,
         drag: None,
         pending_extend: false,
         armed_press: None,
@@ -819,6 +841,10 @@ impl App {
             }
             InputAction::Delete => {
                 self.begin_delete(&rows);
+                NavEffect::None
+            }
+            InputAction::Undo => {
+                self.undo();
                 NavEffect::None
             }
             // The keyboard route in (task 092). Unlike a right-click it has no
@@ -1346,6 +1372,7 @@ impl App {
             open_is_platform: self.open_cmd == OpenCmd::platform_opener(),
             open_program: program,
             system_program: OpenCmd::platform_program(),
+            undo: self.undo_label.as_deref(),
             // `Open` acts on the cursor, so the row that names what `Enter`
             // will do is the cursor's, not the selection's first.
             cursor: self
@@ -1595,6 +1622,17 @@ impl App {
                 let rows = self.rows();
                 self.begin_delete(&rows);
             }
+            Action::Undo => self.undo(),
+            // Detached like `OpenSystem`: it hands the path to another
+            // application rather than taking the terminal.
+            Action::Reveal => {
+                if let Some(target) = targets.first() {
+                    return Performed::OpenWith(
+                        OpenCmd::reveal_target(&target.path),
+                        OpenCmd::reveal(),
+                    );
+                }
+            }
             // Handled above, before the match: every copy shares one path.
             Action::CopyName | Action::CopyRelativePath | Action::CopyAbsolutePath => {}
         }
@@ -1739,11 +1777,28 @@ impl App {
         };
         match result {
             Ok(deltas) => {
+                // Recorded from the deltas rather than re-derived: `create`
+                // announces the *shallowest* path it made, which is what undo
+                // has to take back — `a/b/c.txt` typed into an empty tree
+                // created `a`, and removing only `c.txt` would leave the rest.
+                let landed = deltas.iter().find_map(added_path);
+                match (editor.kind(), landed) {
+                    (EditKind::Rename { path }, Some(to)) => {
+                        self.history.push(undo::Step::Moved {
+                            pairs: vec![(path.clone(), to)],
+                        });
+                    }
+                    (EditKind::Create { .. }, Some(path)) => {
+                        self.history.push(undo::Step::Created { path });
+                    }
+                    _ => {}
+                }
                 for delta in deltas {
                     self.tree.apply(delta);
                 }
                 self.expansion_dirty = true;
                 self.status.clear();
+                self.refresh_undo_label();
                 true
             }
             Err(e) => {
@@ -1751,6 +1806,41 @@ impl App {
                 false
             }
         }
+    }
+
+    /// Records a batch of moves as one undo step, so a drag that carried five
+    /// rows is taken back in one `Ctrl-Z` rather than five.
+    fn remember_moves(&mut self, pairs: Vec<(PathBuf, PathBuf)>) {
+        if pairs.is_empty() {
+            return;
+        }
+        self.history.push(undo::Step::Moved { pairs });
+        self.refresh_undo_label();
+    }
+
+    /// Records a delete. It cannot be reversed — the trash's restore is not
+    /// available on every platform birch runs on — but it is still recorded, so
+    /// that `Ctrl-Z` after a delete says where the files went instead of
+    /// silently reversing whatever happened *before* it.
+    fn remember_trash(&mut self, what: &str) {
+        self.history.push(undo::Step::Trashed { what: what.into() });
+        self.refresh_undo_label();
+    }
+
+    fn refresh_undo_label(&mut self) {
+        self.undo_label = self.history.next().map(undo::Step::describe);
+    }
+
+    fn undo(&mut self) {
+        let Some(undone) = self.history.undo() else {
+            return;
+        };
+        for delta in undone.deltas {
+            self.tree.apply(delta);
+        }
+        self.expansion_dirty = true;
+        self.status = undone.message;
+        self.refresh_undo_label();
     }
 
     /// How loudly the bottom line is drawn. A question outranks a message, and
@@ -1831,7 +1921,9 @@ impl App {
         let removal = ops::trash(&paths);
         let removed = self.apply_removal(&removal);
         let Some(failure) = removal.failed else {
-            self.status = format!("Moved {} to the trash", describe(&paths));
+            let what = describe(&paths);
+            self.remember_trash(&what);
+            self.status = format!("Moved {what} to the trash");
             return;
         };
         // Whatever already went is gone; only the rest is still a question.
@@ -2130,19 +2222,28 @@ impl App {
             return;
         }
         let what = describe(&drag.paths);
+        let mut moved = Vec::new();
         for path in &drag.paths {
             match ops::move_into(path, &target.directory) {
                 Ok(deltas) => {
+                    if let Some(to) = deltas.iter().find_map(added_path) {
+                        moved.push((path.clone(), to));
+                    }
                     for delta in deltas {
                         self.tree.apply(delta);
                     }
                 }
                 Err(e) => {
+                    // Whatever already moved is recorded even though the batch
+                    // failed: a half-applied drag is exactly the thing a user
+                    // reaches for undo about.
+                    self.remember_moves(moved);
                     self.status = e.to_string();
                     return;
                 }
             }
         }
+        self.remember_moves(moved);
         self.expansion_dirty = true;
         self.status = format!(
             "Moved {what} \u{2192} {}",
@@ -2909,6 +3010,8 @@ mod tests {
             armed_right: None,
             edit: None,
             confirm: None,
+            history: undo::History::default(),
+            undo_label: None,
             drag: None,
             pending_extend: false,
             armed_press: None,
@@ -4761,6 +4864,7 @@ mod ctl_tests {
             open_is_platform: false,
             open_program: "nvim",
             system_program: "open",
+            undo: None,
             cursor: targets.first(),
         };
         assert!(Action::Open.available(context));
@@ -4774,6 +4878,7 @@ mod ctl_tests {
             open_is_platform: false,
             open_program: "nvim",
             system_program: "open",
+            undo: None,
             cursor: targets.first(),
         };
         assert!(Action::Open.available(context));
@@ -4791,6 +4896,7 @@ mod ctl_tests {
             open_is_platform: false,
             open_program: "nvim",
             system_program: "open",
+            undo: None,
             cursor: targets.first(),
         };
         assert!(
@@ -5340,6 +5446,99 @@ mod ctl_tests {
         h.app.handle_edit_input(InputAction::Enter);
         assert!(h.app.edit.is_none(), "the corrected name committed");
         assert!(root.join("free.txt").exists());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn undo_takes_back_a_rename_and_then_a_create() {
+        let root = scratch("undo");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.join("a.txt"));
+
+        // Nothing done yet: the action is absent rather than inert (ADR 0029).
+        let targets = h.app.action_targets(&rows);
+        assert!(
+            !Action::Undo.available(h.app.action_context(&targets, "vim")),
+            "there is nothing to take back"
+        );
+
+        // The field opens pre-filled with the current name, cursor at the
+        // extension boundary, so one character makes `ab.txt`.
+        h.app.begin_edit(&rows, Action::Rename);
+        h.app.handle_edit_input(InputAction::Char('b'));
+        h.app.handle_edit_input(InputAction::Enter);
+        assert!(root.join("ab.txt").exists());
+        assert_eq!(h.app.undo_label.as_deref(), Some("Rename of ab.txt"));
+
+        h.app.undo();
+        assert!(
+            root.join("a.txt").exists() && !root.join("ab.txt").exists(),
+            "the name came back"
+        );
+        assert_eq!(h.app.undo_label, None, "and the stack is empty again");
+
+        // Undoing a create trashes what it made rather than unlinking it: the
+        // file may have been written to since birch made it.
+        let rows = h.app.rows();
+        h.app.view.focus(root.clone());
+        h.app.begin_edit(&rows, Action::NewFile);
+        for c in "made.txt".chars() {
+            h.app.handle_edit_input(InputAction::Char(c));
+        }
+        h.app.handle_edit_input(InputAction::Enter);
+        assert!(root.join("made.txt").exists());
+        assert_eq!(h.app.undo_label.as_deref(), Some("New made.txt"));
+
+        h.app.undo();
+        assert!(!root.join("made.txt").exists(), "it went to the trash");
+        assert!(
+            h.app.status.contains("trash"),
+            "and says so: {}",
+            h.app.status
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn undo_after_a_delete_says_where_the_files_went() {
+        // The hazard: `Ctrl-Z` after a delete quietly reversing the rename
+        // before it, which is a destructive surprise.
+        let root = scratch("undo-delete");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        std::fs::write(root.join("gone.txt"), b"y").unwrap();
+        let mut h = rooted(
+            &root,
+            &[("a.txt", NodeKind::File), ("gone.txt", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+
+        h.app.view.focus(root.join("a.txt"));
+        h.app.begin_edit(&rows, Action::Rename);
+        h.app.handle_edit_input(InputAction::Char('b'));
+        h.app.handle_edit_input(InputAction::Enter);
+
+        h.app.trash_now(vec![root.join("gone.txt")]);
+        assert_eq!(h.app.undo_label.as_deref(), Some("Delete of gone.txt"));
+
+        h.app.undo();
+        assert!(
+            h.app.status.contains("trash"),
+            "it says where they went: {}",
+            h.app.status
+        );
+        assert!(
+            root.join("ab.txt").exists(),
+            "and reversed nothing else in the process"
+        );
+        assert_eq!(
+            h.app.undo_label.as_deref(),
+            Some("Rename of ab.txt"),
+            "the rename is still there for the next Ctrl-Z"
+        );
 
         std::fs::remove_dir_all(&root).unwrap();
     }

@@ -18,6 +18,7 @@ pub mod search;
 pub mod settings;
 pub mod source;
 pub mod tree;
+pub mod undo;
 pub mod watcher;
 
 pub use action::{Action, ActionContext, ActionTarget, MenuRow};

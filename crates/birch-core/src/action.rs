@@ -33,6 +33,10 @@ pub enum Action {
     CopyAbsolutePath,
     /// Re-root the tree at the selected directory.
     RevealRootHere,
+    /// Reverse the most recent mutation (task 093).
+    Undo,
+    /// Show the path in the desktop's file manager, without opening it.
+    Reveal,
 }
 
 /// Which form of a path an action copies. Mirrors the socket's `PathForm`, so
@@ -110,6 +114,9 @@ pub struct ActionContext<'a> {
     /// The program the platform opener runs — `open`, or `xdg-open`. Named
     /// rather than described: "system" is not a thing anybody runs.
     pub system_program: &'a str,
+    /// What the next undo would reverse, already described — `None` when there
+    /// is nothing to undo. The action layer holds no history; it is told.
+    pub undo: Option<&'a str>,
     /// The row `Enter` would act on. `Open` acts on the **cursor**, not on the
     /// selection, so its label has to describe that row and no other: with a
     /// file and a directory both selected, what `Enter` does depends entirely
@@ -129,7 +136,7 @@ impl Action {
     pub fn mutates(self) -> bool {
         matches!(
             self,
-            Action::NewFile | Action::NewFolder | Action::Rename | Action::Delete
+            Action::NewFile | Action::NewFolder | Action::Rename | Action::Delete | Action::Undo
         )
     }
 
@@ -171,6 +178,12 @@ impl Action {
             Action::OpenSystem if !context.system_program.is_empty() => {
                 Label::naming("Open with", context.system_program)
             }
+            // The row names what it would reverse, so it can be trusted
+            // without remembering what was just done.
+            Action::Undo => match context.undo {
+                Some(step) => Label::naming("Undo", step),
+                None => Label::plain("Undo"),
+            },
             _ => Label::plain(self.label()),
         }
     }
@@ -188,6 +201,12 @@ impl Action {
             Action::CopyRelativePath => "Copy Relative Path",
             Action::CopyAbsolutePath => "Copy Absolute Path",
             Action::RevealRootHere => "Reveal Root Here",
+            Action::Undo => "Undo",
+            // Deliberately not "Reveal in Finder": the manager it lands in is
+            // whatever the desktop runs, and on Linux it opens the containing
+            // directory rather than selecting the file. A name that promised
+            // Finder would be wrong on most of the platforms birch runs on.
+            Action::Reveal => "Reveal",
         }
     }
 
@@ -211,6 +230,10 @@ impl Action {
             // Task 091 is what would make it possible.
             Action::CopyName | Action::CopyRelativePath | Action::CopyAbsolutePath => None,
             Action::RevealRootHere => None,
+            // Free to bind: raw mode clears `ISIG`, so `Ctrl-Z` has never
+            // suspended birch and nothing is given up by taking it.
+            Action::Undo => Some("^Z"),
+            Action::Reveal => None,
         }
     }
 
@@ -253,6 +276,14 @@ impl Action {
             // Re-rooting is a single-target move by nature, and only a
             // directory can become a root.
             Action::RevealRootHere => targets.len() == 1 && targets[0].is_dir,
+            // The only action that ignores the selection entirely: it reverses
+            // what birch last did, wherever that was.
+            Action::Undo => context.undo.is_some(),
+            // Hands off to another application, exactly as `OpenSystem` does,
+            // so it is out of the picker for the same reason: a row that
+            // launches a file manager while a script waits on a path is a mode
+            // confusion (task 034).
+            Action::Reveal => !context.picker && targets.len() == 1,
         }
     }
 }
@@ -262,7 +293,8 @@ impl Action {
 /// actions do not exist yet are empty, and an empty group renders nothing —
 /// no row, and no separator (ADR 0029: an unavailable action is absent).
 pub const MENU_GROUPS: &[&[Action]] = &[
-    &[Action::Open, Action::OpenSystem],
+    &[Action::Open, Action::OpenSystem, Action::Reveal],
+    &[Action::Undo],
     &[
         Action::NewFile,
         Action::NewFolder,
@@ -329,6 +361,7 @@ mod tests {
             open_is_platform: false,
             open_program: "nvim",
             system_program: "open",
+            undo: None,
             cursor: targets.first(),
         }
     }
@@ -419,6 +452,28 @@ mod tests {
             Action::Open.label_in(context(&dir)),
             Label::plain("Collapse")
         );
+    }
+
+    #[test]
+    fn undo_is_absent_with_nothing_to_reverse_and_names_the_step_otherwise() {
+        let file = [target("/r/a.txt", false)];
+        assert!(!entries(&file).contains(&Action::Undo), "nothing done yet");
+
+        let with_history = ActionContext {
+            undo: Some("Rename of b.txt"),
+            ..context(&file)
+        };
+        assert!(Action::Undo.available(with_history));
+        assert_eq!(
+            Action::Undo.label_in(with_history).text(),
+            "Undo Rename of b.txt"
+        );
+        // A mutation, so it never appears in the picker.
+        let picker = ActionContext {
+            picker: true,
+            ..with_history
+        };
+        assert!(!Action::Undo.available(picker));
     }
 
     #[test]

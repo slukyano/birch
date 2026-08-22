@@ -54,8 +54,12 @@ reaches.**
 - **Deleting is plural.** It is the first action to consume a whole selection, and the first place
   multi-select does something a user could regret — which is why the confirmation reasons about the
   set.
-- **There is no undo inside birch.** The trash is the undo, and it lives outside; the status line
-  therefore has to say what happened and where it went, because nothing in birch can show it.
+- **There is no undo inside birch *for delete*.** The trash is the undo, and it lives outside; the
+  status line therefore has to say what happened and where it went, because nothing in birch can
+  show it. Amended by [ADR 0033](0033-undo-is-a-session-stack.md): birch gained an undo stack, and
+  delete is the one step on it that cannot be reversed — `trash`'s `restore_all` is not compiled on
+  macOS — so `Ctrl-Z` after a delete repeats where the files went rather than reversing something
+  else.
 - **A non-git directory always confirms.** Everything there is untracked by definition. That is
   correct rather than annoying, but it is the case a user meets most often outside a repository.
 

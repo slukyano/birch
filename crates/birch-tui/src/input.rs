@@ -68,6 +68,8 @@ pub enum InputAction {
     NewFile,
     /// Move the selection to the trash (`Delete`).
     Delete,
+    /// Reverse the last mutation (`Ctrl-Z`, task 093).
+    Undo,
     /// A printable character — always search input, never a hotkey
     /// (ADR 0008).
     Char(char),
@@ -226,6 +228,12 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
             KeyCode::F(2) => Some(InputAction::Rename),
             KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(InputAction::NewFile)
+            }
+            // Raw mode clears `ISIG`, so `Ctrl-Z` has never suspended birch —
+            // binding it gives nothing up. It is a control character, not a
+            // printable, so ADR 0008 is untouched.
+            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputAction::Undo)
             }
             // Forward delete. On an Apple keyboard the key labelled *Delete*
             // sends Backspace, which belongs to the search, so the gesture

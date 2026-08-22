@@ -2,7 +2,7 @@
 //! live here (pure, testable); execution is the binary's job because it owns
 //! the terminal.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OpenMode {
@@ -87,6 +87,33 @@ impl OpenCmd {
         }
     }
 
+    /// Shows the path *in* the desktop's file manager instead of opening it —
+    /// Finder's "Reveal in Finder". macOS has a flag for exactly this; nothing
+    /// portable exists elsewhere, so the containing directory is opened
+    /// instead, which is the same answer one step coarser. Pair it with
+    /// [`Self::reveal_target`], which decides what to point it at.
+    pub fn reveal() -> Self {
+        let argv = if cfg!(target_os = "macos") {
+            vec!["open".into(), "-R".into(), "{}".into()]
+        } else {
+            vec![Self::platform_program().into(), "{}".into()]
+        };
+        Self {
+            argv,
+            mode: OpenMode::Detached,
+        }
+    }
+
+    /// What [`Self::reveal`] is pointed at: the path itself where the platform
+    /// can select it, and its containing directory where it cannot.
+    pub fn reveal_target(path: &Path) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            path.to_path_buf()
+        } else {
+            path.parent().unwrap_or(path).to_path_buf()
+        }
+    }
+
     /// The program this command runs, without its arguments. What the menu
     /// shows beside `Open`, so the row names what will actually happen rather
     /// than a category — `nvim +{line} {}` truncated is noise, `nvim` is not.
@@ -122,6 +149,21 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn reveal_shows_the_path_without_opening_it() {
+        let cmd = OpenCmd::reveal();
+        assert_eq!(cmd.mode, OpenMode::Detached, "it hands off to another app");
+        let path = Path::new("/r/src/main.rs");
+        let argv = cmd.build(&OpenCmd::reveal_target(path));
+        if cfg!(target_os = "macos") {
+            // `-R` selects the file rather than opening it.
+            assert_eq!(argv, vec!["open", "-R", "/r/src/main.rs"]);
+        } else {
+            // Nothing portable selects a file, so the folder holding it opens.
+            assert_eq!(argv, vec![OpenCmd::platform_program(), "/r/src"]);
+        }
+    }
 
     #[test]
     fn substitutes_path() {

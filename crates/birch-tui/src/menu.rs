@@ -269,6 +269,7 @@ mod tests {
             open_is_platform: false,
             open_program: "nvim",
             system_program: "open",
+            undo: None,
             cursor: targets.first(),
         }
     }

@@ -72,27 +72,28 @@ pub fn rename(path: &Path, input: &str) -> OpResult {
     if target == path {
         return Ok(Vec::new());
     }
-    guard_destination(path, &target)?;
-    fs::rename(path, &target)?;
-    Ok(vec![
-        TreeDelta::Removed { path: path.into() },
-        added(&target),
-    ])
+    move_to(path, &target)
 }
 
 /// Moves `path` into `directory`, keeping its name. The drag gesture's
 /// operation (task 072); the same guards as a rename, since it is one.
 pub fn move_into(path: &Path, directory: &Path) -> OpResult {
     let name = path.file_name().ok_or(OpError::NoParent(path.into()))?;
-    let target = directory.join(name);
+    move_to(path, &directory.join(name))
+}
+
+/// Moves `path` to exactly `target`. The primitive a rename and a drag both
+/// come down to, and the one undo reverses a step with: it already knows both
+/// ends, so it needs no name to resolve.
+pub fn move_to(path: &Path, target: &Path) -> OpResult {
     if target == path {
         return Ok(Vec::new());
     }
-    guard_destination(path, &target)?;
-    fs::rename(path, &target)?;
+    guard_destination(path, target)?;
+    fs::rename(path, target)?;
     Ok(vec![
         TreeDelta::Removed { path: path.into() },
-        added(&target),
+        added(target),
     ])
 }
 
