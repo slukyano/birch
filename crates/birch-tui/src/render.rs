@@ -230,8 +230,9 @@ pub fn draw_menu(frame: &mut Frame, menu: &Menu, layout: MenuLayout, theme: &The
                     ""
                 };
                 let room = content.saturating_sub(accel.chars().count());
-                let label = truncate(menu.label(index), room);
-                let pad = room.saturating_sub(label.chars().count());
+                let label = menu.label(index);
+                let text = truncate(&label.text(), room);
+                let pad = room.saturating_sub(text.chars().count());
                 let mut style = canvas;
                 if index == menu.highlighted() {
                     style = style.bg(theme.palette.selection_bg);
@@ -239,8 +240,19 @@ pub fn draw_menu(frame: &mut Frame, menu: &Menu, layout: MenuLayout, theme: &The
                         style = style.fg(fg);
                     }
                 }
+                // The program a row names is drawn dim, so `Open with vim`
+                // reads as an instruction and its parameter rather than as one
+                // compound verb. Split by character count, because truncation
+                // may already have eaten into the name — or all of it.
+                let verb_len = label.verb.chars().count();
+                let split = text
+                    .char_indices()
+                    .nth(verb_len)
+                    .map_or(text.len(), |(at, _)| at);
+                let (verb, subject) = text.split_at(split);
                 let mut spans = vec![
-                    Span::styled(label, style),
+                    Span::styled(verb.to_string(), style),
+                    Span::styled(subject.to_string(), style.add_modifier(Modifier::DIM)),
                     Span::styled(" ".repeat(pad), style),
                 ];
                 if !accel.is_empty() {
@@ -302,7 +314,7 @@ pub fn draw_edit(
             let index = rows.iter().position(|row| &row.path == path)?;
             (index, rows[index].depth, 0)
         }
-        EditKind::Create { parent } => {
+        EditKind::Create { parent, .. } => {
             let index = rows.iter().position(|row| &row.path == parent)?;
             (index, rows[index].depth + 1, 1)
         }
@@ -1138,7 +1150,7 @@ mod tests {
             row("second.rs", NodeKind::File, 1),
         ];
         let view = FlatView::default();
-        let editor = Editor::create(PathBuf::from("/r").join("src"));
+        let editor = Editor::create(PathBuf::from("/r").join("src"), false);
         let settings = Settings::default();
 
         let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();

@@ -15,8 +15,12 @@ pub enum Action {
     Open,
     /// Hand the path to the desktop's own handler, detached (task 034).
     OpenSystem,
-    /// Create a file or directory under the target, inline.
+    /// Create a file under the target, inline.
     NewFile,
+    /// Create a directory under the target, inline. `NewFile` reaches the same
+    /// place with a trailing slash; this is the discoverable way, since the
+    /// menu is where actions are found (ADR 0029).
+    NewFolder,
     /// Rename the target inline. An input carrying separators moves it.
     Rename,
     /// Move the selection to the platform trash (ADR 0031).
@@ -41,12 +45,54 @@ pub enum CopyForm {
     Absolute,
 }
 
+/// A menu label in two parts. The **verb** is fixed and drawn at full weight;
+/// the **subject** is the thing it names — a program — and is drawn dim, so a
+/// row reads as an instruction with a parameter rather than one compound
+/// phrase where `Open vim` could be a verb nobody has heard of.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Label {
+    pub verb: String,
+    pub subject: Option<String>,
+}
+
+impl Label {
+    pub fn plain(verb: &str) -> Self {
+        Self {
+            verb: verb.to_string(),
+            subject: None,
+        }
+    }
+
+    pub fn naming(verb: &str, subject: &str) -> Self {
+        Self {
+            verb: verb.to_string(),
+            subject: Some(subject.to_string()),
+        }
+    }
+
+    /// The whole label as one string, which is what measuring and truncating
+    /// work on: the split is a matter of paint, not of length.
+    pub fn text(&self) -> String {
+        match &self.subject {
+            Some(subject) => format!("{} {subject}", self.verb),
+            None => self.verb.clone(),
+        }
+    }
+
+    pub fn width(&self) -> usize {
+        self.text().chars().count()
+    }
+}
+
 /// One row an action would act on, reduced to the facts an availability rule
 /// uses. The action layer never holds a view or a tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActionTarget {
     pub path: PathBuf,
     pub is_dir: bool,
+    /// Whether a directory is expanded. Meaningless on a file, and read only
+    /// to decide whether the cursor's row says `Expand` or `Collapse`.
+    pub expanded: bool,
     /// Tracked in git but gone from disk: visible, but nothing can act on it.
     pub missing: bool,
 }
@@ -61,6 +107,14 @@ pub struct ActionContext<'a> {
     pub open_is_platform: bool,
     /// The program the open command runs, for the `Open` row to name.
     pub open_program: &'a str,
+    /// The program the platform opener runs — `open`, or `xdg-open`. Named
+    /// rather than described: "system" is not a thing anybody runs.
+    pub system_program: &'a str,
+    /// The row `Enter` would act on. `Open` acts on the **cursor**, not on the
+    /// selection, so its label has to describe that row and no other: with a
+    /// file and a directory both selected, what `Enter` does depends entirely
+    /// on which one the cursor sits in.
+    pub cursor: Option<&'a ActionTarget>,
     /// Picker mode, where mutations are disabled by default and `Open` means
     /// *confirm*. No action distinguishes the modes yet — the first that will
     /// is a mutation from `029-add-file-operations` — but the availability rule
@@ -73,7 +127,10 @@ impl Action {
     /// human-initiated: they never appear in the picker and never on the
     /// socket.
     pub fn mutates(self) -> bool {
-        matches!(self, Action::NewFile | Action::Rename | Action::Delete)
+        matches!(
+            self,
+            Action::NewFile | Action::NewFolder | Action::Rename | Action::Delete
+        )
     }
 
     /// The form of path a copy action writes, or `None` for anything that is
@@ -87,19 +144,34 @@ impl Action {
         }
     }
 
-    /// The label this action shows **for this selection**. `Open` names the
-    /// program it will run, so the row describes what will happen rather than a
-    /// category — but only where a program actually runs: on a directory it
-    /// toggles, and in the picker it confirms (task 034).
-    pub fn label_in(self, context: ActionContext) -> String {
-        let names_a_program = self != Action::Open
-            || context.picker
-            || context.open_program.is_empty()
-            || context.targets.iter().any(|target| target.is_dir);
-        if names_a_program {
-            self.label().to_string()
-        } else {
-            format!("Open {}", context.open_program)
+    /// The label this action shows **for this selection** — the row describes
+    /// what will happen, not a category it belongs to. `Open` is the whole
+    /// reason this is not a constant: it runs a program on a file, toggles a
+    /// directory, and confirms in the picker.
+    pub fn label_in(self, context: ActionContext) -> Label {
+        match self {
+            Action::Open => {
+                // The picker confirms; nothing opens and nothing toggles.
+                if context.picker {
+                    return Label::plain("Open");
+                }
+                match context.cursor {
+                    // A directory does not open — `Enter` toggles it — so the
+                    // row says which way it will go rather than naming an
+                    // editor that will not run.
+                    Some(target) if target.is_dir => Label::plain(if target.expanded {
+                        "Collapse"
+                    } else {
+                        "Expand"
+                    }),
+                    _ if context.open_program.is_empty() => Label::plain("Open"),
+                    _ => Label::naming("Open with", context.open_program),
+                }
+            }
+            Action::OpenSystem if !context.system_program.is_empty() => {
+                Label::naming("Open with", context.system_program)
+            }
+            _ => Label::plain(self.label()),
         }
     }
 
@@ -107,8 +179,9 @@ impl Action {
     pub fn label(self) -> &'static str {
         match self {
             Action::Open => "Open",
-            Action::OpenSystem => "Open system",
+            Action::OpenSystem => "Open with the system handler",
             Action::NewFile => "New File\u{2026}",
+            Action::NewFolder => "New Folder\u{2026}",
             Action::Rename => "Rename\u{2026}",
             Action::Delete => "Delete",
             Action::CopyName => "Copy Name",
@@ -125,6 +198,11 @@ impl Action {
             Action::Open => Some("\u{21b5}"),
             Action::OpenSystem => None,
             Action::NewFile => Some("^N"),
+            // `Ctrl-Shift-N` is not bindable for the same reason `Ctrl-Shift-C`
+            // is not: `Shift` has no representation alongside a control
+            // character in the legacy encoding (task 091). `Ctrl-N` with a
+            // trailing slash is the keyboard route.
+            Action::NewFolder => None,
             Action::Rename => Some("F2"),
             Action::Delete => Some("\u{2326}"),
             // `Ctrl-Shift-C` is not bindable: in the legacy key encoding birch
@@ -165,7 +243,7 @@ impl Action {
             }
             // Renaming edits one row, and creating needs one directory to
             // create in — several selected rows name neither.
-            Action::NewFile | Action::Rename => targets.len() == 1,
+            Action::NewFile | Action::NewFolder | Action::Rename => targets.len() == 1,
             // Delete is the plural one, and the one trash makes safe
             // (ADR 0031). Arity is per operation, which is what task 074 left
             // to each of them to settle.
@@ -185,7 +263,12 @@ impl Action {
 /// no row, and no separator (ADR 0029: an unavailable action is absent).
 pub const MENU_GROUPS: &[&[Action]] = &[
     &[Action::Open, Action::OpenSystem],
-    &[Action::NewFile, Action::Rename, Action::Delete],
+    &[
+        Action::NewFile,
+        Action::NewFolder,
+        Action::Rename,
+        Action::Delete,
+    ],
     &[
         Action::CopyName,
         Action::CopyRelativePath,
@@ -232,16 +315,21 @@ mod tests {
         ActionTarget {
             path: PathBuf::from(path),
             is_dir,
+            expanded: false,
             missing: false,
         }
     }
 
+    /// The cursor defaults to the first target, which is where it sits whenever
+    /// one row is selected — the case every label test but the mixed one wants.
     fn context(targets: &[ActionTarget]) -> ActionContext<'_> {
         ActionContext {
             targets,
             picker: false,
             open_is_platform: false,
             open_program: "nvim",
+            system_program: "open",
+            cursor: targets.first(),
         }
     }
 
@@ -298,20 +386,60 @@ mod tests {
     #[test]
     fn open_names_the_program_it_will_run() {
         let file = [target("/r/a.txt", false)];
-        assert_eq!(Action::Open.label_in(context(&file)), "Open nvim");
-        // A directory toggles and the picker confirms: no program runs, so
-        // naming one would be a lie.
-        let dir = [target("/r/src", true)];
-        assert_eq!(Action::Open.label_in(context(&dir)), "Open");
+        let label = Action::Open.label_in(context(&file));
+        assert_eq!(label, Label::naming("Open with", "nvim"));
+        assert_eq!(label.text(), "Open with nvim");
+        // The platform opener is named too: "system" is not a thing anybody
+        // runs, and `open` is.
+        assert_eq!(
+            Action::OpenSystem.label_in(context(&file)).text(),
+            "Open with open"
+        );
+
         let picker = ActionContext {
-            targets: &file,
             picker: true,
-            open_is_platform: false,
-            open_program: "nvim",
+            ..context(&file)
         };
-        assert_eq!(Action::Open.label_in(picker), "Open");
-        // Everything else keeps its constant label.
-        assert_eq!(Action::Delete.label_in(context(&file)), "Delete");
+        assert_eq!(Action::Open.label_in(picker), Label::plain("Open"));
+        // Everything else keeps its constant label, with nothing to dim.
+        assert_eq!(
+            Action::Delete.label_in(context(&file)),
+            Label::plain("Delete")
+        );
+    }
+
+    #[test]
+    fn a_directory_says_which_way_enter_will_toggle_it() {
+        // `Enter` on a directory expands or collapses it; naming an editor that
+        // will not run describes the wrong thing entirely.
+        let mut dir = [target("/r/src", true)];
+        assert_eq!(Action::Open.label_in(context(&dir)), Label::plain("Expand"));
+        dir[0].expanded = true;
+        assert_eq!(
+            Action::Open.label_in(context(&dir)),
+            Label::plain("Collapse")
+        );
+    }
+
+    #[test]
+    fn open_describes_the_cursor_row_not_the_selection() {
+        // `Open` acts on the cursor, so with a directory and a file both
+        // selected the label depends only on which one the cursor is in.
+        let mixed = [target("/r/src", true), target("/r/a.txt", false)];
+        let on_dir = ActionContext {
+            cursor: mixed.first(),
+            ..context(&mixed)
+        };
+        assert_eq!(Action::Open.label_in(on_dir), Label::plain("Expand"));
+        let on_file = ActionContext {
+            cursor: mixed.get(1),
+            ..context(&mixed)
+        };
+        assert_eq!(
+            Action::Open.label_in(on_file).text(),
+            "Open with nvim",
+            "the directory in the selection changes nothing"
+        );
     }
 
     #[test]
@@ -320,18 +448,15 @@ mod tests {
         assert!(Action::OpenSystem.available(context(&file)));
         // The resolved command already is the platform opener.
         let same = ActionContext {
-            targets: &file,
-            picker: false,
             open_is_platform: true,
             open_program: "open",
+            ..context(&file)
         };
         assert!(!Action::OpenSystem.available(same));
         // ...and it never appears in the picker.
         let picker = ActionContext {
-            targets: &file,
             picker: true,
-            open_is_platform: false,
-            open_program: "nvim",
+            ..context(&file)
         };
         assert!(!Action::OpenSystem.available(picker));
     }
@@ -340,10 +465,8 @@ mod tests {
     fn no_mutation_is_offered_in_the_picker() {
         let targets = [target("/r/src", true)];
         let picker = ActionContext {
-            targets: &targets,
             picker: true,
-            open_is_platform: false,
-            open_program: "nvim",
+            ..context(&targets)
         };
         for action in [Action::NewFile, Action::Rename, Action::Delete] {
             assert!(action.mutates(), "{action:?}");
@@ -364,6 +487,7 @@ mod tests {
         let missing = [ActionTarget {
             path: PathBuf::from("/r/gone.rs"),
             is_dir: false,
+            expanded: false,
             missing: true,
         }];
         assert!(menu_rows(context(&missing)).is_empty());

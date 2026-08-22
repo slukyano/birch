@@ -4,7 +4,7 @@
 //! The menu holds ordering, a highlight, and a scroll offset. It knows nothing
 //! about what any action does — that lives in `birch_core::action`.
 
-use birch_core::action::{Action, ActionContext, MenuRow, menu_rows};
+use birch_core::action::{Action, ActionContext, Label, MenuRow, menu_rows};
 
 /// Columns the frame costs on each side: the border, and a space inside it.
 /// The border is what separates the menu from the tree beneath, so no theme
@@ -44,9 +44,10 @@ impl MenuLayout {
 pub struct Menu {
     rows: Vec<MenuRow>,
     /// The label each row shows, resolved when the menu opened. `Open` names
-    /// the program it will run, so a label is no longer a constant of its
-    /// action (task 034); a separator's is empty.
-    labels: Vec<String>,
+    /// the program it will run — or says which way it will toggle a directory —
+    /// so a label is no longer a constant of its action (task 034); a
+    /// separator's is empty.
+    labels: Vec<Label>,
     /// Index into `rows`. Always an entry, never a separator, whenever there
     /// is any entry at all.
     highlighted: usize,
@@ -67,7 +68,7 @@ impl Menu {
             .iter()
             .map(|row| match row {
                 MenuRow::Entry(action) => action.label_in(context),
-                MenuRow::Separator => String::new(),
+                MenuRow::Separator => Label::default(),
             })
             .collect();
         Some(Self {
@@ -84,8 +85,11 @@ impl Menu {
     }
 
     /// The label a row shows, resolved when the menu opened.
-    pub fn label(&self, index: usize) -> &str {
-        self.labels.get(index).map_or("", String::as_str)
+    pub fn label(&self, index: usize) -> &Label {
+        static EMPTY: std::sync::OnceLock<Label> = std::sync::OnceLock::new();
+        self.labels
+            .get(index)
+            .unwrap_or_else(|| EMPTY.get_or_init(Label::default))
     }
 
     pub fn highlighted(&self) -> usize {
@@ -159,7 +163,7 @@ impl Menu {
         let label_width = self
             .labels
             .iter()
-            .map(|label| label.chars().count() as u16)
+            .map(|label| label.width() as u16)
             .max()
             .unwrap_or(0);
         let accel_width = self
@@ -264,6 +268,8 @@ mod tests {
             picker: false,
             open_is_platform: false,
             open_program: "nvim",
+            system_program: "open",
+            cursor: targets.first(),
         }
     }
 
@@ -271,6 +277,7 @@ mod tests {
         vec![ActionTarget {
             path: PathBuf::from("/r/src"),
             is_dir: true,
+            expanded: false,
             missing: false,
         }]
     }
@@ -285,6 +292,7 @@ mod tests {
         let missing = [ActionTarget {
             path: PathBuf::from("/r/gone"),
             is_dir: false,
+            expanded: false,
             missing: true,
         }];
         assert!(Menu::open(dir_context(&missing), 0, 0).is_none());

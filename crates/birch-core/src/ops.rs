@@ -100,11 +100,13 @@ pub fn move_into(path: &Path, directory: &Path) -> OpResult {
 /// `foo/bar/baz.ts` creates the intermediate directories; a trailing slash
 /// (`foo/`) creates a directory instead of a file. One binding, three
 /// operations.
-pub fn create(directory: &Path, input: &str) -> OpResult {
+pub fn create(directory: &Path, input: &str, force_dir: bool) -> OpResult {
     // Read from the *trimmed* input, as `resolve` does: `sub/ ` with a trailing
-    // space asks for a directory just as plainly as `sub/`.
+    // space asks for a directory just as plainly as `sub/`. `force_dir` is what
+    // the `New Folder` action sets, so the two routes land in one place.
     let trimmed = input.trim();
-    let is_dir = trimmed.ends_with('/') || trimmed.ends_with(std::path::MAIN_SEPARATOR);
+    let is_dir =
+        force_dir || trimmed.ends_with('/') || trimmed.ends_with(std::path::MAIN_SEPARATOR);
     let target = resolve(directory, input)?;
     // A create makes something *here*. An input that climbs out would write
     // outside the tree, where no row could ever show it — refused rather than
@@ -356,14 +358,14 @@ mod tests {
     #[test]
     fn create_makes_files_directories_and_intermediates() {
         let dir = Dir::new("create");
-        create(&dir.0, "a.txt").unwrap();
+        create(&dir.0, "a.txt", false).unwrap();
         assert!(dir.join("a.txt").is_file());
 
-        create(&dir.0, "sub/").unwrap();
+        create(&dir.0, "sub/", false).unwrap();
         assert!(dir.join("sub").is_dir());
 
         // Intermediates are made, and the tree hears about the shallowest one.
-        let deltas = create(&dir.0, "deep/deeper/c.txt").unwrap();
+        let deltas = create(&dir.0, "deep/deeper/c.txt", false).unwrap();
         assert!(dir.join("deep/deeper/c.txt").is_file());
         match &deltas[0] {
             TreeDelta::Added { parent, entries } => {
@@ -374,7 +376,10 @@ mod tests {
             other => panic!("expected an Added, got {other:?}"),
         }
 
-        assert!(matches!(create(&dir.0, "a.txt"), Err(OpError::Exists(_))));
+        assert!(matches!(
+            create(&dir.0, "a.txt", false),
+            Err(OpError::Exists(_))
+        ));
     }
 
     #[test]
@@ -451,7 +456,7 @@ mod tests {
         let dir = Dir::new("escape");
         fs::create_dir(dir.join("sub")).unwrap();
         assert!(matches!(
-            create(&dir.join("sub"), "../escaped.txt"),
+            create(&dir.join("sub"), "../escaped.txt", false),
             Err(OpError::BadName(_))
         ));
         assert!(!dir.join("escaped.txt").exists());
@@ -460,7 +465,7 @@ mod tests {
     #[test]
     fn a_trailing_space_does_not_hide_a_trailing_slash() {
         let dir = Dir::new("trailing");
-        create(&dir.0, "sub/ ").unwrap();
+        create(&dir.0, "sub/ ", false).unwrap();
         assert!(dir.join("sub").is_dir(), "still a directory");
     }
 }

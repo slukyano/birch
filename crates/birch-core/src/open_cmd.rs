@@ -70,14 +70,20 @@ impl OpenCmd {
     /// taking the terminal. It is both the last fallback for `default_cmd` and
     /// the `Open system` menu entry (task 034).
     pub fn platform_opener() -> Self {
-        let opener = if cfg!(target_os = "macos") {
+        Self {
+            argv: vec![Self::platform_program().into(), "{}".into()],
+            mode: OpenMode::Detached,
+        }
+    }
+
+    /// The platform opener's program name on its own. The menu names it rather
+    /// than describing it: `open` and `xdg-open` are things a person can run,
+    /// and "system" is not.
+    pub fn platform_program() -> &'static str {
+        if cfg!(target_os = "macos") {
             "open"
         } else {
             "xdg-open"
-        };
-        Self {
-            argv: vec![opener.into(), "{}".into()],
-            mode: OpenMode::Detached,
         }
     }
 

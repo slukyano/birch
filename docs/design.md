@@ -114,10 +114,12 @@ Printable characters are permanently reserved for search — no letter hotkeys, 
 - **Right-click → context menu**, which is a **projection of the action layer** (ADR 0029), not an authored list: actions declare a label, an accelerator, and an availability rule over the selection, and the menu draws whichever are available. **An action that does not exist yet is absent, not greyed** — the menu grows as its contents land, and no task that adds an action edits the menu. Its full intended shape, in groups (a separator is drawn between any two groups that survive):
 
 ```
-Open nvim             ↵      (named after the resolved open command)
-Open system
+Open with nvim        ↵      (a file: the resolved open command)
+Expand / Collapse     ↵      (a directory: what Enter will do to it)
+Open with open               (the platform opener, named: open / xdg-open)
 ──────────
 New File…             ^N     (029)
+New Folder…                  (029)
 Rename…               F2     (029)
 Delete                ⌦      (029)
 ──────────
@@ -128,7 +130,8 @@ Copy Absolute Path           (028)
 Reveal Root Here
 ```
 
-- **The `Open` row names the command it will run**, so the menu says what will happen rather than a category — the program's name, not the whole template, which truncated is noise. On a directory it toggles and in `--pick` it confirms, so no program runs and the row stays plain `Open`. **`Open system`** hands the path to the desktop's own handler (`open` / `xdg-open`), detached; it is absent when the resolved command already *is* that handler, so the menu never shows two rows that do one thing, and absent in `--pick`.
+- **Every row describes what will happen to *this* selection**, not the category it belongs to. The `Open` row names the program it will run — the program's name, not the whole template, which truncated is noise — and the name is drawn **dim**, so the row reads as an instruction and its parameter rather than as one compound verb. `Open` acts on the **cursor**, not the selection, so its label follows the cursor's row and nothing else: on a directory `Enter` toggles, and the row says `Expand` or `Collapse` accordingly, because naming an editor that will not run describes the wrong thing. In `--pick` it confirms, and the row is a plain `Open`. The second row hands the path to the desktop's own handler, **named** rather than described — `Open with open`, `Open with xdg-open` — because "system" is not a thing anybody runs. It is absent when the resolved command already *is* that handler, so the menu never shows two rows that do one thing, and absent in `--pick`.
+- **A folder gets no plain `Open` row**, which is where birch's menu and VS Code's part ways for a reason: VS Code drops its open entries on a folder entirely (`ExplorerFolderContext.toNegated()`), because there the toggle is only ever a click. birch's menu also teaches the keyboard — it prints the accelerator beside each row — so naming what `Enter` does is worth a row where hiding it is not.
 - **It opens from the keyboard too**, with `Shift-F10` or the `Menu` key, at the cursor row. A right-click has to reconcile a pointer with the selection; a keyboard trigger has no such conflict and moves nothing.
 - **Opening it follows the left button's rule**: a right-press arms, and the menu opens on the release on the row the press started on (ADR 0025, extended). Keyboard works inside it — `↑`/`↓` step entries and skip separators, `Home`/`End` reach the ends, `Enter` invokes, `Esc` closes. **A printable character closes the menu and types into the search**: ADR 0008 has no exception, and a layer that redefines the keyboard is how a modal language starts.
 - **It targets the selection, and only disturbs it when it must**: a right-click inside the current selection acts on all of it, a click outside collapses the selection to that row first, and a click below the last row collapses to the root. A dimmed row is inert here as everywhere (ADR 0023).

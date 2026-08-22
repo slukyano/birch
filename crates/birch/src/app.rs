@@ -1288,6 +1288,7 @@ impl App {
             .map(|row| ActionTarget {
                 path: row.path.clone(),
                 is_dir: row.kind.is_dir(),
+                expanded: row.expanded,
                 missing: row.missing,
             })
             .collect()
@@ -1344,6 +1345,14 @@ impl App {
             // `open` without being the platform handler.
             open_is_platform: self.open_cmd == OpenCmd::platform_opener(),
             open_program: program,
+            system_program: OpenCmd::platform_program(),
+            // `Open` acts on the cursor, so the row that names what `Enter`
+            // will do is the cursor's, not the selection's first.
+            cursor: self
+                .view
+                .selection
+                .as_deref()
+                .and_then(|cursor| targets.iter().find(|target| target.path == cursor)),
         }
     }
 
@@ -1578,7 +1587,7 @@ impl App {
                     return Performed::OpenWith(target.path.clone(), OpenCmd::platform_opener());
                 }
             }
-            Action::Rename | Action::NewFile => {
+            Action::Rename | Action::NewFile | Action::NewFolder => {
                 let rows = self.rows();
                 self.begin_edit(&rows, action);
             }
@@ -1666,11 +1675,14 @@ impl App {
                 Editor::rename(target.path.clone(), &name)
             }
             // A create needs a directory: a selected file names its parent.
-            _ => Editor::create(if target.is_dir {
-                target.path.clone()
-            } else {
-                target.path.parent().unwrap_or(&self.root).to_path_buf()
-            }),
+            _ => Editor::create(
+                if target.is_dir {
+                    target.path.clone()
+                } else {
+                    target.path.parent().unwrap_or(&self.root).to_path_buf()
+                },
+                action == Action::NewFolder,
+            ),
         });
     }
 
@@ -1723,7 +1735,7 @@ impl App {
         }
         let result = match editor.kind() {
             EditKind::Rename { path } => ops::rename(path, input),
-            EditKind::Create { parent } => ops::create(parent, input),
+            EditKind::Create { parent, directory } => ops::create(parent, input, *directory),
         };
         match result {
             Ok(deltas) => {
@@ -4748,6 +4760,8 @@ mod ctl_tests {
             picker: false,
             open_is_platform: false,
             open_program: "nvim",
+            system_program: "open",
+            cursor: targets.first(),
         };
         assert!(Action::Open.available(context));
         assert!(Action::RevealRootHere.available(context));
@@ -4759,6 +4773,8 @@ mod ctl_tests {
             picker: false,
             open_is_platform: false,
             open_program: "nvim",
+            system_program: "open",
+            cursor: targets.first(),
         };
         assert!(Action::Open.available(context));
         assert!(
@@ -4774,6 +4790,8 @@ mod ctl_tests {
             picker: false,
             open_is_platform: false,
             open_program: "nvim",
+            system_program: "open",
+            cursor: targets.first(),
         };
         assert!(
             !Action::RevealRootHere.available(context),
@@ -5788,7 +5806,7 @@ mod ctl_tests {
             h.app
                 .open_menu(&rows, Some(PathBuf::from("/r/a.txt")), 2, 1)
         );
-        h.app.edit = Some(Editor::create("/r".into()));
+        h.app.edit = Some(Editor::create("/r".into(), false));
         h.app.confirm = Some(Confirm {
             prompt: "?".into(),
             paths: Vec::new(),

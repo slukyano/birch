@@ -17,7 +17,9 @@ pub enum EditKind {
     /// moves the overlay with the row.
     Rename { path: PathBuf },
     /// Creating under a directory, drawn as a phantom row beneath it.
-    Create { parent: PathBuf },
+    /// `directory` is what `New Folder` sets; a trailing slash in the text
+    /// reaches the same place, which is the keyboard route.
+    Create { parent: PathBuf, directory: bool },
 }
 
 /// A text field open over the tree.
@@ -43,9 +45,9 @@ impl Editor {
     }
 
     /// Opens a phantom row under `parent`, empty.
-    pub fn create(parent: PathBuf) -> Self {
+    pub fn create(parent: PathBuf, directory: bool) -> Self {
         Self {
-            kind: EditKind::Create { parent },
+            kind: EditKind::Create { parent, directory },
             buffer: String::new(),
             cursor: 0,
         }
@@ -145,20 +147,21 @@ mod tests {
 
     #[test]
     fn a_create_starts_empty() {
-        let editor = Editor::create("/r/src".into());
+        let editor = Editor::create("/r/src".into(), false);
         assert_eq!(editor.buffer(), "");
         assert_eq!(editor.cursor_chars(), 0);
         assert_eq!(
             editor.kind(),
             &EditKind::Create {
-                parent: "/r/src".into()
+                parent: "/r/src".into(),
+                directory: false
             }
         );
     }
 
     #[test]
     fn typing_and_deleting_track_the_cursor() {
-        let mut editor = Editor::create("/r".into());
+        let mut editor = Editor::create("/r".into(), false);
         for c in "abc".chars() {
             editor.insert(c);
         }
