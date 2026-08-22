@@ -64,6 +64,11 @@ below is asked for first, every time, including a one-line documentation fix:
 
 Approval is per action, not standing: approval to push once is not approval to push again.
 
+**Never put a session or agent link in a commit message.** No `Claude-Session:` trailer, no chat
+URL, no link that resolves only for whoever ran the tool. The history is public and permanent, and
+`CONTRIBUTING.md` states the rule for every contributor. A `Co-Authored-By:` trailer is fine — it
+names an author, which is what trailers are for.
+
 ## Development workflow (sessions + sprints)
 
 **Follow this workflow only when asked to develop birch as the maintainer** — otherwise it is
