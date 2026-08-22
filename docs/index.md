@@ -47,6 +47,8 @@ Process: see [the task workflow](../backlog/workflow.md#adrs).
 * [0025 — A click completes on release, on the row it started on](adr/0025-a-click-completes-on-release.md)
 * [0026 — The search index is a tree, published while it is built](adr/0026-the-index-is-a-tree-published-progressively.md)
 * [0027 — The host adapters ship as binaries that carry their script](adr/0027-adapters-ship-as-binaries.md)
+* [0028 — The identity is the scope fence; the permanent out-of-scope list is deleted](adr/0028-the-identity-is-the-scope-fence.md)
+* [0029 — The context menu is a projection of the action layer, and an unavailable action is absent](adr/0029-the-menu-projects-the-action-layer.md)
 
 # Research
 
