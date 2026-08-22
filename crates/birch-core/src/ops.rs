@@ -299,7 +299,10 @@ mod tests {
         ));
         // A name that resolves to nothing is refused rather than guessed at.
         assert!(matches!(rename(&a, "   "), Err(OpError::BadName(_))));
-        assert!(matches!(rename(&a, "/etc/passwd"), Err(OpError::BadName(_))));
+        assert!(matches!(
+            rename(&a, "/etc/passwd"),
+            Err(OpError::BadName(_))
+        ));
     }
 
     #[test]
