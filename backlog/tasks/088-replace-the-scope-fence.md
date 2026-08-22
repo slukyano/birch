@@ -2,7 +2,7 @@
 type: Task
 title: The identity is the scope fence
 description: Delete the permanently-out-of-scope list and let "what an IDE file tree does" be the whole test.
-status: Draft
+status: Designed
 priority: medium
 ---
 

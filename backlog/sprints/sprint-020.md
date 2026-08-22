@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: Multi-select and the action surface
-status: Designing
+status: Implementing
 branch: sprint/020
 tasks:
 - 081-standard-navigation-keys

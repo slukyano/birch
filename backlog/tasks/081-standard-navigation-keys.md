@@ -2,7 +2,7 @@
 type: Task
 title: Support the standard navigation keys
 description: PgUp/PgDn/Home/End do nothing today - bind them, and decide whether a page moves the selection or only the viewport, and what they mean under a live search.
-status: Draft
+status: Designed
 priority: medium
 ---
 

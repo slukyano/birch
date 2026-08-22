@@ -2,7 +2,7 @@
 type: Task
 title: Add the context menu
 description: The right-click menu as the primary action surface - split out of the 0.5 bundle so it can land before the file ops it will eventually host.
-status: Draft
+status: Designed
 priority: medium
 ---
 

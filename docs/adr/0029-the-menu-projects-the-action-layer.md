@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: The context menu is a projection of the action layer, and an unavailable action is absent
-status: Proposed
+status: Accepted
 sprint: sprint-020
 ---
 

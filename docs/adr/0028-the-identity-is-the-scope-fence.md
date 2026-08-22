@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: The identity is the scope fence; the permanent out-of-scope list is deleted
-status: Proposed
+status: Accepted
 sprint: sprint-020
 ---
 
