@@ -338,6 +338,13 @@ pub fn draw_edit(
         width,
         height: 1,
     };
+    // A create needs a *line*, not a row to paint over: without this the field
+    // draws on top of the directory's first child and hides a real file behind
+    // an edit. The tree is untouched (ADR 0030) — the gap is a paint-time
+    // transform, the same kind as compaction and dimming.
+    if offset == 1 {
+        open_gap(frame, area, &geometry, line);
+    }
     let style = Style::default().bg(theme.palette.selection_bg);
     frame.render_widget(Clear, field);
     frame.render_widget(
@@ -346,6 +353,24 @@ pub fn draw_edit(
     );
     let caret = editor.cursor_chars() as u16;
     (caret < width).then_some((x + caret, y))
+}
+
+/// Pushes the painted rows from `line` down one, leaving `line` blank. Runs to
+/// the scrollbar and no further, matching the selection wash: the bar is
+/// furniture outside the rows, and sliding it would smear the track.
+fn open_gap(frame: &mut Frame, area: Rect, geometry: &Layout, line: usize) {
+    let bar_width = geometry.bar.map_or(0, |bar| bar.width);
+    let top = geometry.tree.y;
+    let buffer = frame.buffer_mut();
+    for row in (line + 1..geometry.viewport).rev() {
+        for x in area.left()..area.right() - bar_width {
+            let above = buffer[(x, top + row as u16 - 1)].clone();
+            buffer[(x, top + row as u16)] = above;
+        }
+    }
+    for x in area.left()..area.right() - bar_width {
+        buffer[(x, top + line as u16)].reset();
+    }
 }
 
 /// Marks the directory a drag would drop into (ADR 0032). Distinct from the
@@ -380,7 +405,28 @@ pub fn draw_drop_target(
     }
 }
 
-pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bottom_line: &str) {
+/// What the bottom line is carrying, which decides how loudly it is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BottomKind {
+    /// Chrome: the idle hint, the search counter. Dim, because it is always
+    /// there and competing with the tree would be worse than saying nothing.
+    Idle,
+    /// Something birch is telling the user, which they did not have on screen a
+    /// moment ago — an error, or a report of what an operation did.
+    Message,
+    /// A question waiting for an answer. The one thing on screen that blocks,
+    /// so the one thing that is allowed to be loud.
+    Question,
+}
+
+pub fn draw(
+    frame: &mut Frame,
+    rows: &[Row],
+    view: &FlatView,
+    chrome: Chrome,
+    bottom_line: &str,
+    bottom_kind: BottomKind,
+) {
     let Chrome {
         settings,
         theme,
@@ -468,8 +514,18 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
         );
     }
 
+    // Dim is right for chrome and wrong for everything else: a question drawn
+    // in the same grey as the idle hint is a question nobody answers, because
+    // nobody sees it.
+    let bottom_style = match bottom_kind {
+        BottomKind::Idle => canvas.add_modifier(Modifier::DIM),
+        BottomKind::Message => canvas,
+        BottomKind::Question => canvas
+            .fg(theme.palette.selection_accent)
+            .add_modifier(Modifier::BOLD),
+    };
     frame.render_widget(
-        Paragraph::new(format!(" {bottom_line}")).style(canvas.add_modifier(Modifier::DIM)),
+        Paragraph::new(format!(" {bottom_line}")).style(bottom_style),
         status_area,
     );
 
@@ -1050,6 +1106,7 @@ mod tests {
                     &view,
                     chrome(&Settings::default(), &theme, false),
                     "",
+                    BottomKind::Idle,
                 )
             })
             .unwrap();
@@ -1065,6 +1122,71 @@ mod tests {
         );
         // And the rest of the row still washes, edge to edge.
         assert_eq!(buffer[(39, 0)].bg, theme.palette.selection_bg);
+    }
+
+    #[test]
+    fn a_create_pushes_the_rows_below_it_down_instead_of_painting_over_one() {
+        // The field used to draw on the line after its parent, which is the
+        // directory's *first child* — a real file, hidden behind an edit.
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let theme = theme();
+        let rows = vec![
+            row("src", NodeKind::Dir, 0),
+            row("first.rs", NodeKind::File, 1),
+            row("second.rs", NodeKind::File, 1),
+        ];
+        let view = FlatView::default();
+        let editor = Editor::create(PathBuf::from("/r").join("src"));
+        let settings = Settings::default();
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &rows,
+                    &view,
+                    chrome(&settings, &theme, false),
+                    "",
+                    BottomKind::Idle,
+                );
+                draw_edit(
+                    frame,
+                    &rows,
+                    &view,
+                    chrome(&settings, &theme, false),
+                    &editor,
+                );
+            })
+            .unwrap();
+
+        let line = |y: u16| {
+            (0..40)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                .collect::<String>()
+        };
+        assert!(
+            line(0).contains("src"),
+            "the parent stays put: {:?}",
+            line(0)
+        );
+        assert!(
+            !line(1).contains("first.rs"),
+            "the gap is where the field goes: {:?}",
+            line(1)
+        );
+        assert!(
+            line(2).contains("first.rs"),
+            "the first child moved down rather than being covered: {:?}",
+            line(2)
+        );
+        assert!(
+            line(3).contains("second.rs"),
+            "and everything below it followed: {:?}",
+            line(3)
+        );
     }
 
     #[test]
@@ -1633,7 +1755,16 @@ mod tests {
         let column_of = |branch_axis: bool| {
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             terminal
-                .draw(|frame| draw(frame, &rows, &view, chrome(&settings, &th, branch_axis), ""))
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        &rows,
+                        &view,
+                        chrome(&settings, &th, branch_axis),
+                        "",
+                        BottomKind::Idle,
+                    )
+                })
                 .unwrap();
             let buffer = terminal.backend().buffer();
             let at = |x: u16| buffer[(x, 0)].symbol().to_string();
@@ -1684,7 +1815,14 @@ mod tests {
                 let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
                 terminal
                     .draw(|frame| {
-                        draw(frame, &rows, &view, chrome(&settings, &th, branch_axis), "")
+                        draw(
+                            frame,
+                            &rows,
+                            &view,
+                            chrome(&settings, &th, branch_axis),
+                            "",
+                            BottomKind::Idle,
+                        )
                     })
                     .unwrap();
                 let buffer = terminal.backend().buffer();
@@ -1736,7 +1874,16 @@ mod tests {
             };
             let mut terminal = Terminal::new(TestBackend::new(30, 3)).unwrap();
             terminal
-                .draw(|frame| draw(frame, &rows, &view, chrome(&settings, &th, true), ""))
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        &rows,
+                        &view,
+                        chrome(&settings, &th, true),
+                        "",
+                        BottomKind::Idle,
+                    )
+                })
                 .unwrap();
             let buffer = terminal.backend().buffer();
             (0..30u16)
@@ -1811,6 +1958,7 @@ mod tests {
                                     &view,
                                     chrome(&settings, &theme, branch_axis),
                                     "",
+                                    BottomKind::Idle,
                                 )
                             })
                             .unwrap();
@@ -1842,6 +1990,7 @@ mod tests {
                     &view,
                     chrome(&Settings::default(), &theme, false),
                     "",
+                    BottomKind::Idle,
                 )
             })
             .unwrap();

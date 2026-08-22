@@ -1682,7 +1682,14 @@ impl App {
             InputAction::Esc => self.edit = None,
             InputAction::Enter => {
                 if let Some(editor) = self.edit.take() {
-                    self.commit_edit(&editor);
+                    // A refused name keeps the field open with the text intact.
+                    // The usual refusal is a clash, and the fix is a few
+                    // keystrokes — closing the field would throw the name away
+                    // and, with the tree unchanged behind it, read as though
+                    // the create had silently overwritten something.
+                    if !self.commit_edit(&editor) {
+                        self.edit = Some(editor);
+                    }
                 }
             }
             editing => {
@@ -1705,13 +1712,14 @@ impl App {
         }
     }
 
-    fn commit_edit(&mut self, editor: &Editor) {
+    /// Returns whether the edit went through. A `false` keeps the field open.
+    fn commit_edit(&mut self, editor: &Editor) -> bool {
         let input = editor.buffer();
         if input.trim().is_empty() {
             // Every other failure path says something; silence here reads as a
             // field that swallowed the edit.
             self.status = "a name is required".into();
-            return;
+            return false;
         }
         let result = match editor.kind() {
             EditKind::Rename { path } => ops::rename(path, input),
@@ -1723,8 +1731,25 @@ impl App {
                     self.tree.apply(delta);
                 }
                 self.expansion_dirty = true;
+                self.status.clear();
+                true
             }
-            Err(e) => self.status = e.to_string(),
+            Err(e) => {
+                self.status = e.to_string();
+                false
+            }
+        }
+    }
+
+    /// How loudly the bottom line is drawn. A question outranks a message, and
+    /// both outrank the chrome they replace.
+    fn bottom_kind(&self) -> render::BottomKind {
+        if self.confirm.is_some() {
+            render::BottomKind::Question
+        } else if self.status.is_empty() {
+            render::BottomKind::Idle
+        } else {
+            render::BottomKind::Message
         }
     }
 
@@ -1861,6 +1886,24 @@ impl App {
                 } else {
                     self.trash_now(confirm.paths);
                 }
+            }
+            // A letter is not an answer — ADR 0030 keeps `y`/`n` permanently
+            // unavailable — but it is not nothing either. Printables are search
+            // input (ADR 0008), so the question backs out and the character
+            // reaches the query, exactly as it does under the menu.
+            InputAction::Char(c) => {
+                self.confirm = None;
+                self.search_push(c);
+            }
+            // Every other key backs out too. A question that silently eats what
+            // it does not recognise is the second mode ADR 0030 refuses: it is
+            // neither transient nor singly-exited, it just looks like birch has
+            // stopped responding. Backing out is the safe direction — the
+            // question is about deleting, and cancelling deletes nothing.
+            // The pointer is exempt: motion is reported continuously, so a
+            // pointer crossing the pane would dismiss the question unasked.
+            other if !other.is_pointer() => {
+                self.confirm = None;
             }
             _ => {}
         }
@@ -2436,6 +2479,7 @@ impl App {
             self.save_persisted(false);
         }
         let bottom = self.bottom_line();
+        let bottom_kind = self.bottom_kind();
         let branch_axis = self.branch_axis();
         let theme = Theme::for_id(self.settings.theme);
         let area = area(terminal);
@@ -2460,7 +2504,7 @@ impl App {
         let editor = &self.edit;
         let mut caret = None;
         terminal.draw(|frame| {
-            render::draw(frame, &rows, view, chrome, &bottom);
+            render::draw(frame, &rows, view, chrome, &bottom, bottom_kind);
             // A refused target is drawn as no target at all: the absence of the
             // highlight is the answer, before the button is released.
             if let Some(directory) = &drop_target {
@@ -2520,10 +2564,12 @@ impl App {
             // stays clear for messages.
             String::new()
         };
-        if self.status.is_empty() {
-            base
-        } else {
-            format!("{base} — {}", self.status)
+        match (base.is_empty(), self.status.is_empty()) {
+            (_, true) => base,
+            // Nothing to hang the message off: an idle tree has no bottom line
+            // of its own, and a leading dash reads as a truncated sentence.
+            (true, false) => self.status.clone(),
+            (false, false) => format!("{base} — {}", self.status),
         }
     }
 
@@ -5233,6 +5279,69 @@ mod ctl_tests {
     }
 
     #[test]
+    fn a_refused_name_keeps_the_field_and_the_text() {
+        // Closing the field on a clash threw away what was typed and left the
+        // tree unchanged behind it, which reads as a create that silently
+        // overwrote the file it collided with.
+        let root = scratch("clash");
+        std::fs::write(root.join("taken.txt"), b"KEEP").unwrap();
+        let mut h = rooted(&root, &[("taken.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.clone());
+
+        h.app.begin_edit(&rows, Action::NewFile);
+        for c in "taken.txt".chars() {
+            h.app.handle_edit_input(InputAction::Char(c));
+        }
+        h.app.handle_edit_input(InputAction::Enter);
+
+        assert!(h.app.edit.is_some(), "the field stayed open");
+        assert_eq!(
+            h.app.edit.as_ref().map(|e| e.buffer()),
+            Some("taken.txt"),
+            "with the text intact, so a typo costs a keystroke and not a retype"
+        );
+        assert!(
+            h.app.status.contains("already exists"),
+            "and it says why: {:?}",
+            h.app.status
+        );
+        assert_eq!(
+            std::fs::read(root.join("taken.txt")).unwrap(),
+            b"KEEP",
+            "the file it collided with is untouched"
+        );
+
+        // Correcting the name in the same field commits.
+        for _ in 0..9 {
+            h.app.handle_edit_input(InputAction::Backspace);
+        }
+        for c in "free.txt".chars() {
+            h.app.handle_edit_input(InputAction::Char(c));
+        }
+        h.app.handle_edit_input(InputAction::Enter);
+        assert!(h.app.edit.is_none(), "the corrected name committed");
+        assert!(root.join("free.txt").exists());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_empty_name_keeps_the_field_open_too() {
+        let root = scratch("empty-name");
+        let mut h = rooted(&root, &[]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.clone());
+
+        h.app.begin_edit(&rows, Action::NewFile);
+        h.app.handle_edit_input(InputAction::Enter);
+        assert!(h.app.edit.is_some(), "nothing to commit, nothing to close");
+        assert!(h.app.status.contains("required"));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn creating_makes_intermediates_and_a_trailing_slash_makes_a_directory() {
         let root = scratch("create");
         let mut h = rooted(&root, &[]);
@@ -5273,14 +5382,38 @@ mod ctl_tests {
             "the question owns the line"
         );
 
-        // A letter is not an answer — only Enter and Esc are (ADR 0030).
+        // A letter is not an answer — only Enter and Esc are (ADR 0030) — but
+        // it is not swallowed either: the question backs out and the character
+        // reaches the search, exactly as it does under the menu (ADR 0008).
         h.app.handle_confirm_input(InputAction::Char('y'));
-        assert!(h.app.confirm.is_some(), "a letter answered nothing");
-        assert!(root.join("a.txt").exists());
+        assert!(h.app.confirm.is_none(), "the question backed out");
+        assert!(root.join("a.txt").exists(), "a letter deleted nothing");
+        assert_eq!(
+            h.app.search.as_ref().map(|s| s.query.as_str()),
+            Some("y"),
+            "the character reached the query"
+        );
 
+        h.app.search = None;
+        h.app.begin_delete(&rows);
         h.app.handle_confirm_input(InputAction::Esc);
         assert!(h.app.confirm.is_none());
         assert!(root.join("a.txt").exists(), "Esc deleted nothing");
+
+        // A key with no meaning here backs out rather than vanishing: a
+        // question that eats every key looks like birch has stopped responding.
+        h.app.begin_delete(&rows);
+        h.app.handle_confirm_input(InputAction::Down);
+        assert!(h.app.confirm.is_none(), "an unrelated key backed out");
+        assert!(root.join("a.txt").exists());
+
+        // The pointer is exempt. Motion is reported continuously, so a pointer
+        // crossing the pane must not dismiss a question nobody answered.
+        h.app.begin_delete(&rows);
+        h.app
+            .handle_confirm_input(InputAction::Hover { column: 0, row: 0 });
+        assert!(h.app.confirm.is_some(), "hovering answered nothing");
+        h.app.confirm = None;
 
         std::fs::remove_dir_all(&root).unwrap();
     }

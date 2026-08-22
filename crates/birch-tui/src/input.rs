@@ -105,14 +105,35 @@ pub enum InputAction {
         column: u16,
         row: u16,
     },
-    /// Pointer motion. Only reported while the context menu is open, which is
-    /// the only time birch asks for motion tracking (task 090 would generalise
-    /// it to the tree).
+    /// Pointer motion, reported for the whole session — mode 1003 is part of
+    /// the mode set `EnableMouseCapture` requests, and birch never turns a
+    /// mouse mode off while it runs. The context menu is the only thing that
+    /// acts on it today (task 090 would extend it to the tree).
     Hover {
         column: u16,
         row: u16,
     },
     Redraw,
+}
+
+impl InputAction {
+    /// Whether this came from the pointer. Layers that back out on a stray
+    /// keystroke must not back out on one: motion is reported continuously
+    /// (mode 1003 is on for the whole session), so a pointer merely crossing
+    /// the pane would dismiss whatever is open.
+    pub fn is_pointer(self) -> bool {
+        matches!(
+            self,
+            InputAction::Press { .. }
+                | InputAction::Release { .. }
+                | InputAction::RightPress { .. }
+                | InputAction::RightRelease { .. }
+                | InputAction::Drag { .. }
+                | InputAction::Hover { .. }
+                | InputAction::ScrollUp
+                | InputAction::ScrollDown
+        )
+    }
 }
 
 /// The cursor movements `Shift` can extend a selection along. `→` and `←` are
