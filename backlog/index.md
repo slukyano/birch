@@ -52,6 +52,7 @@ okf_version: "0.1"
 * [Add "Open with…" to the context menu](tasks/034-add-open-with.md) - Choose an alternative open command for the selected node.
 * [Verify the herdr integration live](tasks/035-verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
 * [Support the standard navigation keys](tasks/081-standard-navigation-keys.md) - PgUp/PgDn/Home/End are dead keys; bind them, deciding selection-vs-viewport paging and what they mean under a live search.
+* [birch-cmux calls a deprecated cmux verb](tasks/082-cmux-legacy-verb-deprecation.md) - `cmux list-workspaces` now warns; move to `cmux workspace list`. Cosmetic today - the notice is on stderr and stdout still parses.
 
 # Publication
 
