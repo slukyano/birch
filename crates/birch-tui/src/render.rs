@@ -309,8 +309,14 @@ pub fn draw_edit(
     };
     let line = anchor.checked_sub(view.scroll)? + offset;
     if line >= viewport {
-        return None;
+        // A phantom row one line past the bottom would leave the field open and
+        // invisible, which is exactly what ADR 0030 admits the mode for *not*
+        // being. Drawn on the last line instead, over the row beneath it.
+        if offset == 0 || line > viewport {
+            return None;
+        }
     }
+    let line = line.min(viewport.saturating_sub(1));
 
     let theme = chrome.theme;
     // The field starts where a row's *label* does, not where its indent does:

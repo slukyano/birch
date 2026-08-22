@@ -105,6 +105,17 @@ impl GitState {
     }
 
     /// True when the path or any ancestor (up to the repo root) is ignored.
+    /// Whether anything under this directory is untracked or ignored — the
+    /// content git could not bring back. `dir_status` cannot answer it: it is a
+    /// most-severe-wins rollup, so one modified tracked file masks every
+    /// untracked one beside it (ADR 0031).
+    pub fn untracked_under(&self, directory: &Path) -> bool {
+        self.files
+            .iter()
+            .any(|(path, status)| *status == FileStatus::Untracked && path.starts_with(directory))
+            || self.ignored.iter().any(|path| path.starts_with(directory))
+    }
+
     pub fn is_ignored(&self, path: &Path) -> bool {
         let mut current = Some(path);
         while let Some(p) = current {

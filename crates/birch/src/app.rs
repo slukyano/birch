@@ -785,7 +785,7 @@ impl App {
                 // A drag in flight ends here rather than completing a click:
                 // the press was consumed by the gesture.
                 if self.drag.is_some() {
-                    self.finish_drag(&rows);
+                    self.finish_drag();
                     NavEffect::None
                 } else {
                     self.resolve_release(&rows, hit, modifier, Instant::now())
@@ -1350,7 +1350,9 @@ impl App {
         ActionContext {
             targets,
             picker: self.mode.is_pick(),
-            open_is_platform: self.open_cmd.program() == OpenCmd::platform_opener().program(),
+            // The whole command, not just its program: `open -a Preview` runs
+            // `open` without being the platform handler.
+            open_is_platform: self.open_cmd == OpenCmd::platform_opener(),
             open_program: program,
         }
     }
@@ -1559,7 +1561,7 @@ impl App {
             return Performed::Nothing;
         }
         if let Some(form) = action.copy_form() {
-            return self.copy_selection(&rows, &targets, form);
+            return self.copy_selection(&targets, form);
         }
         match action {
             Action::Open => {
@@ -1610,18 +1612,12 @@ impl App {
     /// transport is chosen per copy from the environment (`birch_core::
     /// clipboard`); OSC 52 comes back as a sequence for the caller to write,
     /// because the terminal belongs to the render layer.
-    fn copy_selection(
-        &mut self,
-        rows: &[Row],
-        targets: &[ActionTarget],
-        form: CopyForm,
-    ) -> Performed {
+    fn copy_selection(&mut self, targets: &[ActionTarget], form: CopyForm) -> Performed {
         let path_form = match form {
             CopyForm::Name => PathForm::Name,
             CopyForm::Relative => PathForm::Rel,
             CopyForm::Absolute => PathForm::Abs,
         };
-        let _ = rows;
         let text = targets
             .iter()
             .map(|target| self.format_path(&target.path, path_form))
@@ -1675,10 +1671,14 @@ impl App {
         };
         self.edit = Some(match action {
             Action::Rename => {
-                let name = rows
-                    .iter()
-                    .find(|row| row.path == target.path)
-                    .map_or_else(String::new, |row| row.name.clone());
+                // The *tail's* name, not the row's label: a compacted chain
+                // renders as `a/b/c` while its path is the tail, and pre-filling
+                // the label would resolve against the tail's parent and move the
+                // directory somewhere nobody asked for.
+                let name = target
+                    .path
+                    .file_name()
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
                 Editor::rename(target.path.clone(), &name)
             }
             // A create needs a directory: a selected file names its parent.
@@ -1724,6 +1724,9 @@ impl App {
     fn commit_edit(&mut self, editor: &Editor) {
         let input = editor.buffer();
         if input.trim().is_empty() {
+            // Every other failure path says something; silence here reads as a
+            // field that swallowed the edit.
+            self.status = "a name is required".into();
             return;
         }
         let result = match editor.kind() {
@@ -1775,35 +1778,81 @@ impl App {
             // Outside a repository nothing is recoverable from git.
             return true;
         };
+        // An ignored path is never in the status map at all, and it is exactly
+        // the content git cannot bring back.
+        if git.is_ignored(path) {
+            return true;
+        }
         if path.is_dir() {
-            return git.dir_status(path) == Some(FileStatus::Untracked)
-                || git.status_of(path) == Some(FileStatus::Untracked);
+            // A directory is judged by what it holds (ADR 0031). `dir_status`
+            // is a most-severe-wins rollup, so a folder with one modified
+            // tracked file *and* untracked ones rolls up to `Modified` — the
+            // rollup cannot answer this question, and the contents are asked
+            // directly instead.
+            return self.holds_unrecoverable(git, path);
         }
         git.status_of(path) == Some(FileStatus::Untracked)
     }
 
-    fn trash_now(&mut self, paths: Vec<PathBuf>) {
-        match ops::trash(&paths) {
-            Ok(deltas) => {
-                let what = describe(&paths);
-                for delta in deltas {
-                    self.tree.apply(delta);
-                }
-                self.status = format!("Moved {what} to the trash");
-                self.expansion_dirty = true;
-            }
-            // Never silently upgraded to a permanent delete: the user is told,
-            // and it happens only on their confirmation (ADR 0031).
-            Err(ops::OpError::NoTrash(_)) => {
-                let what = describe(&paths);
-                self.confirm = Some(Confirm {
-                    prompt: format!("No trash — delete {what} permanently? Enter to confirm."),
-                    paths,
-                    permanent: true,
-                });
-            }
-            Err(e) => self.status = e.to_string(),
+    /// Whether anything under this directory would be lost: an untracked or
+    /// ignored file at any depth. Walks the recorded git state rather than the
+    /// filesystem, which is both faster and the same set of paths git knows.
+    fn holds_unrecoverable(&self, git: &GitState, directory: &Path) -> bool {
+        if git.untracked_under(directory) {
+            return true;
         }
+        // A directory git has never mentioned at all holds nothing it tracks,
+        // so everything in it is unrecoverable.
+        git.dir_status(directory).is_none() && git.status_of(directory).is_none()
+    }
+
+    fn trash_now(&mut self, paths: Vec<PathBuf>) {
+        let removal = ops::trash(&paths);
+        let removed = self.apply_removal(&removal);
+        let Some(failure) = removal.failed else {
+            self.status = format!("Moved {} to the trash", describe(&paths));
+            return;
+        };
+        // Whatever already went is gone; only the rest is still a question.
+        // Asking about paths that are already in the trash would be a prompt
+        // about nothing, and confirming it would delete nothing.
+        let remaining: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|path| !removed.contains(path))
+            .collect();
+        if remaining.is_empty() {
+            self.status = failure.to_string();
+            return;
+        }
+        // Never silently upgraded to a permanent delete: the user is told, and
+        // it happens only on their confirmation (ADR 0031).
+        let what = describe(&remaining);
+        let moved = if removed.is_empty() {
+            String::new()
+        } else {
+            format!("{} already went. ", describe(&removed))
+        };
+        self.confirm = Some(Confirm {
+            prompt: format!("{moved}No trash — delete {what} permanently? Enter to confirm."),
+            paths: remaining,
+            permanent: true,
+        });
+    }
+
+    /// Applies a removal's deltas and returns the paths that actually went, so
+    /// a caller can tell what is left to ask about.
+    fn apply_removal(&mut self, removal: &ops::Removal) -> Vec<PathBuf> {
+        let mut removed = Vec::with_capacity(removal.deltas.len());
+        for delta in &removal.deltas {
+            if let TreeDelta::Removed { path } = delta {
+                removed.push(path.clone());
+            }
+            self.tree.apply(delta.clone());
+        }
+        if !removed.is_empty() {
+            self.expansion_dirty = true;
+        }
+        removed
     }
 
     /// `Enter` performs it, `Esc` abandons it, and nothing else answers —
@@ -1818,17 +1867,13 @@ impl App {
                     return;
                 };
                 if confirm.permanent {
-                    let what = describe(&confirm.paths);
-                    match ops::delete_permanently(&confirm.paths) {
-                        Ok(deltas) => {
-                            for delta in deltas {
-                                self.tree.apply(delta);
-                            }
-                            self.status = format!("Deleted {what}");
-                            self.expansion_dirty = true;
-                        }
-                        Err(e) => self.status = e.to_string(),
-                    }
+                    let removal = ops::delete_permanently(&confirm.paths);
+                    let removed = self.apply_removal(&removal);
+                    self.status = match removal.failed {
+                        Some(e) if removed.is_empty() => e.to_string(),
+                        Some(e) => format!("Deleted {} — then {e}", describe(&removed)),
+                        None => format!("Deleted {}", describe(&removed)),
+                    };
                 } else {
                     self.trash_now(confirm.paths);
                 }
@@ -1842,6 +1887,12 @@ impl App {
     /// Called on every drag event. Promotes an armed press into a drag once the
     /// pointer leaves the row it started on, then keeps the drop target current.
     fn update_drag(&mut self, area: Rect, rows: &[Row], column: u16, row: u16) {
+        // A drag moves files, and mutations are human-initiated and disabled in
+        // the picker (ADR 0032). The gesture bypasses `Action::available`, so
+        // the rule has to be stated here too.
+        if self.mode.is_pick() {
+            return;
+        }
         if self.drag.is_none() {
             let Some((path, _)) = self.armed_press.clone() else {
                 return;
@@ -1871,10 +1922,59 @@ impl App {
             });
         }
         let target = self.drop_target(area, rows, column, row);
+        self.spring_load(rows, target.as_ref());
+        self.scroll_at_edge(area, rows, row);
         if let Some(drag) = self.drag.as_mut() {
             drag.target = target;
         }
         self.status = self.drag_message();
+    }
+
+    /// Hovering a collapsed directory during a drag opens it. This needs no
+    /// carve-out from "never auto-expand": that rule is scoped to **ignored**
+    /// directories, and search already auto-expands. An ignored directory stays
+    /// shut while remaining a legal target — it simply does not open itself to
+    /// show you (ADR 0032).
+    fn spring_load(&mut self, rows: &[Row], target: Option<&DropTarget>) {
+        let Some(target) = target else { return };
+        let Some(row) = rows.iter().find(|row| row.path == target.directory) else {
+            return;
+        };
+        if !row.kind.is_dir() || row.expanded || row.ignored || row.missing {
+            return;
+        }
+        let (path, loaded) = (row.path.clone(), row.loaded);
+        self.tree.set_expanded(&path, true);
+        self.expansion_dirty = true;
+        if !loaded && self.requested_peeks.insert(path.clone()) {
+            let _ = self.source_cmds.send(SourceCmd::Expand(path));
+        }
+    }
+
+    /// Dragging into the top or bottom row scrolls by one. Holding the pointer
+    /// still does not keep scrolling — motion events only arrive when the
+    /// pointer moves — which is the documented limit rather than a timer this
+    /// event loop does not otherwise need (ADR 0032).
+    fn scroll_at_edge(&mut self, area: Rect, rows: &[Row], row: u16) {
+        let viewport = render::tree_viewport_height(area);
+        if viewport == 0 {
+            return;
+        }
+        let Some(offset) = row.checked_sub(area.y) else {
+            return;
+        };
+        let delta = if offset == 0 {
+            -1
+        } else if offset as usize + 1 >= viewport {
+            1
+        } else {
+            return;
+        };
+        let before = self.view.scroll;
+        self.view.scroll_by(rows.len(), delta, viewport);
+        if self.view.scroll != before {
+            self.rows_len = rows.len();
+        }
     }
 
     /// Which row a screen line falls on, if any.
@@ -1928,6 +2028,7 @@ impl App {
             .as_ref()
             .map(|d| d.paths.as_slice())
             .unwrap_or(&[]);
+        let mut landing: HashSet<&std::ffi::OsStr> = HashSet::new();
         for path in paths {
             if directory.starts_with(path) {
                 return Some("cannot move a folder inside itself".into());
@@ -1935,9 +2036,21 @@ impl App {
             if path.parent() == Some(directory) {
                 return Some("already there".into());
             }
-            if let Some(name) = path.file_name()
-                && directory.join(name).exists()
-            {
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            // Two dragged rows sharing a basename collide with *each other*,
+            // which the filesystem cannot yet show — a refusal has to reason
+            // about where the whole set would land, not only where it is now.
+            if !landing.insert(name) {
+                return Some(format!(
+                    "two selected rows are named {}",
+                    name.to_string_lossy()
+                ));
+            }
+            // Not `exists()`: it follows links, so a dangling one would read as
+            // free and be replaced.
+            if std::fs::symlink_metadata(directory.join(name)).is_ok() {
                 return Some(format!("{} already exists there", name.to_string_lossy()));
             }
         }
@@ -1965,8 +2078,7 @@ impl App {
 
     /// Completes the drag. A refused target does nothing and says so; the move
     /// itself has no undo, so the status line reports where things went.
-    fn finish_drag(&mut self, rows: &[Row]) {
-        let _ = rows;
+    fn finish_drag(&mut self) {
         let Some(drag) = self.drag.take() else {
             return;
         };
@@ -2794,7 +2906,7 @@ mod tests {
         dirs
     }
 
-    fn index_of(entries: &[(&str, bool)]) -> Arc<SearchIndex> {
+    pub(super) fn index_of(entries: &[(&str, bool)]) -> Arc<SearchIndex> {
         Arc::new(SearchIndex::from_paths(Path::new("/r"), entries))
     }
 
@@ -3225,7 +3337,7 @@ mod tests {
     fn esc_backs_out_search_then_quits() {
         let mut h = harness(Mode::Tree);
         feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
-        h.app.index = Some(index_of(&[("a.txt", false)]));
+        h.app.index = Some(super::tests::index_of(&[("a.txt", false)]));
         h.app.search_push('a');
         assert!(!h.app.on_esc(), "first Esc clears the search");
         assert!(h.app.search.is_none());
@@ -4261,7 +4373,7 @@ mod tests {
         assert!(!h.app.bottom_line().contains("no matches"));
 
         // Complete and holding nothing: now it is true, and said.
-        h.app.index = Some(index_of(&[("a.txt", false)]));
+        h.app.index = Some(super::tests::index_of(&[("a.txt", false)]));
         h.app.rematch();
         assert!(
             h.app.bottom_line().contains("no matches"),
@@ -4997,7 +5109,7 @@ mod ctl_tests {
         let sequence = clipboard::copy("a.txt", clipboard::Transport::Osc52).unwrap();
         assert_eq!(sequence, Some(clipboard::osc52("a.txt")));
 
-        let performed = h.app.copy_selection(&rows, &targets, CopyForm::Name);
+        let performed = h.app.copy_selection(&targets, CopyForm::Name);
         assert!(matches!(
             performed,
             Performed::Write(_) | Performed::Nothing
@@ -5252,7 +5364,7 @@ mod ctl_tests {
         let rows = h.app.rows();
         super::tests::press(&mut h.app, &rows, 2, false);
         h.app.update_drag(pane(), &rows, 4, 1);
-        h.app.finish_drag(&rows);
+        h.app.finish_drag();
 
         assert!(root.join("sub/a.txt").is_file() && !root.join("a.txt").exists());
         assert!(h.app.status.contains("sub"), "{:?}", h.app.status);
@@ -5297,7 +5409,7 @@ mod ctl_tests {
         );
         assert!(h.app.status.contains("inside itself"), "{:?}", h.app.status);
 
-        h.app.finish_drag(&rows);
+        h.app.finish_drag();
         assert!(root.join("outer/inner").is_dir(), "nothing moved");
         assert!(h.app.status.starts_with("Not moved"), "{:?}", h.app.status);
         std::fs::remove_dir_all(&root).unwrap();
@@ -5315,6 +5427,272 @@ mod ctl_tests {
         let target = h.app.drag.as_ref().unwrap().target.as_ref().unwrap();
         assert_eq!(target.refusal.as_deref(), Some("already there"));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The whole delete safety gate, which had no test at all. A rollup cannot
+    /// answer this question: `dir_status` is most-severe-wins, so one modified
+    /// tracked file masks every untracked one beside it (ADR 0031).
+    #[test]
+    fn untracked_is_what_git_could_not_bring_back() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("src", NodeKind::Dir)]);
+        h.app.git_state = Some(Arc::new(parse_porcelain_v2(
+            b"1 .M N... 100644 100644 100644 a a src/main.rs\0? src/notes.md\0! src/x.env\0",
+            Path::new("/r"),
+        )));
+        let git = h.app.git_state.clone().unwrap();
+
+        // A tracked-and-clean file is absent from the status entirely, which
+        // means recoverable — not unknown.
+        assert!(!h.app.is_untracked(Path::new("/r/src/main.rs")));
+        assert!(h.app.is_untracked(Path::new("/r/src/notes.md")));
+        // Ignored content is never in the status map, and is exactly what git
+        // cannot recover.
+        assert!(h.app.is_untracked(Path::new("/r/src/x.env")));
+        // The rollup says `Modified`; the directory still holds losable files.
+        assert_eq!(
+            git.dir_status(Path::new("/r/src")),
+            Some(FileStatus::Modified)
+        );
+        assert!(git.untracked_under(Path::new("/r/src")));
+
+        // Outside a repository nothing is recoverable.
+        h.app.git_state = None;
+        assert!(h.app.is_untracked(Path::new("/r/anything")));
+    }
+
+    /// Dragging moves files, so it is a mutation — and mutations never happen
+    /// in the picker, which the gesture must state itself because it does not
+    /// go through `Action::available` (ADR 0032).
+    #[test]
+    fn a_drag_does_nothing_in_the_picker() {
+        let root = scratch("pick-drag");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let mut h = rooted(&root, &[("sub", NodeKind::Dir), ("a.txt", NodeKind::File)]);
+        h.app.mode = Mode::Pick;
+        let rows = h.app.rows();
+
+        super::tests::press(&mut h.app, &rows, 2, false);
+        h.app.update_drag(pane(), &rows, 4, 1);
+        assert!(h.app.drag.is_none(), "no drag begins in the picker");
+        h.app.finish_drag();
+        assert!(root.join("a.txt").is_file(), "and nothing moved");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A compacted chain renders as `a/b/c` while its path is the tail.
+    /// Pre-filling the label would resolve against the tail's parent and move
+    /// the directory somewhere nobody asked for.
+    #[test]
+    fn renaming_a_compacted_chain_edits_its_tail_name() {
+        let root = scratch("chain-rename");
+        std::fs::create_dir_all(root.join("src/utils")).unwrap();
+        let mut h = rooted(&root, &[("src", NodeKind::Dir)]);
+        h.app.tree.set_expanded(&root.join("src"), true);
+        h.app.tree.apply(TreeDelta::Snapshot {
+            dir: root.join("src"),
+            entries: vec![birch_core::Entry {
+                name: "utils".into(),
+                kind: NodeKind::Dir,
+            }],
+        });
+        let rows = h.app.rows();
+        let chain = rows
+            .iter()
+            .find(|row| row.name.contains('/'))
+            .expect("a chain formed");
+        assert_eq!(chain.path, root.join("src/utils"));
+
+        h.app.view.focus(chain.path.clone());
+        h.app.begin_edit(&rows, Action::Rename);
+        assert_eq!(
+            h.app.edit.as_ref().unwrap().buffer(),
+            "utils",
+            "the tail's name, not the chain's label"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Two dragged rows sharing a basename collide with each other, which the
+    /// filesystem cannot yet show.
+    #[test]
+    fn a_drag_refuses_a_collision_inside_its_own_set() {
+        let root = scratch("drag-set-collide");
+        std::fs::create_dir_all(root.join("x")).unwrap();
+        std::fs::create_dir_all(root.join("y")).unwrap();
+        std::fs::create_dir_all(root.join("z")).unwrap();
+        std::fs::write(root.join("x/a.txt"), b"x").unwrap();
+        std::fs::write(root.join("y/a.txt"), b"x").unwrap();
+        let mut h = rooted(
+            &root,
+            &[
+                ("x", NodeKind::Dir),
+                ("y", NodeKind::Dir),
+                ("z", NodeKind::Dir),
+            ],
+        );
+        for dir in ["x", "y"] {
+            h.app.tree.set_expanded(&root.join(dir), true);
+            h.app.tree.apply(TreeDelta::Snapshot {
+                dir: root.join(dir),
+                entries: vec![birch_core::Entry {
+                    name: "a.txt".into(),
+                    kind: NodeKind::File,
+                }],
+            });
+        }
+        h.app.tree.apply(TreeDelta::Snapshot {
+            dir: root.join("z"),
+            entries: Vec::new(),
+        });
+        let rows = h.app.rows();
+        let find = |name: &str, parent: &str| {
+            rows.iter()
+                .position(|r| r.path == root.join(parent).join(name))
+                .expect("row")
+        };
+        let (xa, ya) = (find("a.txt", "x"), find("a.txt", "y"));
+        h.app.view.focus(root.join("x/a.txt"));
+        h.app.view.toggle_selected(&rows, ya);
+        assert_eq!(h.app.view.selection_len(), 2);
+
+        super::tests::press(&mut h.app, &rows, xa, false);
+        let z = rows.iter().position(|r| r.path == root.join("z")).unwrap();
+        h.app.update_drag(pane(), &rows, 4, z as u16);
+        let drag = h.app.drag.as_ref().unwrap();
+        assert_eq!(
+            drag.paths.len(),
+            2,
+            "both rows are being dragged: {:?}",
+            drag.paths
+        );
+        let target = drag.target.as_ref().unwrap();
+        assert!(
+            target
+                .refusal
+                .as_deref()
+                .is_some_and(|why| why.contains("a.txt")),
+            "refused before release: {:?}",
+            target.refusal
+        );
+
+        h.app.finish_drag();
+        assert!(root.join("x/a.txt").is_file() && root.join("y/a.txt").is_file());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A removal that stops partway must not ask about the paths that already
+    /// went — confirming that prompt would delete nothing.
+    #[test]
+    fn a_partial_trash_asks_only_about_what_is_left() {
+        let root = scratch("partial-trash");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        // The second path does not exist, so the removal stops after the first.
+        h.app
+            .trash_now(vec![root.join("a.txt"), root.join("ghost.txt")]);
+
+        assert!(!root.join("a.txt").exists(), "the first one went");
+        match &h.app.confirm {
+            Some(confirm) => {
+                assert_eq!(confirm.paths, vec![root.join("ghost.txt")]);
+                assert!(confirm.permanent);
+                assert!(
+                    confirm.prompt.contains("already went"),
+                    "says what already happened: {:?}",
+                    confirm.prompt
+                );
+            }
+            None => assert!(
+                h.app.status.contains("trash") || !h.app.status.is_empty(),
+                "or it reported the failure: {:?}",
+                h.app.status
+            ),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Hovering a collapsed directory opens it — except an ignored one, which
+    /// stays shut while remaining a legal target (ADR 0032).
+    #[test]
+    fn a_drag_springs_a_directory_open_but_never_an_ignored_one() {
+        let root = scratch("spring");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(
+            &root,
+            &[
+                ("node_modules", NodeKind::Dir),
+                ("sub", NodeKind::Dir),
+                ("a.txt", NodeKind::File),
+            ],
+        );
+        h.app.git_state = Some(Arc::new(parse_porcelain_v2(b"! node_modules/\0", &root)));
+        let rows = h.app.rows();
+        let row_of = |name: &str| rows.iter().position(|r| r.path == root.join(name)).unwrap();
+
+        super::tests::press(&mut h.app, &rows, row_of("a.txt"), false);
+        h.app.update_drag(pane(), &rows, 4, row_of("sub") as u16);
+        assert!(
+            h.app.tree.node_at(&root.join("sub")).unwrap().expanded,
+            "a normal directory springs open"
+        );
+
+        h.app
+            .update_drag(pane(), &rows, 4, row_of("node_modules") as u16);
+        assert!(
+            !h.app
+                .tree
+                .node_at(&root.join("node_modules"))
+                .unwrap()
+                .expanded,
+            "an ignored one stays shut"
+        );
+        let target = h.app.drag.as_ref().unwrap().target.as_ref().unwrap();
+        assert_eq!(
+            target.directory,
+            root.join("node_modules"),
+            "but is still a target"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// `Esc` backs out one layer at a time, outermost first (ADR 0030).
+    #[test]
+    fn esc_backs_out_the_layers_in_order() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
+        h.app.index = Some(super::tests::index_of(&[("a.txt", false)]));
+        h.app.search_push('a');
+        let rows = h.app.rows();
+        assert!(
+            h.app
+                .open_menu(&rows, Some(PathBuf::from("/r/a.txt")), 2, 1)
+        );
+        h.app.edit = Some(Editor::create("/r".into()));
+        h.app.confirm = Some(Confirm {
+            prompt: "?".into(),
+            paths: Vec::new(),
+            permanent: false,
+        });
+
+        h.app.handle_confirm_input(InputAction::Esc);
+        assert!(
+            h.app.confirm.is_none() && h.app.edit.is_some(),
+            "the question first"
+        );
+        h.app.handle_edit_input(InputAction::Esc);
+        assert!(
+            h.app.edit.is_none() && h.app.menu.is_some(),
+            "then the edit"
+        );
+        assert_eq!(h.app.menu_input(pane(), InputAction::Esc), MenuStep::Close);
+        h.app.menu = None;
+        assert!(!h.app.on_esc(), "then the search, without quitting");
+        assert!(h.app.search.is_none());
+        assert!(h.app.on_esc(), "and only then, quit");
     }
 
     #[test]

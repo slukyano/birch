@@ -101,9 +101,18 @@ pub fn move_into(path: &Path, directory: &Path) -> OpResult {
 /// (`foo/`) creates a directory instead of a file. One binding, three
 /// operations.
 pub fn create(directory: &Path, input: &str) -> OpResult {
-    let is_dir = input.ends_with('/') || input.ends_with(std::path::MAIN_SEPARATOR);
+    // Read from the *trimmed* input, as `resolve` does: `sub/ ` with a trailing
+    // space asks for a directory just as plainly as `sub/`.
+    let trimmed = input.trim();
+    let is_dir = trimmed.ends_with('/') || trimmed.ends_with(std::path::MAIN_SEPARATOR);
     let target = resolve(directory, input)?;
-    if target.exists() {
+    // A create makes something *here*. An input that climbs out would write
+    // outside the tree, where no row could ever show it — refused rather than
+    // performed invisibly.
+    if !target.starts_with(directory) {
+        return Err(OpError::BadName(input.trim().to_string()));
+    }
+    if occupied(&target) {
         return Err(OpError::Exists(target));
     }
     let parent = target.parent().ok_or(OpError::NoParent(target.clone()))?;
@@ -119,34 +128,53 @@ pub fn create(directory: &Path, input: &str) -> OpResult {
     Ok(vec![added(&announce)])
 }
 
-/// Moves paths to the platform trash. All-or-nothing per path: the ones that
-/// went are reported, and the first failure stops the rest so a partial delete
-/// is never silent.
-pub fn trash(paths: &[PathBuf]) -> OpResult {
-    let mut deltas = Vec::with_capacity(paths.len());
-    for path in paths {
+/// What a multi-path removal actually did: the deltas for the paths that went,
+/// and the failure that stopped the rest. Returning only the error would leave
+/// the tree showing rows whose files are already gone.
+pub struct Removal {
+    pub deltas: Vec<TreeDelta>,
+    pub failed: Option<OpError>,
+}
+
+/// Moves paths to the platform trash. Stops at the first failure — a partial
+/// delete is reported, never silent.
+pub fn trash(paths: &[PathBuf]) -> Removal {
+    remove_each(paths, |path| {
         // Every failure here means the same thing to a user: the trash could
         // not take it, so the only way to remove it is permanent — which is a
         // question for them, not a fallback to take silently (ADR 0031).
-        trash::delete(path).map_err(|e| OpError::NoTrash(e.to_string()))?;
-        deltas.push(TreeDelta::Removed { path: path.clone() });
-    }
-    Ok(deltas)
+        trash::delete(path).map_err(|e| OpError::NoTrash(e.to_string()))
+    })
 }
 
 /// Deletes paths outright, with no way back. Reached only after an explicit
 /// confirmation that says so, when the trash is unavailable (ADR 0031).
-pub fn delete_permanently(paths: &[PathBuf]) -> OpResult {
-    let mut deltas = Vec::with_capacity(paths.len());
-    for path in paths {
+pub fn delete_permanently(paths: &[PathBuf]) -> Removal {
+    remove_each(paths, |path| {
         if path.is_dir() {
             fs::remove_dir_all(path)?;
         } else {
             fs::remove_file(path)?;
         }
+        Ok(())
+    })
+}
+
+fn remove_each(paths: &[PathBuf], mut remove: impl FnMut(&Path) -> Result<(), OpError>) -> Removal {
+    let mut deltas = Vec::with_capacity(paths.len());
+    for path in paths {
+        if let Err(e) = remove(path) {
+            return Removal {
+                deltas,
+                failed: Some(e),
+            };
+        }
         deltas.push(TreeDelta::Removed { path: path.clone() });
     }
-    Ok(deltas)
+    Removal {
+        deltas,
+        failed: None,
+    }
 }
 
 /// Resolves an inline input against a directory, refusing anything that is not
@@ -184,13 +212,33 @@ fn guard_destination(source: &Path, target: &Path) -> Result<(), OpError> {
     if target.starts_with(source) {
         return Err(OpError::IntoOwnDescendant);
     }
-    if target.exists() {
+    // Not `exists()`: that follows symlinks, so a **dangling** link at the
+    // destination would report absent and be silently replaced. Nothing here
+    // overwrites, links included.
+    if occupied(target) && !same_file(source, target) {
         return Err(OpError::Exists(target.into()));
     }
     match target.parent() {
         Some(parent) if parent.is_dir() => Ok(()),
         Some(parent) => Err(OpError::NoParent(parent.into())),
         None => Err(OpError::NoParent(target.into())),
+    }
+}
+
+/// Whether anything at all occupies this path — a file, a directory, or a
+/// symlink whose target is missing. `Path::exists` follows links and so calls a
+/// dangling one absent.
+fn occupied(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+/// Whether two paths name the same file on disk. On a case-insensitive
+/// filesystem `readme.md` and `README.md` do, which is what makes a case-only
+/// rename possible rather than a collision with itself.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -346,8 +394,73 @@ mod tests {
         fs::create_dir(&sub).unwrap();
         fs::write(sub.join("b.txt"), b"x").unwrap();
 
-        let deltas = delete_permanently(&[a.clone(), sub.clone()]).unwrap();
-        assert_eq!(deltas.len(), 2);
+        let removal = delete_permanently(&[a.clone(), sub.clone()]);
+        assert_eq!(removal.deltas.len(), 2);
+        assert!(removal.failed.is_none());
         assert!(!a.exists() && !sub.exists());
+    }
+
+    /// A removal that stops partway reports what it *did* as well as what
+    /// stopped it — otherwise the tree keeps showing rows whose files are gone.
+    #[test]
+    fn a_partial_removal_reports_both_halves() {
+        let dir = Dir::new("partial");
+        let a = dir.file("a.txt");
+        let missing = dir.join("never-existed.txt");
+        let c = dir.file("c.txt");
+
+        let removal = delete_permanently(&[a.clone(), missing, c.clone()]);
+        assert_eq!(removal.deltas.len(), 1, "only the first one went");
+        assert!(removal.failed.is_some());
+        assert!(!a.exists(), "and it really went");
+        assert!(c.exists(), "the rest was not attempted");
+    }
+
+    /// `readme.md` → `README.md` is a routine rename, and on a case-insensitive
+    /// filesystem the destination "exists" — as the same file.
+    #[test]
+    fn a_case_only_rename_is_not_a_collision_with_itself() {
+        let dir = Dir::new("case");
+        let path = dir.file("readme.md");
+        rename(&path, "README.md").unwrap();
+        let names: Vec<String> = fs::read_dir(&dir.0)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["README.md"]);
+    }
+
+    /// A dangling symlink is *something* at the destination. `exists()` follows
+    /// links and calls it absent, which would silently unlink it.
+    #[test]
+    fn a_dangling_symlink_still_blocks_a_destination() {
+        let dir = Dir::new("dangling");
+        let a = dir.file("a.txt");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dir.join("nowhere"), dir.join("link")).unwrap();
+        assert!(matches!(rename(&a, "link"), Err(OpError::Exists(_))));
+        assert!(
+            fs::symlink_metadata(dir.join("link")).is_ok(),
+            "still there"
+        );
+        assert!(a.exists(), "and the source was not moved");
+    }
+
+    #[test]
+    fn a_create_cannot_climb_out_of_its_directory() {
+        let dir = Dir::new("escape");
+        fs::create_dir(dir.join("sub")).unwrap();
+        assert!(matches!(
+            create(&dir.join("sub"), "../escaped.txt"),
+            Err(OpError::BadName(_))
+        ));
+        assert!(!dir.join("escaped.txt").exists());
+    }
+
+    #[test]
+    fn a_trailing_space_does_not_hide_a_trailing_slash() {
+        let dir = Dir::new("trailing");
+        create(&dir.0, "sub/ ").unwrap();
+        assert!(dir.join("sub").is_dir(), "still a directory");
     }
 }
