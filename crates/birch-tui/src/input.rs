@@ -49,6 +49,12 @@ pub enum InputAction {
     Enter,
     Quit,
     Esc,
+    /// Move the selection a page up or down; the viewport follows (task 081).
+    PageUp,
+    PageDown,
+    /// Move the selection to the first or last reachable row.
+    Home,
+    End,
     /// A printable character — always search input, never a hotkey
     /// (ADR 0008).
     Char(char),
@@ -77,6 +83,20 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
             KeyCode::Left => Some(InputAction::Left),
             KeyCode::Enter => Some(InputAction::Enter),
             KeyCode::Esc => Some(InputAction::Esc),
+            // Ctrl and Alt fall through to the plain action — `Ctrl-End` means
+            // the end everywhere else, and a key that silently does nothing is
+            // worse than one that does the obvious thing. `Shift` is excluded:
+            // it extends a selection (task 074).
+            KeyCode::PageUp if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Some(InputAction::PageUp)
+            }
+            KeyCode::PageDown if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Some(InputAction::PageDown)
+            }
+            KeyCode::Home if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Some(InputAction::Home)
+            }
+            KeyCode::End if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(InputAction::End),
             KeyCode::Backspace => Some(InputAction::Backspace),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(InputAction::Quit)
@@ -132,6 +152,35 @@ mod tests {
         assert_eq!(map_event(&ev, true), Some(InputAction::Backspace));
         let ev = Event::Key(KeyEvent::from(KeyCode::Esc));
         assert_eq!(map_event(&ev, true), Some(InputAction::Esc));
+    }
+
+    #[test]
+    fn the_navigation_keys_map_and_leave_shift_alone() {
+        for (code, action) in [
+            (KeyCode::PageUp, InputAction::PageUp),
+            (KeyCode::PageDown, InputAction::PageDown),
+            (KeyCode::Home, InputAction::Home),
+            (KeyCode::End, InputAction::End),
+        ] {
+            assert_eq!(
+                map_event(&Event::Key(KeyEvent::from(code)), true),
+                Some(action)
+            );
+            // Ctrl and Alt mean the same thing as the bare key.
+            for modifier in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+                assert_eq!(
+                    map_event(&Event::Key(KeyEvent::new(code, modifier)), true),
+                    Some(action),
+                    "{code:?} with {modifier:?}"
+                );
+            }
+            // Shift is reserved for range selection (task 074).
+            assert_eq!(
+                map_event(&Event::Key(KeyEvent::new(code, KeyModifiers::SHIFT)), true),
+                None,
+                "{code:?} with shift"
+            );
+        }
     }
 
     #[test]

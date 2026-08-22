@@ -90,8 +90,8 @@ gates `074`, and with `081` in parallel since it depends on nothing here.
 
 # Checklist
 
-- [ ] 081-standard-navigation-keys — designed
-- [ ] 088-replace-the-scope-fence — designed
+- [x] 081-standard-navigation-keys — implemented, gates green, verified in a pty
+- [x] 088-replace-the-scope-fence — implemented (documents only)
 - [ ] 074-add-multi-selection — designed
 - [ ] 071-add-context-menu — designed
 

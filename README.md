@@ -33,8 +33,8 @@ nvim "$(birch --pick)"              # pick a file and open it
 ```
 
 Arrows navigate: `→` expands a folder, splits a compacted chain, or else moves down; `←` collapses
-or jumps to the parent. `Enter` opens a file (or toggles a directory).
-Type anything for a fuzzy search. `Esc` or `Ctrl-C` quit.
+or jumps to the parent. `PgUp`/`PgDn` move a page and `Home`/`End` jump to the ends. `Enter` opens a
+file (or toggles a directory). Type anything for a fuzzy search. `Esc` or `Ctrl-C` quit.
 
 ## Install
 

@@ -631,6 +631,22 @@ impl FlatView {
         }
     }
 
+    /// Moves the selection to the first or last **live** row, and asks the
+    /// viewport to follow. Dim rows are never landed on (ADR 0023), so in a
+    /// free tree `first` reaches the root row — it is a real, selectable row
+    /// and the first one — while under a narrowing it reaches the first match.
+    /// A no-op when nothing can hold the selection at all.
+    pub fn move_to_edge(&mut self, rows: &[Row], first: bool) {
+        let target = if first {
+            rows.iter().position(|r| r.live)
+        } else {
+            rows.iter().rposition(|r| r.live)
+        };
+        if let Some(idx) = target {
+            self.select(rows, idx);
+        }
+    }
+
     /// `→` always does something (task 060), in three cases, first match wins:
     /// a collapsed directory **expands** (the selection stays); an expanded
     /// compact chain **splits** into its member rows (ADR 0014); anything else
@@ -878,6 +894,98 @@ mod tests {
 
     fn row_names(rows: &[Row]) -> Vec<&str> {
         rows.iter().map(|r| r.name.as_str()).collect()
+    }
+
+    /// Rows narrowed to the given absolute paths: everything else is dim, and
+    /// therefore inert (ADR 0023).
+    fn rows_matching(tree: &Tree, hits: &[&str]) -> Vec<Row> {
+        let matched: HashMap<PathBuf, Vec<u32>> = hits
+            .iter()
+            .map(|p| (PathBuf::from(p), Vec::new()))
+            .collect();
+        visible_rows(
+            tree,
+            &Settings::default(),
+            Decor {
+                matched: Some(&matched),
+                ..Decor::default()
+            },
+        )
+    }
+
+    // ---- 081: paging and the edge keys ----
+
+    #[test]
+    fn a_page_counts_live_rows_and_clamps_at_both_ends() {
+        let mut tree = fixture();
+        tree.set_expanded(Path::new("/r/src"), true);
+        let rows = rows_plain(&tree);
+        // /r, src, lib.rs, main.rs, .env, readme.md — .git is hidden.
+        assert_eq!(
+            row_names(&rows),
+            ["r", "src", "lib.rs", "main.rs", ".env", "readme.md"]
+        );
+        let mut view = FlatView::default();
+        view.sync(&rows);
+
+        view.move_by(&rows, 3);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/main.rs")));
+        // A page that runs past the end lands on the last row, not short of it.
+        view.move_by(&rows, 3);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/readme.md")));
+        view.move_by(&rows, -99);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r")));
+    }
+
+    #[test]
+    fn a_page_steps_over_dim_rows_without_landing_on_one() {
+        let mut tree = fixture();
+        tree.set_expanded(Path::new("/r/src"), true);
+        // Only the two source files match; everything else is dim and inert.
+        let rows = rows_matching(&tree, &["/r/src/lib.rs", "/r/src/main.rs"]);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/lib.rs")));
+        // A page's worth of movement counts targets, not screen lines, so it
+        // clamps on the last *live* row rather than the last row.
+        view.move_by(&rows, 4);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/main.rs")));
+    }
+
+    #[test]
+    fn the_edges_reach_the_first_and_last_live_row() {
+        let mut tree = fixture();
+        tree.set_expanded(Path::new("/r/src"), true);
+        let rows = rows_plain(&tree);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+
+        view.move_to_edge(&rows, false);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/readme.md")));
+        // The root is a real, selectable row, so Home reaches it — no special
+        // case, and no landing on the first child instead.
+        view.move_to_edge(&rows, true);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r")));
+
+        // Under a narrowing the edges are the first and last *match*.
+        let narrowed = rows_matching(&tree, &["/r/src/main.rs", "/r/readme.md"]);
+        view.move_to_edge(&narrowed, true);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/main.rs")));
+        view.move_to_edge(&narrowed, false);
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/readme.md")));
+    }
+
+    #[test]
+    fn the_edges_are_a_no_op_when_nothing_is_live() {
+        let tree = fixture();
+        let rows = rows_matching(&tree, &["/r/nothing-here"]);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        assert_eq!(view.selection, None);
+        view.move_to_edge(&rows, true);
+        assert_eq!(view.selection, None);
+        view.move_to_edge(&rows, false);
+        assert_eq!(view.selection, None);
     }
 
     // ---- 078: the branch column ----

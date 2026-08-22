@@ -466,14 +466,31 @@ impl App {
         }
 
         let rows = self.rows();
-        // With a live search, ↑/↓ cycle the matches — in both modes now
-        // (ADR 0023): the picker is the same tree, so it steps the same way.
-        if let Some(state) = &self.search
-            && !state.matches.is_empty()
-            && matches!(action, InputAction::Up | InputAction::Down)
-        {
-            self.cycle_match(action == InputAction::Down);
-            return false;
+        // One page is the viewport less a row of overlap: the row at the bottom
+        // edge becomes the row at the top, which is the only reason a page is
+        // not simply the viewport. The floor keeps a one-row pane usable.
+        let page = render::tree_viewport_height(area(terminal))
+            .saturating_sub(1)
+            .max(1) as isize;
+        // With a live search every movement key moves by *matches*, because
+        // nothing else is selectable (ADR 0023) — in both modes, since the
+        // picker is the same tree. Single steps wrap; page and edge steps clamp
+        // (task 081).
+        let match_count = self.search.as_ref().map_or(0, |state| state.matches.len()) as isize;
+        if match_count > 0 {
+            let step = match action {
+                InputAction::Up => Some((-1, true)),
+                InputAction::Down => Some((1, true)),
+                InputAction::PageUp => Some((-page, false)),
+                InputAction::PageDown => Some((page, false)),
+                InputAction::Home => Some((-match_count, false)),
+                InputAction::End => Some((match_count, false)),
+                _ => None,
+            };
+            if let Some((delta, wrap)) = step {
+                self.step_match(delta, wrap);
+                return false;
+            }
         }
         let effect = match action {
             InputAction::Up => {
@@ -482,6 +499,25 @@ impl App {
             }
             InputAction::Down => {
                 self.view.move_by(&rows, 1);
+                NavEffect::None
+            }
+            // Paging moves the selection and lets the viewport follow; the
+            // wheel stays the only motion that moves the viewport alone
+            // (task 081). `move_by` counts live rows and clamps at the ends.
+            InputAction::PageUp => {
+                self.view.move_by(&rows, -page);
+                NavEffect::None
+            }
+            InputAction::PageDown => {
+                self.view.move_by(&rows, page);
+                NavEffect::None
+            }
+            InputAction::Home => {
+                self.view.move_to_edge(&rows, true);
+                NavEffect::None
+            }
+            InputAction::End => {
+                self.view.move_to_edge(&rows, false);
                 NavEffect::None
             }
             InputAction::Right => self.view.on_right(&mut self.tree, &rows),
@@ -1072,10 +1108,12 @@ impl App {
         }
     }
 
-    /// The forward anchor: the index of the first match at or after the current
-    /// selection in tree order, wrapping to the first match when none follows.
-    /// Falls back to the first match when there is no selection to anchor on.
-    fn anchor_index(&self, matches: &[Match]) -> usize {
+    /// How many matches sort before the current selection in tree order —
+    /// `0..=matches.len()`, **un-wrapped**. A selection sitting past the last
+    /// match yields `len`, which single stepping folds to the first match and
+    /// page stepping clamps to the last (task 081); the two need to tell those
+    /// apart, so the raw position lives here.
+    fn match_position(&self, matches: &[Match]) -> usize {
         if matches.is_empty() {
             return 0;
         }
@@ -1093,7 +1131,14 @@ impl App {
             .tree
             .node_at(selection)
             .is_some_and(|node| node.kind.is_dir());
-        let position = search::tree_order_position(matches, &rel, is_dir);
+        search::tree_order_position(matches, &rel, is_dir)
+    }
+
+    /// The forward anchor: the index of the first match at or after the current
+    /// selection in tree order, wrapping to the first match when none follows.
+    /// Falls back to the first match when there is no selection to anchor on.
+    fn anchor_index(&self, matches: &[Match]) -> usize {
+        let position = self.match_position(matches);
         // Past the last match, the anchor wraps to the first.
         if position == matches.len() {
             0
@@ -1102,32 +1147,35 @@ impl App {
         }
     }
 
-    /// Steps to the next or previous match **relative to the selection**, not
-    /// to a remembered pointer. `→`, `←`, and the mouse all move the selection
-    /// without going through here, so a stored index goes stale the moment one
-    /// of them is used — stepping would then swallow a keystroke or jump
-    /// backwards. Deriving the position each time cannot desynchronise.
-    fn cycle_match(&mut self, forward: bool) {
+    /// Steps `delta` matches **relative to the selection**, not to a remembered
+    /// pointer. `→`, `←`, and the mouse all move the selection without going
+    /// through here, so a stored index goes stale the moment one of them is
+    /// used — stepping would then swallow a keystroke or jump backwards.
+    /// Deriving the position each time cannot desynchronise.
+    ///
+    /// `wrap` distinguishes the two callers: a single step off the end has an
+    /// obvious destination and wraps, while a page-sized jump clamps — wrapping
+    /// one would teleport across the whole result set without saying so
+    /// (task 081). `Home`/`End` are a clamped step large enough to reach an edge.
+    fn step_match(&mut self, delta: isize, wrap: bool) {
         let matches = match &self.search {
             Some(state) if !state.matches.is_empty() => state.matches.clone(),
             _ => return,
         };
-        let n = matches.len();
-        // The first match at or after the selection, and whether that *is* the
-        // selected row.
-        let anchor = self.anchor_index(&matches);
-        let on_match = self
-            .view
-            .selection
-            .as_deref()
-            .is_some_and(|selected| selected == matches[anchor].entry.abs);
-        let next = if forward {
-            // Off a match, the anchor already sits after it.
-            if on_match { (anchor + 1) % n } else { anchor }
+        let n = matches.len() as isize;
+        let position = self.match_position(&matches);
+        let on_match = position < matches.len()
+            && self.view.selection.as_deref() == Some(matches[position].entry.abs.as_path());
+        // Off a match, `position` counts the matches *before* the selection, so
+        // the next one forward already sits at `position` and the previous at
+        // `position - 1`.
+        let target = position as isize + delta - isize::from(delta > 0 && !on_match);
+        let next = if wrap {
+            target.rem_euclid(n)
         } else {
-            (anchor + n - 1) % n
+            target.clamp(0, n - 1)
         };
-        self.reveal(matches[next].entry.abs.clone());
+        self.reveal(matches[next as usize].entry.abs.clone());
     }
 
     /// Expand ancestors toward `path` (requesting loads as needed) and focus
@@ -1727,6 +1775,87 @@ mod tests {
         );
     }
 
+    /// Task 081: a page-sized step through the matches clamps where a single
+    /// step wraps, so `PgDn` past the last match stops on it instead of
+    /// teleporting to the first.
+    #[test]
+    fn a_page_of_matches_clamps_where_a_single_step_wraps() {
+        let mut h = harness(Mode::Tree);
+        let names = ["a1.txt", "a2.txt", "a3.txt", "a4.txt"];
+        feed(&mut h.app, "/r", &names.map(|n| (n, NodeKind::File)));
+        h.app.index = Some(index_of(&names.map(|n| (n, false))));
+        h.app.search_push('a');
+        assert_eq!(h.app.search.as_ref().unwrap().matches.len(), 4);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a1.txt"))
+        );
+
+        // A page of two lands two matches on.
+        h.app.step_match(2, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a3.txt"))
+        );
+        // Past the end it stops on the last match rather than wrapping.
+        h.app.step_match(2, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a4.txt"))
+        );
+        h.app.step_match(2, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a4.txt"))
+        );
+        // A single step from the last match still wraps.
+        h.app.step_match(1, true);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a1.txt"))
+        );
+        // Backwards clamps the same way, and End/Home are a step big enough to
+        // reach an edge.
+        h.app.step_match(-2, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a1.txt"))
+        );
+        h.app.step_match(4, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a4.txt"))
+        );
+        h.app.step_match(-4, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a1.txt"))
+        );
+    }
+
+    /// The selection can sit *past* every match — `match_position` reports
+    /// `len` there, which single stepping folds to the first match and page
+    /// stepping must clamp to the last.
+    #[test]
+    fn stepping_from_past_the_last_match_wraps_but_paging_clamps() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("a1.txt", NodeKind::File), ("zz.txt", NodeKind::File)],
+        );
+        h.app.index = Some(index_of(&[("a1.txt", false), ("zz.txt", false)]));
+        h.app.search_push('a');
+        assert_eq!(h.app.search.as_ref().unwrap().matches.len(), 1);
+        // Park the selection after the only match.
+        h.app.view.focus("/r/zz.txt".into());
+        h.app.step_match(3, false);
+        assert_eq!(
+            h.app.view.selection.as_deref(),
+            Some(Path::new("/r/a1.txt"))
+        );
+    }
+
     #[test]
     fn cycle_wraps_and_survives_an_index_refresh() {
         let mut h = harness(Mode::Tree);
@@ -1742,14 +1871,14 @@ mod tests {
 
         // Stepping is expressed by where the selection lands, which is the only
         // thing the user can see — and the only thing that cannot go stale.
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/ab.txt"))
         );
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/a.txt")));
-        h.app.cycle_match(false);
+        h.app.step_match(-1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/ab.txt"))
@@ -1813,17 +1942,17 @@ mod tests {
         );
 
         // Stepping walks down the tree, then wraps.
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/mid.md"))
         );
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/zed.md"))
         );
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/src/deep.md"))
@@ -2372,7 +2501,7 @@ mod tests {
     #[test]
     fn stepping_follows_the_selection_after_an_arrow_or_a_click() {
         // Independent-review finding: `→`, `←` and clicks move the selection
-        // without going through cycle_match, so a remembered match pointer goes
+        // without going through step_match, so a remembered match pointer goes
         // stale — `↓` then either swallowed a keystroke or jumped backwards.
         let mut h = harness(Mode::Tree);
         feed(
@@ -2396,7 +2525,7 @@ mod tests {
         let rows = h.app.rows();
         h.app.view.on_right(&mut h.app.tree, &rows);
         assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/bb.md")));
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/cc.md")),
@@ -2408,7 +2537,7 @@ mod tests {
         let idx = rows.iter().position(|r| r.name == "aa.md").unwrap();
         h.app.resolve_click(&rows, idx, false, Instant::now());
         assert_eq!(h.app.view.selection.as_deref(), Some(Path::new("/r/aa.md")));
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         assert_eq!(
             h.app.view.selection.as_deref(),
             Some(Path::new("/r/bb.md")),
@@ -3016,7 +3145,7 @@ mod tests {
         h.app.index = Some(partial_index_of(&[("f3.txt", false), ("f4.txt", false)]));
         h.app.search_push('f');
         // Settle on the second of the two known matches.
-        h.app.cycle_match(true);
+        h.app.step_match(1, true);
         let settled = h.app.view.selection.clone();
         assert!(settled.is_some());
 

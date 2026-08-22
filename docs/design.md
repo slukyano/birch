@@ -84,6 +84,8 @@ Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and 
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Move selection (during a search: step matches, in tree order) |
+| `PgUp` / `PgDn` | Move selection a page — the viewport less a row of overlap — and let the viewport follow (during a search: a page's worth of matches). Clamps at the ends where `↑`/`↓` wrap. |
+| `Home` / `End` | Move selection to the first / last row (during a search: the first / last match) |
 | `→` | **Always moves or reveals** (task 060): a collapsed dir expands; an expanded chain splits into member rows; otherwise the selection advances to the next row. Nothing happens only on the last row. |
 | `Enter` on dir | Toggle expand/collapse |
 | `←` on dir / into parent | Collapse / jump to parent |
