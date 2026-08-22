@@ -112,30 +112,32 @@ no meaning attached to them.
 |---|---|
 | click | move the cursor, collapse the selection, re-anchor — today's behaviour, unchanged |
 | `Ctrl`-click | toggle that row in or out of the selection, and re-anchor to it |
-| `Shift`-click | **not bound** — see below |
+| `Shift`-click | move the cursor to that row and select every live row from the anchor to it — the mouse twin of `Shift` + a movement key |
 
 `Ctrl`-click on the cursor row while other rows are selected drops it and moves the cursor to the
 nearest remaining selected row; on the *only* selected row it does nothing, because the cursor is
 always selected.
 
-### Why `Shift` + mouse is not taken
+### `Shift` + mouse, and the terminals that keep it
 
-The maintainer's request named `Shift`-click for a range. It is not deliverable, for two independent
-reasons, and the design declines it rather than shipping a binding that silently does nothing.
+`Shift`-click and `Shift`-click-below-the-tree are handled whenever they arrive. birch reads the
+modifier bits the SGR encoding already carries (`mouse.modifiers`, discarded today) and treats a
+`Shift`-click exactly as `Shift` + a movement key: the cursor moves and the range from the anchor
+follows.
 
-1. **birch has already promised `Shift` to the terminal.** `docs/design.md:125` names it the
-   mitigation for mouse capture — *"Shift-click passes through to the terminal"* — and
-   `birch --help` tells the user so (`crates/birch/src/main.rs:31`). Taking it back removes the only
-   way to select text natively in a birch pane.
-2. **The flagship terminal does not deliver it.** ghostty's `mouse-shift-capture` defaults to
-   `false`, documented as *"the shift key is not sent with the mouse protocol and will extend the
-   selection"*. An application may request it with `XTSHIFTESCAPE` (`CSI > 1 s`), which ghostty
-   honours unless the user has set `never` — but doing so is exactly reason 1, globally, for the
-   whole pane.
+**birch does not fight the terminal for the gesture.** Many terminals reserve `Shift` for their own
+text selection while an application has the mouse captured, and ghostty is one of them —
+`mouse-shift-capture` defaults to `false`, documented as *"the shift key is not sent with the mouse
+protocol and will extend the selection"*. Where that holds, the event never arrives and there is
+nothing for birch to handle; where the terminal forwards it, birch handles it correctly. birch does
+**not** send `XTSHIFTESCAPE` (`CSI > 1 s`) to claim the modifier: that would reclaim `Shift` for the
+whole pane and withdraw the native text selection `docs/design.md:125` and `birch --help` both point
+users at, which is a pane-wide trade made on the user's behalf rather than a gesture handled when
+offered.
 
-So **range-by-mouse does not exist**; `Shift` + arrows is how a range is made. `Ctrl`-click still
-builds any discontiguous set by hand, which is the gesture that cannot be expressed from the
-keyboard at all.
+So the reach of `Shift`-click is the terminal's decision, and the keyboard is the path that always
+works. `docs/design.md:125` and the `--help` tip are amended to say the pass-through is
+terminal-dependent rather than guaranteed.
 
 **A keyboard-only user can build contiguous ranges but not discontiguous sets.** No toggle key is
 introduced: printable characters are reserved (ADR 0008), and no such key was asked for. Filed as
@@ -226,7 +228,7 @@ first destructive menu entry then acts on all of them. The cursor restores as it
 | CLI flag | **`--print0`** — with `--multi`: `NUL`-separate instead of newline |
 | CLI flag | **`birch ctl get-path --all`** — print every selected path, one per line |
 | socket | **`Response.paths: Option<Vec<String>>`** — additive, optional, tree-ordered, in the requested `form` |
-| key bindings | `Shift` + `↑` `↓` `PgUp` `PgDn` `Home` `End`; `Ctrl`-click |
+| key bindings | `Shift` + `↑` `↓` `PgUp` `PgDn` `Home` `End`; `Ctrl`-click; `Shift`-click where the terminal forwards it |
 | config keys | none |
 | environment variables | none |
 | on-disk paths / formats | none — persistence is untouched |
@@ -240,7 +242,8 @@ first destructive menu entry then acts on all of them. The cursor restores as it
   `Shift`/`Ctrl` path, so "a plain move clears the set" is enforced in one place rather than
   remembered at each call site.
 - **`crates/birch-tui/src/input.rs`** — `Shift`-modified variants of the six movement keys, and the
-  modifier bits on `Press`/`Release` (`mouse.modifiers` is currently discarded).
+  modifier bits on `Press`/`Release` (`mouse.modifiers` is currently discarded), carrying `Shift` and
+  `Ctrl` through to the app.
 - **`crates/birch-tui/src/render.rs`** — the accent-bar rule; `hit_test` is unaffected (geometry does
   not change).
 - **`crates/birch/src/app.rs`** — dispatch for the new actions, `SearchState::saved_extra`/
@@ -259,8 +262,9 @@ line. Hands-on: `vhs` frames for a multi-row selection under both `SelectionStyl
 
 ### Open measurement
 
-Whether `Ctrl`-click reaches a TUI as a left button carrying `CTRL` — rather than being translated
-to a right-click, which is the macOS convention — is terminal behaviour, not birch's to decide.
-`.scratchpad/mouse-probe.py` enables exactly the modes birch enables and reports what arrives. If
-`Ctrl`-click does not survive, the fallback is `Alt`-click, and the keyboard path is unaffected
-either way.
+Which modifiers actually reach a TUI is terminal behaviour, not birch's to decide: `Ctrl`-click may
+be translated to a right-click by macOS convention, and `Shift`-click is withheld by ghostty's
+default. `.scratchpad/mouse-probe.py` enables exactly the modes birch enables and reports what
+arrives. Neither answer changes the code — both modifiers are handled when present — but it tells
+the release notes which gestures a ghostty user will actually have. If `Ctrl`-click does not
+survive, `Alt`-click is added beside it as a second toggle modifier.

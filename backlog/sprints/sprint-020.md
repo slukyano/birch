@@ -105,9 +105,10 @@ _(none open)_
 - Design: `088` and `081` presented first, since `088` gates `074`; four questions answered
   (the two-part identity test, per-operation arity, selection-moving page keys, and paging by
   matches under a query). `074` and `071` designed on the settled fence.
-- `Shift` with the mouse was **declined on evidence** rather than designed: `docs/design.md` and
-  `birch --help` both promise `Shift` to the terminal for native text selection, and ghostty's
-  `mouse-shift-capture` defaults to `false`, so the event does not reach the application.
+- `Shift` with the mouse was first designed away and then **restored by maintainer decision**:
+  birch handles the gesture whenever the terminal forwards it, and does not send `XTSHIFTESCAPE` to
+  claim it. ghostty's `mouse-shift-capture` defaults to `false`, so the event does not arrive there;
+  that is the terminal's call, and the keyboard path is the one that always works.
   `.scratchpad/mouse-probe.py` was written to settle the remaining modifier questions in a real
   terminal.
 - Two gaps found while designing were filed rather than guessed at:
