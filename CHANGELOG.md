@@ -7,6 +7,38 @@ All notable changes to birch are documented here, following
 
 ### Added
 
+- **Multi-selection.** Hold `Shift` with any movement key to extend a selection
+  over a range of rows, or `Ctrl`-click to add a row to it or take one out.
+  `Shift`-click extends by mouse wherever the terminal forwards the modifier —
+  many keep `Shift` for their own text selection while an application holds the
+  mouse, which birch does not try to take back. Every selected row carries the
+  selection wash and the cursor keeps its accent bar, so a single selection
+  looks exactly as it always did. A dimmed row can never join a selection, and
+  any unmodified move collapses one back to a single row.
+
+- **A context menu, on the right button.** It is the surface birch's actions
+  live on, since printable characters are reserved for search. Arrows move
+  inside it, `Enter` invokes, `Esc` closes — and `Esc` now backs out of the
+  menu before it clears a search or quits. It targets the selection: a
+  right-click inside one acts on all of it, a click outside collapses to that
+  row, and a click below the last row targets the root. Entries whose action
+  does not exist yet are absent rather than greyed out, so it currently holds
+  **Open** and **Reveal Root Here** and grows as the file operations land.
+
+- **`PgUp`, `PgDn`, `Home`, and `End`** move the selection — a page is the
+  viewport less a row of overlap — and let the viewport follow. During a search
+  they move by matches, like `↑`/`↓`, and stop at the ends rather than wrapping.
+
+- **`--pick --multi`** confirms several paths and prints one per line; plain
+  `--pick` still prints exactly one, so existing recipes are untouched. Add
+  `--print0` to separate with `NUL`, which is the only unambiguous form when a
+  file name may itself contain a newline.
+
+- **`birch ctl get-path --all`** prints every selected path. On the wire
+  `get-path` still returns exactly one path in `data` — the cursor — and the
+  whole selection arrives in a new optional `paths` field, so clients that have
+  never heard of it are unaffected.
+
 - **The host adapters are on `PATH`.** `birch-cmux`, `birch-tmux`, and
   `birch-herdr` now install alongside `birch` through every channel — Homebrew,
   the shell installer, and `cargo install`, which shipped none of them before.

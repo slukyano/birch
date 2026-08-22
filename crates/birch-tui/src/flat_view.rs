@@ -660,13 +660,50 @@ impl FlatView {
     /// Starts a range extension that a later cursor landing completes. Match
     /// stepping needs this: `focus` arrives frames after the keystroke, once
     /// the reveal has expanded its way to the target.
-    pub fn begin_extending(&mut self) {
+    ///
+    /// The anchor is resolved **now**, before the cursor moves. It can be stale
+    /// — `sync` re-homes a cursor without moving the anchor, and a query can dim
+    /// the row the anchor sits on — and an anchor that is gone or dim falls back
+    /// to where the cursor is standing, which is the only place a range can
+    /// start from. Resolving it afterwards would silently collapse the range to
+    /// the row the cursor had already moved to.
+    pub fn begin_extending(&mut self, rows: &[Row]) {
+        let usable = self
+            .anchor
+            .as_ref()
+            .is_some_and(|path| rows.iter().any(|row| &row.path == path && row.live));
+        if !usable {
+            self.anchor = self.selection.clone();
+        }
         self.extending = true;
     }
 
     /// Ends any extension in progress, so the next cursor landing collapses the
     /// selection to it.
     pub fn end_extending(&mut self) {
+        self.extending = false;
+    }
+
+    /// Paints the range from the anchor to wherever the cursor now is, and ends
+    /// the extension. Match stepping reaches its target over several frames —
+    /// ancestors have to be expanded and listed first — so the caller completes
+    /// the extension here, **once**, when the cursor has actually landed. A
+    /// range that kept repainting would silently grow over rows that later
+    /// became live.
+    pub fn finish_extending(&mut self, rows: &[Row]) {
+        if self.extending {
+            self.select_range(rows, self.anchor.clone());
+            self.extending = false;
+        }
+    }
+
+    /// Collapses the selection to the cursor and re-anchors there — the rule
+    /// every unmodified movement obeys. Called before a plain move so it holds
+    /// even when the move goes nowhere (already at an edge, or `→` with nothing
+    /// left to reveal), which a collapse buried inside `select` cannot cover.
+    pub fn collapse_selection(&mut self) {
+        self.extra.clear();
+        self.anchor = self.selection.clone();
         self.extending = false;
     }
 
@@ -744,9 +781,8 @@ impl FlatView {
     /// movement itself collapses the selection and re-anchors, so the anchor is
     /// put back afterwards and the set rebuilt around it.
     fn extend_with(&mut self, rows: &[Row], movement: impl FnOnce(&mut Self, &[Row])) {
-        // With no anchor yet — the cursor was placed by `sync` rather than by a
-        // move — the range starts where the cursor is standing.
-        let anchor = self.anchor.clone().or_else(|| self.selection.clone());
+        self.begin_extending(rows);
+        let anchor = self.anchor.clone();
         movement(self, rows);
         self.anchor = anchor;
         self.extending = true;
@@ -1045,12 +1081,6 @@ impl FlatView {
             return;
         }
         let Some(idx) = self.sync(rows) else { return };
-        // A range under extension is repainted here rather than where the key
-        // was pressed: match stepping reaches its target over several frames,
-        // and the range is only knowable once the cursor has landed.
-        if self.extending {
-            self.select_range(rows, self.anchor.clone());
-        }
         if !self.follow {
             return;
         }
@@ -1230,6 +1260,72 @@ mod tests {
         // selected, so there is no empty-with-a-cursor state to reach.
         view.toggle_selected(&rows, 0);
         assert_eq!(selected_names(&view, &rows), ["r"]);
+    }
+
+    /// A plain move that goes nowhere still collapses the selection. Without
+    /// this, `Shift+End` followed by a plain `↓` left the whole range selected
+    /// *and* the extension armed, so later rows kept joining it.
+    /// The anchor can be stale: `sync` re-homes a cursor without moving it, and
+    /// a query can dim the row it sits on. Resolving it *before* the cursor
+    /// moves is what keeps a range from silently collapsing to one row — the
+    /// failure that survived every unit test and only showed up in a real
+    /// terminal, where the index arrives after the query is typed.
+    #[test]
+    fn a_stale_anchor_falls_back_to_the_cursor_before_the_range_is_drawn() {
+        let tree = selection_fixture();
+        let rows = rows_plain(&tree);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        // The anchor points at the root, which the narrowing then dims.
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r")));
+
+        let narrowed = rows_matching(&tree, &["/r/src/lib.rs", "/r/readme.md"]);
+        view.sync(&narrowed); // re-homes the cursor to lib.rs; the anchor stays
+        assert_eq!(view.selection.as_deref(), Some(Path::new("/r/src/lib.rs")));
+
+        // The real sequence: arm the extension, let a reveal move the cursor
+        // (`focus`, not `select`), then settle the range.
+        view.begin_extending(&narrowed);
+        view.focus(PathBuf::from("/r/readme.md"));
+        view.finish_extending(&narrowed);
+        assert_eq!(selected_names(&view, &narrowed), ["lib.rs", "readme.md"]);
+    }
+
+    #[test]
+    fn a_plain_move_that_hits_an_edge_still_collapses() {
+        let tree = selection_fixture();
+        let rows = rows_plain(&tree);
+        let mut view = FlatView::default();
+        view.sync(&rows);
+        view.move_to_edge_extending(&rows, false);
+        assert_eq!(view.selection_len(), 6);
+
+        view.collapse_selection();
+        view.move_by(&rows, 1); // already on the last row: nowhere to go
+        assert_eq!(view.selection_len(), 1);
+        assert_eq!(selected_names(&view, &rows), ["readme.md"]);
+    }
+
+    /// A range is painted once, when the cursor lands — never repeatedly. A
+    /// range that kept repainting grew over rows that were dim when it was made
+    /// and became live afterwards (a search backspaced away, or a watcher delta
+    /// inserting a row inside the span).
+    #[test]
+    fn a_finished_range_does_not_grow_when_dim_rows_come_back() {
+        let tree = selection_fixture();
+        let narrowed = rows_matching(&tree, &["/r", "/r/src/lib.rs"]);
+        let mut view = FlatView::default();
+        view.sync(&narrowed);
+        view.move_to_edge_extending(&narrowed, false);
+        // src and lib.rs's siblings are dim, so only the two matches are in.
+        assert_eq!(selected_names(&view, &narrowed), ["r", "lib.rs"]);
+
+        // The narrowing goes away: every row is live again, but the range was
+        // already settled and must not swallow the rows it skipped.
+        let rows = rows_plain(&tree);
+        view.sync(&rows);
+        view.reconcile(&rows, 10);
+        assert_eq!(selected_names(&view, &rows), ["r", "lib.rs"]);
     }
 
     #[test]

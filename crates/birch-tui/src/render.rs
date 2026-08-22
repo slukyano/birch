@@ -734,6 +734,27 @@ fn base_name_style(theme: &Theme, row: &Row) -> Style {
 /// Resolves a click at terminal coordinates to a row index and whether it hit
 /// the chevron cell of a directory row. Returns `None` for clicks outside the
 /// rows (the below-the-tree case gains meaning with the context menu, 0.5).
+/// Whether a point lies on the tree surface at all: inside the viewport, and
+/// clear of the scrollbar column. `hit_test` returns `None` for three different
+/// things — below the last row, on the inert scrollbar column, and on the
+/// status line — and a caller that treats them alike (the context menu, which
+/// targets the root for a click below the rows) would re-target the root when
+/// the click was actually on furniture.
+pub fn on_tree_surface(
+    rows_len: usize,
+    chrome: Chrome,
+    area: Rect,
+    column: u16,
+    row_y: u16,
+) -> bool {
+    let geometry = layout(area, chrome, rows_len);
+    let viewport = geometry.viewport as u16;
+    if row_y < area.y || row_y >= area.y + viewport {
+        return false;
+    }
+    !geometry.bar.is_some_and(|bar| column >= bar.x)
+}
+
 pub fn hit_test(
     rows: &[Row],
     view: &FlatView,
@@ -1012,6 +1033,16 @@ mod tests {
     }
 
     /// The glyph texts a row renders between the indent and the label, joined.
+    #[test]
+    fn a_truncated_label_is_marked_as_cut() {
+        assert_eq!(truncate("Open", 10), "Open");
+        assert_eq!(truncate("Open", 4), "Open");
+        assert_eq!(truncate("Reveal Root Here", 6), "Revea\u{2026}");
+        // Degenerate widths: never panic, never claim to be a shorter action.
+        assert_eq!(truncate("Open", 1), "\u{2026}");
+        assert_eq!(truncate("Open", 0), "");
+    }
+
     fn glyph_text(theme: &Theme, row: &Row) -> String {
         glyph_column_spans(theme, &Settings::default(), row)
             .iter()

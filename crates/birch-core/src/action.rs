@@ -33,7 +33,9 @@ pub struct ActionTarget {
 pub struct ActionContext<'a> {
     pub targets: &'a [ActionTarget],
     /// Picker mode, where mutations are disabled by default and `Open` means
-    /// *confirm*.
+    /// *confirm*. No action distinguishes the modes yet — the first that will
+    /// is a mutation from `029-add-file-operations` — but the availability rule
+    /// is stated over `(targets, mode)` so adding one needs no new plumbing.
     pub picker: bool,
 }
 
@@ -65,6 +67,10 @@ impl Action {
             return false;
         }
         match self {
+            // Open acts on the **cursor**, exactly as `Enter` does, so it is
+            // offered for any selection: the menu entry and the key agree, and
+            // neither opens N files. An action that fans out over the selection
+            // arrives with the task that needs it.
             Action::Open => true,
             // Re-rooting is a single-target move by nature, and only a
             // directory can become a root.

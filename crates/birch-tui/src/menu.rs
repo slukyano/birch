@@ -116,6 +116,17 @@ impl Menu {
         }
     }
 
+    /// The action at a row index, or `None` for a separator or a miss. Callers
+    /// that act on a *clicked* row must ask this rather than moving the
+    /// highlight and reading it back: `highlight` ignores separators, so the
+    /// highlight would still be standing on the previous entry.
+    pub fn action_at(&self, index: usize) -> Option<Action> {
+        match self.rows.get(index) {
+            Some(MenuRow::Entry(action)) => Some(*action),
+            _ => None,
+        }
+    }
+
     /// Points the highlight at a row, ignoring separators so hovering the rule
     /// between two groups does not move it.
     pub fn highlight(&mut self, index: usize) {
@@ -342,6 +353,29 @@ mod tests {
         menu.go_to_edge(false);
         menu.layout(0, 0, 40, 4);
         assert_eq!(menu.scroll(), 1, "the highlight is scrolled into view");
+    }
+
+    /// A click on the rule between two groups must do nothing. `highlight`
+    /// ignores separators by design, so a caller that moves the highlight and
+    /// reads it back would fire whatever entry was standing there instead.
+    #[test]
+    fn a_separator_has_no_action_to_invoke() {
+        let menu = menu_at(0, 0);
+        assert_eq!(menu.action_at(0), Some(Action::Open));
+        assert_eq!(menu.action_at(1), None, "the rule between the groups");
+        assert_eq!(menu.action_at(2), Some(Action::RevealRootHere));
+        assert_eq!(menu.action_at(99), None);
+    }
+
+    #[test]
+    fn a_hit_on_a_scrolled_menu_accounts_for_the_offset() {
+        let mut menu = menu_at(0, 0);
+        menu.go_to_edge(false);
+        let layout = menu.layout(0, 0, 40, 4);
+        assert_eq!(menu.scroll(), 1);
+        // The first visible row is now row 1, the separator.
+        assert_eq!(menu.hit(layout, layout.x, layout.y + 1), Some(1));
+        assert_eq!(menu.hit(layout, layout.x, layout.y + 2), Some(2));
     }
 
     #[test]

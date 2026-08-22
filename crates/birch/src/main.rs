@@ -250,6 +250,20 @@ where
     });
 }
 
+/// The picker's stdout: one path per line, or NUL-separated under `--print0`.
+/// A newline is a legal character in a file name, so the multi-path newline
+/// contract is only decodable with `--print0` behind it — and a single pick is
+/// byte-for-byte what it always was, so existing recipes keep working.
+fn format_picked(picked: &[PathBuf], print0: bool) -> String {
+    let separator = if print0 { '\0' } else { '\n' };
+    let mut out = String::new();
+    for path in picked {
+        out.push_str(&path.display().to_string());
+        out.push(separator);
+    }
+    out
+}
+
 fn main() -> ExitCode {
     // `birch ctl <verb>` controls a running instance; anything else launches the
     // tree. Dispatch by hand: the launch form's optional [DIR] positional can't
@@ -498,16 +512,7 @@ fn main() -> ExitCode {
 
     match result {
         Ok(picked) if !picked.is_empty() => {
-            // One path per line, or NUL-separated under --print0. A newline is
-            // a legal character in a file name, so a multi-path newline
-            // contract is only decodable with --print0 behind it.
-            let separator = if cli.print0 { '\0' } else { '\n' };
-            let mut out = String::new();
-            for path in &picked {
-                out.push_str(&path.display().to_string());
-                out.push(separator);
-            }
-            print!("{out}");
+            print!("{}", format_picked(&picked, cli.print0));
             ExitCode::SUCCESS
         }
         Ok(_) if picker => ExitCode::FAILURE, // quit without a pick
@@ -516,5 +521,28 @@ fn main() -> ExitCode {
             eprintln!("birch: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_single_pick_prints_exactly_what_it_always_did() {
+        let one = [PathBuf::from("/r/a.txt")];
+        assert_eq!(format_picked(&one, false), "/r/a.txt\n");
+    }
+
+    #[test]
+    fn several_picks_are_newline_separated_and_print0_makes_them_decodable() {
+        let many = [
+            PathBuf::from("/r/a.txt"),
+            // A newline is legal in a file name, which is the whole reason
+            // --print0 exists: this output is ambiguous without it.
+            PathBuf::from("/r/we\nird.txt"),
+        ];
+        assert_eq!(format_picked(&many, false), "/r/a.txt\n/r/we\nird.txt\n");
+        assert_eq!(format_picked(&many, true), "/r/a.txt\0/r/we\nird.txt\0");
     }
 }
