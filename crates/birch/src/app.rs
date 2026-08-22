@@ -249,8 +249,11 @@ struct Confirm {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Performed {
     Nothing,
-    /// A file the caller should open.
+    /// A file the caller should open with the configured command.
     Open(PathBuf),
+    /// A path the caller should open with a specific command — the platform
+    /// opener, for `Open system`.
+    OpenWith(PathBuf, OpenCmd),
     /// An escape sequence the caller should write to the terminal.
     Write(String),
 }
@@ -1305,6 +1308,22 @@ impl App {
         }
     }
 
+    /// The action layer's view of right now: what is selected, which mode, and
+    /// what `Open` would actually run. Built in one place so a new fact is
+    /// added once rather than at every call site.
+    fn action_context<'a>(
+        &'a self,
+        targets: &'a [ActionTarget],
+        program: &'a str,
+    ) -> ActionContext<'a> {
+        ActionContext {
+            targets,
+            picker: self.mode.is_pick(),
+            open_is_platform: self.open_cmd.program() == OpenCmd::platform_opener().program(),
+            open_program: program,
+        }
+    }
+
     /// Opens the menu on a right-click. The selection is only disturbed when it
     /// has to be: a click inside it acts on all of it, a click outside collapses
     /// to that row first, and a click below the last row collapses to the root.
@@ -1355,10 +1374,7 @@ impl App {
         }
         let rows = self.rows();
         let targets = self.action_targets(&rows);
-        let context = ActionContext {
-            targets: &targets,
-            picker: self.mode.is_pick(),
-        };
+        let context = self.action_context(&targets, self.open_cmd.program());
         let Some(menu) = Menu::open(context, column, row) else {
             return false;
         };
@@ -1400,6 +1416,12 @@ impl App {
                 self.close_menu(terminal);
                 let quit = match self.perform(action) {
                     Performed::Open(path) => self.perform_open(terminal, events, &path),
+                    Performed::OpenWith(path, cmd) => {
+                        let configured = std::mem::replace(&mut self.open_cmd, cmd);
+                        let quit = self.perform_open(terminal, events, &path);
+                        self.open_cmd = configured;
+                        quit
+                    }
                     Performed::Write(sequence) => {
                         term::write_raw(terminal, sequence.as_bytes());
                         false
@@ -1502,10 +1524,7 @@ impl App {
     fn perform(&mut self, action: Action) -> Performed {
         let rows = self.rows();
         let targets = self.action_targets(&rows);
-        if !action.available(ActionContext {
-            targets: &targets,
-            picker: self.mode.is_pick(),
-        }) {
+        if !action.available(self.action_context(&targets, self.open_cmd.program())) {
             return Performed::Nothing;
         }
         if let Some(form) = action.copy_form() {
@@ -1532,6 +1551,14 @@ impl App {
                     if !response.ok {
                         self.status = response.error.unwrap_or_default();
                     }
+                }
+            }
+            // The desktop's own handler, detached: it hands off to another
+            // application rather than taking the terminal, so `perform_open`
+            // does the same thing it does for `--open-detached`.
+            Action::OpenSystem => {
+                if let Some(target) = targets.first() {
+                    return Performed::OpenWith(target.path.clone(), OpenCmd::platform_opener());
                 }
             }
             Action::Rename | Action::NewFile => {
@@ -1609,10 +1636,7 @@ impl App {
     /// target directory (create). Nothing touches the tree until `Enter`.
     fn begin_edit(&mut self, rows: &[Row], action: Action) {
         let targets = self.action_targets(rows);
-        if !action.available(ActionContext {
-            targets: &targets,
-            picker: self.mode.is_pick(),
-        }) {
+        if !action.available(self.action_context(&targets, self.open_cmd.program())) {
             return;
         }
         let Some(target) = targets.first() else {
@@ -1692,10 +1716,7 @@ impl App {
     /// (ADR 0031).
     fn begin_delete(&mut self, rows: &[Row]) {
         let targets = self.action_targets(rows);
-        if !Action::Delete.available(ActionContext {
-            targets: &targets,
-            picker: self.mode.is_pick(),
-        }) {
+        if !Action::Delete.available(self.action_context(&targets, self.open_cmd.program())) {
             return;
         }
         let paths: Vec<PathBuf> = targets.iter().map(|t| t.path.clone()).collect();
@@ -4378,6 +4399,8 @@ mod ctl_tests {
         let context = ActionContext {
             targets: &targets,
             picker: false,
+            open_is_platform: false,
+            open_program: "nvim",
         };
         assert!(Action::Open.available(context));
         assert!(Action::RevealRootHere.available(context));
@@ -4387,6 +4410,8 @@ mod ctl_tests {
         let context = ActionContext {
             targets: &targets,
             picker: false,
+            open_is_platform: false,
+            open_program: "nvim",
         };
         assert!(Action::Open.available(context));
         assert!(
@@ -4400,6 +4425,8 @@ mod ctl_tests {
         let context = ActionContext {
             targets: &targets,
             picker: false,
+            open_is_platform: false,
+            open_program: "nvim",
         };
         assert!(
             !Action::RevealRootHere.available(context),
@@ -4638,14 +4665,22 @@ mod ctl_tests {
 
         // Hover moves the highlight; a press inside keeps the menu, a press
         // outside dismisses it.
+        // Located by kind rather than by index: the projection grows as
+        // actions land, and this test is about the mechanism.
+        let rule = menu_ref(&h.app.menu)
+            .rows()
+            .iter()
+            .position(|row| matches!(row, birch_core::action::MenuRow::Separator))
+            .expect("the menu has groups");
+        let after_rule = rule + 1;
         let hovered = menu_ref(&h.app.menu)
-            .action_at(2)
-            .expect("row 2 is the next group's first entry");
+            .action_at(after_rule)
+            .expect("the next group's first entry");
         h.app.menu_input(
             area,
             InputAction::Hover {
                 column: layout.x,
-                row: layout.y + 3,
+                row: layout.y + 1 + after_rule as u16,
             },
         );
         assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(hovered));
@@ -4675,14 +4710,14 @@ mod ctl_tests {
         h.app.menu_input(area, InputAction::Home);
         let separator = InputAction::Release {
             column: layout.x,
-            row: layout.y + 2,
+            row: layout.y + 1 + rule as u16,
             modifier: input::ClickModifier::None,
         };
         assert_eq!(h.app.menu_input(area, separator), MenuStep::Keep);
         // ...while a click on an entry invokes that entry, not the highlight.
         let entry = InputAction::Release {
             column: layout.x,
-            row: layout.y + 3,
+            row: layout.y + 1 + after_rule as u16,
             modifier: input::ClickModifier::None,
         };
         assert_eq!(h.app.menu_input(area, entry), MenuStep::Invoke(hovered));

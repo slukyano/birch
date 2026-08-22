@@ -230,7 +230,7 @@ pub fn draw_menu(frame: &mut Frame, menu: &Menu, layout: MenuLayout, theme: &The
                     ""
                 };
                 let room = content.saturating_sub(accel.chars().count());
-                let label = truncate(action.label(), room);
+                let label = truncate(menu.label(index), room);
                 let pad = room.saturating_sub(label.chars().count());
                 let mut style = canvas;
                 if index == menu.highlighted() {

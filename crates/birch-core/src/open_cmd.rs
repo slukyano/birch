@@ -12,7 +12,7 @@ pub enum OpenMode {
     Detached,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenCmd {
     argv: Vec<String>,
     pub mode: OpenMode,
@@ -62,6 +62,14 @@ impl OpenCmd {
                 };
             }
         }
+        Self::platform_opener()
+    }
+
+    /// The desktop's own handler — `open` on macOS, `xdg-open` elsewhere —
+    /// spawned detached, since it hands off to another application rather than
+    /// taking the terminal. It is both the last fallback for `default_cmd` and
+    /// the `Open system` menu entry (task 034).
+    pub fn platform_opener() -> Self {
         let opener = if cfg!(target_os = "macos") {
             "open"
         } else {
@@ -71,6 +79,15 @@ impl OpenCmd {
             argv: vec![opener.into(), "{}".into()],
             mode: OpenMode::Detached,
         }
+    }
+
+    /// The program this command runs, without its arguments. What the menu
+    /// shows beside `Open`, so the row names what will actually happen rather
+    /// than a category — `nvim +{line} {}` truncated is noise, `nvim` is not.
+    pub fn program(&self) -> &str {
+        self.argv.first().map_or("", |arg| {
+            arg.rsplit(std::path::MAIN_SEPARATOR).next().unwrap_or(arg)
+        })
     }
 
     /// Substitutes the template into a concrete argv. If no arg contains

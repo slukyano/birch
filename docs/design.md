@@ -113,8 +113,8 @@ Printable characters are permanently reserved for search — no letter hotkeys, 
 - **Right-click → context menu**, which is a **projection of the action layer** (ADR 0029), not an authored list: actions declare a label, an accelerator, and an availability rule over the selection, and the menu draws whichever are available. **An action that does not exist yet is absent, not greyed** — the menu grows as its contents land, and no task that adds an action edits the menu. Its full intended shape, in groups (a separator is drawn between any two groups that survive):
 
 ```
-Open                  ↵
-Open with…            (034)
+Open nvim             ↵      (named after the resolved open command)
+Open system
 ──────────
 New File…             ^N     (029)
 Rename…               F2     (029)
@@ -127,6 +127,7 @@ Copy Absolute Path           (028)
 Reveal Root Here
 ```
 
+- **The `Open` row names the command it will run**, so the menu says what will happen rather than a category — the program's name, not the whole template, which truncated is noise. On a directory it toggles and in `--pick` it confirms, so no program runs and the row stays plain `Open`. **`Open system`** hands the path to the desktop's own handler (`open` / `xdg-open`), detached; it is absent when the resolved command already *is* that handler, so the menu never shows two rows that do one thing, and absent in `--pick`.
 - **It opens from the keyboard too**, with `Shift-F10` or the `Menu` key, at the cursor row. A right-click has to reconcile a pointer with the selection; a keyboard trigger has no such conflict and moves nothing.
 - **Opening it follows the left button's rule**: a right-press arms, and the menu opens on the release on the row the press started on (ADR 0025, extended). Keyboard works inside it — `↑`/`↓` step entries and skip separators, `Home`/`End` reach the ends, `Enter` invokes, `Esc` closes. **A printable character closes the menu and types into the search**: ADR 0008 has no exception, and a layer that redefines the keyboard is how a modal language starts.
 - **It targets the selection, and only disturbs it when it must**: a right-click inside the current selection acts on all of it, a click outside collapses the selection to that row first, and a click below the last row collapses to the root. A dimmed row is inert here as everywhere (ADR 0023).

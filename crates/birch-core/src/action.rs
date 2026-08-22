@@ -13,6 +13,8 @@ use std::path::PathBuf;
 pub enum Action {
     /// Open a file, or expand/collapse a directory. In the picker it confirms.
     Open,
+    /// Hand the path to the desktop's own handler, detached (task 034).
+    OpenSystem,
     /// Create a file or directory under the target, inline.
     NewFile,
     /// Rename the target inline. An input carrying separators moves it.
@@ -54,6 +56,11 @@ pub struct ActionTarget {
 #[derive(Clone, Copy, Debug)]
 pub struct ActionContext<'a> {
     pub targets: &'a [ActionTarget],
+    /// Whether the resolved open command is already the platform opener, in
+    /// which case `Open system` would be a duplicate of `Open`.
+    pub open_is_platform: bool,
+    /// The program the open command runs, for the `Open` row to name.
+    pub open_program: &'a str,
     /// Picker mode, where mutations are disabled by default and `Open` means
     /// *confirm*. No action distinguishes the modes yet — the first that will
     /// is a mutation from `029-add-file-operations` — but the availability rule
@@ -80,11 +87,27 @@ impl Action {
         }
     }
 
-    /// The menu label. Not the accelerator — that is drawn separately and is
-    /// the first thing dropped when the pane is too narrow.
+    /// The label this action shows **for this selection**. `Open` names the
+    /// program it will run, so the row describes what will happen rather than a
+    /// category — but only where a program actually runs: on a directory it
+    /// toggles, and in the picker it confirms (task 034).
+    pub fn label_in(self, context: ActionContext) -> String {
+        let names_a_program = self != Action::Open
+            || context.picker
+            || context.open_program.is_empty()
+            || context.targets.iter().any(|target| target.is_dir);
+        if names_a_program {
+            self.label().to_string()
+        } else {
+            format!("Open {}", context.open_program)
+        }
+    }
+
+    /// The generic label, without a selection to name anything from.
     pub fn label(self) -> &'static str {
         match self {
             Action::Open => "Open",
+            Action::OpenSystem => "Open system",
             Action::NewFile => "New File\u{2026}",
             Action::Rename => "Rename\u{2026}",
             Action::Delete => "Delete",
@@ -100,6 +123,7 @@ impl Action {
     pub fn accelerator(self) -> Option<&'static str> {
         match self {
             Action::Open => Some("\u{21b5}"),
+            Action::OpenSystem => None,
             Action::NewFile => Some("^N"),
             Action::Rename => Some("F2"),
             Action::Delete => Some("\u{2326}"),
@@ -131,6 +155,14 @@ impl Action {
             // neither opens N files. An action that fans out over the selection
             // arrives with the task that needs it.
             Action::Open => true,
+            // Absent when the resolved open command already *is* the platform
+            // opener: the menu never shows two rows that do one thing. Absent
+            // in the picker too, where `Open` means confirm and a row that
+            // launches an application while the picker waits is a mode
+            // confusion (task 034).
+            Action::OpenSystem => {
+                !context.picker && !context.open_is_platform && targets.len() == 1
+            }
             // Renaming edits one row, and creating needs one directory to
             // create in — several selected rows name neither.
             Action::NewFile | Action::Rename => targets.len() == 1,
@@ -152,7 +184,7 @@ impl Action {
 /// actions do not exist yet are empty, and an empty group renders nothing —
 /// no row, and no separator (ADR 0029: an unavailable action is absent).
 pub const MENU_GROUPS: &[&[Action]] = &[
-    &[Action::Open],
+    &[Action::Open, Action::OpenSystem],
     &[Action::NewFile, Action::Rename, Action::Delete],
     &[
         Action::CopyName,
@@ -208,6 +240,8 @@ mod tests {
         ActionContext {
             targets,
             picker: false,
+            open_is_platform: false,
+            open_program: "nvim",
         }
     }
 
@@ -262,11 +296,54 @@ mod tests {
     }
 
     #[test]
+    fn open_names_the_program_it_will_run() {
+        let file = [target("/r/a.txt", false)];
+        assert_eq!(Action::Open.label_in(context(&file)), "Open nvim");
+        // A directory toggles and the picker confirms: no program runs, so
+        // naming one would be a lie.
+        let dir = [target("/r/src", true)];
+        assert_eq!(Action::Open.label_in(context(&dir)), "Open");
+        let picker = ActionContext {
+            targets: &file,
+            picker: true,
+            open_is_platform: false,
+            open_program: "nvim",
+        };
+        assert_eq!(Action::Open.label_in(picker), "Open");
+        // Everything else keeps its constant label.
+        assert_eq!(Action::Delete.label_in(context(&file)), "Delete");
+    }
+
+    #[test]
+    fn open_system_is_absent_when_it_would_be_a_duplicate() {
+        let file = [target("/r/a.txt", false)];
+        assert!(Action::OpenSystem.available(context(&file)));
+        // The resolved command already is the platform opener.
+        let same = ActionContext {
+            targets: &file,
+            picker: false,
+            open_is_platform: true,
+            open_program: "open",
+        };
+        assert!(!Action::OpenSystem.available(same));
+        // ...and it never appears in the picker.
+        let picker = ActionContext {
+            targets: &file,
+            picker: true,
+            open_is_platform: false,
+            open_program: "nvim",
+        };
+        assert!(!Action::OpenSystem.available(picker));
+    }
+
+    #[test]
     fn no_mutation_is_offered_in_the_picker() {
         let targets = [target("/r/src", true)];
         let picker = ActionContext {
             targets: &targets,
             picker: true,
+            open_is_platform: false,
+            open_program: "nvim",
         };
         for action in [Action::NewFile, Action::Rename, Action::Delete] {
             assert!(action.mutates(), "{action:?}");

@@ -43,6 +43,10 @@ impl MenuLayout {
 
 pub struct Menu {
     rows: Vec<MenuRow>,
+    /// The label each row shows, resolved when the menu opened. `Open` names
+    /// the program it will run, so a label is no longer a constant of its
+    /// action (task 034); a separator's is empty.
+    labels: Vec<String>,
     /// Index into `rows`. Always an entry, never a separator, whenever there
     /// is any entry at all.
     highlighted: usize,
@@ -59,8 +63,16 @@ impl Menu {
     pub fn open(context: ActionContext, column: u16, row: u16) -> Option<Self> {
         let rows = menu_rows(context);
         let highlighted = rows.iter().position(is_entry)?;
+        let labels = rows
+            .iter()
+            .map(|row| match row {
+                MenuRow::Entry(action) => action.label_in(context),
+                MenuRow::Separator => String::new(),
+            })
+            .collect();
         Some(Self {
             rows,
+            labels,
             highlighted,
             scroll: 0,
             origin: (column, row),
@@ -69,6 +81,11 @@ impl Menu {
 
     pub fn rows(&self) -> &[MenuRow] {
         &self.rows
+    }
+
+    /// The label a row shows, resolved when the menu opened.
+    pub fn label(&self, index: usize) -> &str {
+        self.labels.get(index).map_or("", String::as_str)
     }
 
     pub fn highlighted(&self) -> usize {
@@ -140,12 +157,9 @@ impl Menu {
     /// two can never disagree about where the menu is.
     pub fn layout(&mut self, area_x: u16, area_y: u16, width: u16, height: u16) -> MenuLayout {
         let label_width = self
-            .rows
+            .labels
             .iter()
-            .filter_map(|row| match row {
-                MenuRow::Entry(action) => Some(action.label().chars().count() as u16),
-                MenuRow::Separator => None,
-            })
+            .map(|label| label.chars().count() as u16)
             .max()
             .unwrap_or(0);
         let accel_width = self
@@ -248,6 +262,8 @@ mod tests {
         ActionContext {
             targets,
             picker: false,
+            open_is_platform: false,
+            open_program: "nvim",
         }
     }
 
@@ -315,15 +331,20 @@ mod tests {
     #[test]
     fn the_highlight_never_lands_on_a_separator() {
         let mut menu = menu_at(0, 0);
-        let first_entry = menu.action_at(0).expect("row 0 is an entry");
-        menu.highlight(1); // the rule between the first two groups
+        let rule = menu
+            .rows()
+            .iter()
+            .position(|row| matches!(row, MenuRow::Separator))
+            .expect("the menu has groups");
+        let standing = menu.selected_action();
+        menu.highlight(rule);
         assert_eq!(
             menu.selected_action(),
-            Some(first_entry),
+            standing,
             "a rule does not take the highlight"
         );
-        let after = menu.action_at(2).expect("row 2 is an entry");
-        menu.highlight(2);
+        let after = menu.action_at(rule + 1).expect("an entry follows the rule");
+        menu.highlight(rule + 1);
         assert_eq!(menu.selected_action(), Some(after));
     }
 
@@ -391,14 +412,14 @@ mod tests {
     fn a_separator_has_no_action_to_invoke() {
         let menu = menu_at(0, 0);
         assert_eq!(menu.action_at(0), Some(Action::Open));
-        assert_eq!(menu.action_at(1), None, "the rule between the groups");
-        assert!(menu.action_at(2).is_some(), "the next group's first entry");
-        assert_eq!(menu.action_at(99), None);
-        // Whatever the menu holds, a rule never carries an action.
+        assert_eq!(menu.action_at(99), None, "past the end");
+        // Whatever the menu holds, a rule never carries an action and every
+        // entry does.
         for (index, row) in menu.rows().iter().enumerate() {
             assert_eq!(
                 menu.action_at(index).is_none(),
-                matches!(row, MenuRow::Separator)
+                matches!(row, MenuRow::Separator),
+                "row {index}"
             );
         }
     }
@@ -424,7 +445,6 @@ mod tests {
         assert_eq!(menu.hit(layout, layout.x, layout.y), None);
         assert_eq!(menu.hit(layout, layout.x, layout.y + 1), Some(0));
         assert_eq!(menu.hit(layout, layout.x, layout.y + 3), Some(2));
-        assert_eq!(menu.action_at(1), None, "row 1 is the rule");
         assert_eq!(
             menu.hit(layout, layout.x, layout.y + layout.height - 1),
             None,
