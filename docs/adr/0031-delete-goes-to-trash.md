@@ -29,7 +29,7 @@ reaches.**
 |---|---|
 | trash works · every target tracked in git | **delete immediately**, no prompt. Recoverable twice over; a confirmation here is theatre, and theatre is what trains people to dismiss prompts unread. The status line reports what went. |
 | trash works · any target untracked | **confirm once**, naming the count and the reason. An untracked file exists nowhere else, and a trash can be emptied. |
-| trash unavailable | **confirm**, stating plainly that the delete is permanent. Declining does nothing. |
+| trash unavailable | **nothing is deleted.** The failure is reported and the delete ends there. |
 
 1. **The judgement is over the whole selection**, not per file: one prompt, naming how many rows and
    why, rather than a prompt per target.
@@ -45,14 +45,24 @@ reaches.**
    `Finder` default. Finder's method runs `osascript -e 'tell application "Finder" to delete …'`,
    which plays Finder's delete sound on every call and needs Automation permission. That permission
    can be **denied**, and a denial surfaces as a trash failure — pushing the user into decision 5's
-   "the trash could not take it, delete permanently?" prompt for a reason that has nothing to do
-   with the trash. The cost is Finder's **Put Back**: a trashed file still sits in the trash and can
+   "the trash could not take it" failure for a reason that has nothing to do with the trash — and
+   since decision 5's amendment, that failure is the end of the delete rather than a prompt. The cost is Finder's **Put Back**: a trashed file still sits in the trash and can
    be dragged out, but no longer remembers where it came from. This paragraph originally cited
    put-back as a reason to prefer the crate; that reason is withdrawn, the XDG half stands, and
    [ADR 0033](0033-undo-is-a-session-stack.md) is where the consequence lands — delete was already
    the step undo could not reverse, and it is now the step nothing reverses automatically.
-5. **Trash failure is never silently upgraded to a permanent delete.** When trash is unavailable the
-   user is told, and the permanent delete happens only on their confirmation.
+5. **There is no delete that bypasses the trash** — not as a fallback, not as a deliberate choice.
+   When the trash cannot take a path, birch reports the failure and deletes nothing.
+
+   *Amended 2026-08-22.* This decision originally offered a permanent delete on confirmation when
+   the trash was unavailable, on the reasoning that a user who asked to delete should get an answer
+   rather than a dead end. That was the wrong trade. The whole of this ADR rests on delete being
+   **recoverable** — that is what buys the no-prompt fast path for tracked files, and what makes one
+   prompt enough for untracked ones. A route that removes the recoverability removes the foundation,
+   and it was reachable exactly when birch understood the situation *least*: the trash had already
+   failed for a reason birch could not explain. A failure is a better answer than an irreversible
+   one. `ops::delete_permanently` is deleted rather than left unreachable, so nothing can wire a
+   path back to it by accident.
 
 # Consequences
 

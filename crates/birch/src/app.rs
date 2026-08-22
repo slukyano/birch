@@ -264,9 +264,6 @@ struct DropTarget {
 struct Confirm {
     prompt: String,
     paths: Vec<PathBuf>,
-    /// True when the trash already refused, so the delete would be permanent.
-    /// A trash failure is never silently upgraded (ADR 0031).
-    permanent: bool,
 }
 
 /// What performing an action leaves for the caller to do. `perform` stays free
@@ -1822,11 +1819,8 @@ impl App {
     /// available on every platform birch runs on — but it is still recorded, so
     /// that `Ctrl-Z` after a delete says where the files went instead of
     /// silently reversing whatever happened *before* it.
-    fn remember_removal(&mut self, what: &str, permanent: bool) {
-        self.history.push(undo::Step::Removed {
-            what: what.into(),
-            permanent,
-        });
+    fn remember_removal(&mut self, what: &str) {
+        self.history.push(undo::Step::Removed { what: what.into() });
         self.refresh_undo_label();
     }
 
@@ -1880,7 +1874,6 @@ impl App {
             // backs out everywhere in birch, so only the affirmative is stated.
             prompt: format!("Delete {what}? {untracked} untracked. Enter to confirm."),
             paths,
-            permanent: false,
         });
     }
 
@@ -1925,7 +1918,7 @@ impl App {
         let removed = self.apply_removal(&removal);
         let Some(failure) = removal.failed else {
             let what = describe(&paths);
-            self.remember_removal(&what, false);
+            self.remember_removal(&what);
             self.status = format!("Moved {what} to the trash");
             return;
         };
@@ -1940,19 +1933,16 @@ impl App {
             self.status = failure.to_string();
             return;
         }
-        // Never silently upgraded to a permanent delete: the user is told, and
-        // it happens only on their confirmation (ADR 0031).
-        let what = describe(&remaining);
+        // The delete ends here. birch has no removal that bypasses the trash
+        // (ADR 0031), so there is nothing to fall back to and nothing to ask —
+        // only the failure to report, and what already went, since the tree no
+        // longer shows those rows.
         let moved = if removed.is_empty() {
             String::new()
         } else {
-            format!("{} already went. ", describe(&removed))
+            format!("{} went. ", describe(&removed))
         };
-        self.confirm = Some(Confirm {
-            prompt: format!("{moved}No trash — delete {what} permanently? Enter to confirm."),
-            paths: remaining,
-            permanent: true,
-        });
+        self.status = format!("{moved}{} not deleted — {failure}", describe(&remaining));
     }
 
     /// Applies a removal's deltas and returns the paths that actually went, so
@@ -1982,25 +1972,7 @@ impl App {
                 let Some(confirm) = self.confirm.take() else {
                     return;
                 };
-                if confirm.permanent {
-                    let removal = ops::delete_permanently(&confirm.paths);
-                    let removed = self.apply_removal(&removal);
-                    if !removed.is_empty() {
-                        // Recorded even though it can never be reversed. This
-                        // is the step most worth recording: the files are gone
-                        // for good, and a user who reaches for `Ctrl-Z` here
-                        // must be told that rather than have the *previous*
-                        // operation quietly undone beneath them (ADR 0033).
-                        self.remember_removal(&describe(&removed), true);
-                    }
-                    self.status = match removal.failed {
-                        Some(e) if removed.is_empty() => e.to_string(),
-                        Some(e) => format!("Deleted {} — then {e}", describe(&removed)),
-                        None => format!("Deleted {}", describe(&removed)),
-                    };
-                } else {
-                    self.trash_now(confirm.paths);
-                }
+                self.trash_now(confirm.paths);
             }
             // A letter is not an answer — ADR 0030 keeps `y`/`n` permanently
             // unavailable — but it is not nothing either. Printables are search
@@ -5609,7 +5581,6 @@ mod ctl_tests {
         h.app.begin_delete(&rows);
         let confirm = h.app.confirm.as_ref().expect("it asked");
         assert!(confirm.prompt.contains("a.txt") && confirm.prompt.contains("Enter"));
-        assert!(!confirm.permanent, "the trash is available here");
         assert_eq!(
             h.app.bottom_line(),
             confirm.prompt,
@@ -5934,9 +5905,10 @@ mod ctl_tests {
     }
 
     /// A removal that stops partway must not ask about the paths that already
-    /// went — confirming that prompt would delete nothing.
+    /// went — the tree no longer shows those rows, so a report that mentioned
+    /// only the failure would leave them unexplained.
     #[test]
-    fn a_partial_trash_asks_only_about_what_is_left() {
+    fn a_partial_trash_reports_what_went_and_what_did_not() {
         let root = scratch("partial-trash");
         std::fs::write(root.join("a.txt"), b"x").unwrap();
         let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
@@ -5945,22 +5917,15 @@ mod ctl_tests {
             .trash_now(vec![root.join("a.txt"), root.join("ghost.txt")]);
 
         assert!(!root.join("a.txt").exists(), "the first one went");
-        match &h.app.confirm {
-            Some(confirm) => {
-                assert_eq!(confirm.paths, vec![root.join("ghost.txt")]);
-                assert!(confirm.permanent);
-                assert!(
-                    confirm.prompt.contains("already went"),
-                    "says what already happened: {:?}",
-                    confirm.prompt
-                );
-            }
-            None => assert!(
-                h.app.status.contains("trash") || !h.app.status.is_empty(),
-                "or it reported the failure: {:?}",
-                h.app.status
-            ),
-        }
+        assert!(
+            h.app.confirm.is_none(),
+            "nothing is asked: birch has no delete that bypasses the trash"
+        );
+        assert!(
+            h.app.status.contains("went") && h.app.status.contains("not deleted"),
+            "it reports both halves: {:?}",
+            h.app.status
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -6026,7 +5991,6 @@ mod ctl_tests {
         h.app.confirm = Some(Confirm {
             prompt: "?".into(),
             paths: Vec::new(),
-            permanent: false,
         });
 
         h.app.handle_confirm_input(InputAction::Esc);

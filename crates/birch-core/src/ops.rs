@@ -30,8 +30,8 @@ pub enum OpError {
     /// The filesystem refused.
     Io(io::Error),
     /// The platform trash is unavailable — no XDG trash directory, an exotic
-    /// filesystem, a network mount. Delete offers a permanent delete instead,
-    /// and only on confirmation (ADR 0031).
+    /// filesystem, a network mount. Nothing is deleted and the failure is
+    /// reported: birch has no delete that bypasses the trash (ADR 0031).
     NoTrash(String),
 }
 
@@ -147,9 +147,9 @@ pub fn trash(paths: &[PathBuf]) -> Removal {
     }
     let context = trash_context();
     remove_each(paths, |path| {
-        // Every failure here means the same thing to a user: the trash could
-        // not take it, so the only way to remove it is permanent — which is a
-        // question for them, not a fallback to take silently (ADR 0031).
+        // A failure here ends the delete. birch has no way to remove a file
+        // that does not go through the trash, so there is nothing to fall back
+        // to and nothing to ask (ADR 0031).
         context
             .delete(path)
             .map_err(|e| OpError::NoTrash(e.to_string()))
@@ -163,8 +163,7 @@ pub fn trash(paths: &[PathBuf]) -> Removal {
 /// things: Finder plays its delete sound on every call, and driving Finder
 /// needs Automation permission — which the user can **deny**, and a denial
 /// turns into a `NoTrash` failure, pushing birch into the "the trash could not
-/// take it, delete permanently?" prompt for a reason that has nothing to do
-/// with the trash.
+/// take it" failure for a reason that has nothing to do with the trash.
 ///
 /// `NsFileManager` is silent, faster, and needs no permission. What it gives up
 /// is Finder's **Put Back**, which is the only restore a macOS user has —
@@ -208,19 +207,6 @@ fn move_aside(path: &Path, directory: &Path) -> Result<(), OpError> {
     }
     fs::rename(path, &target)?;
     Ok(())
-}
-
-/// Deletes paths outright, with no way back. Reached only after an explicit
-/// confirmation that says so, when the trash is unavailable (ADR 0031).
-pub fn delete_permanently(paths: &[PathBuf]) -> Removal {
-    remove_each(paths, |path| {
-        if path.is_dir() {
-            fs::remove_dir_all(path)?;
-        } else {
-            fs::remove_file(path)?;
-        }
-        Ok(())
-    })
 }
 
 fn remove_each(paths: &[PathBuf], mut remove: impl FnMut(&Path) -> Result<(), OpError>) -> Removal {
@@ -456,36 +442,6 @@ mod tests {
         fs::create_dir(dir.join("sub")).unwrap();
         move_into(&a, &dir.join("sub")).unwrap();
         assert!(dir.join("sub/a.txt").is_file() && !a.exists());
-    }
-
-    #[test]
-    fn a_permanent_delete_removes_files_and_whole_directories() {
-        let dir = Dir::new("permanent");
-        let a = dir.file("a.txt");
-        let sub = dir.join("sub");
-        fs::create_dir(&sub).unwrap();
-        fs::write(sub.join("b.txt"), b"x").unwrap();
-
-        let removal = delete_permanently(&[a.clone(), sub.clone()]);
-        assert_eq!(removal.deltas.len(), 2);
-        assert!(removal.failed.is_none());
-        assert!(!a.exists() && !sub.exists());
-    }
-
-    /// A removal that stops partway reports what it *did* as well as what
-    /// stopped it — otherwise the tree keeps showing rows whose files are gone.
-    #[test]
-    fn a_partial_removal_reports_both_halves() {
-        let dir = Dir::new("partial");
-        let a = dir.file("a.txt");
-        let missing = dir.join("never-existed.txt");
-        let c = dir.file("c.txt");
-
-        let removal = delete_permanently(&[a.clone(), missing, c.clone()]);
-        assert_eq!(removal.deltas.len(), 1, "only the first one went");
-        assert!(removal.failed.is_some());
-        assert!(!a.exists(), "and it really went");
-        assert!(c.exists(), "the rest was not attempted");
     }
 
     /// `readme.md` → `README.md` is a routine rename, and on a case-insensitive
