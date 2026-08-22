@@ -46,11 +46,11 @@ reaches.**
    which plays Finder's delete sound on every call and needs Automation permission. That permission
    can be **denied**, and a denial surfaces as a trash failure — pushing the user into decision 5's
    "the trash could not take it" failure for a reason that has nothing to do with the trash — and
-   since decision 5's amendment, that failure is the end of the delete rather than a prompt. The cost is Finder's **Put Back**: a trashed file still sits in the trash and can
-   be dragged out, but no longer remembers where it came from. This paragraph originally cited
-   put-back as a reason to prefer the crate; that reason is withdrawn, the XDG half stands, and
-   [ADR 0033](0033-undo-is-a-session-stack.md) is where the consequence lands — delete was already
-   the step undo could not reverse, and it is now the step nothing reverses automatically.
+   since decision 5's amendment, that failure is the end of the delete rather than a prompt. The cost is Finder's **Put Back**: a trashed file still sits in the
+   trash and can be dragged out, but no longer remembers where it came from. This paragraph
+   originally cited put-back as a reason to prefer the crate; that reason is withdrawn — birch now
+   provides the restore itself, through [ADR 0033](0033-undo-is-a-session-stack.md)'s undo stack,
+   which does not depend on Finder remembering anything. The XDG half stands.
 5. **There is no delete that bypasses the trash** — not as a fallback, not as a deliberate choice.
    When the trash cannot take a path, birch reports the failure and deletes nothing.
 

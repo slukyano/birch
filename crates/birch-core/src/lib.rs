@@ -7,6 +7,7 @@
 pub mod action;
 pub mod clipboard;
 pub mod config;
+pub mod disposal;
 pub mod files_source;
 pub mod filter;
 pub mod git;

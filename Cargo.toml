@@ -33,6 +33,19 @@ unicode-segmentation = "1"
 # not reproduce. On macOS birch selects `DeleteMethod::NsFileManager` over the
 # crate's Finder default — see `ops::trash_context`.
 trash = { version = "5", default-features = false }
+# Restoring from the trash (ADR 0033). `trash` calls `-[NSFileManager
+# trashItemAtURL:resultingItemURL:error:]` with a null out-parameter, discarding
+# the one thing an undo needs: where the item landed. birch makes the same call
+# and keeps the answer. Same versions and features `trash` already pulls in, so
+# this costs no extra compilation.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSError",
+    "NSFileManager",
+    "NSString",
+    "NSURL",
+] }
 
 # The profile that 'dist' will build with
 [profile.dist]

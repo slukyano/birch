@@ -1819,8 +1819,14 @@ impl App {
     /// available on every platform birch runs on — but it is still recorded, so
     /// that `Ctrl-Z` after a delete says where the files went instead of
     /// silently reversing whatever happened *before* it.
-    fn remember_removal(&mut self, what: &str) {
-        self.history.push(undo::Step::Removed { what: what.into() });
+    fn remember_removal(&mut self, what: &str, trashed: Vec<birch_core::disposal::Trashed>) {
+        if trashed.is_empty() {
+            return;
+        }
+        self.history.push(undo::Step::Removed {
+            what: what.into(),
+            trashed,
+        });
         self.refresh_undo_label();
     }
 
@@ -1914,14 +1920,18 @@ impl App {
     }
 
     fn trash_now(&mut self, paths: Vec<PathBuf>) {
-        let removal = ops::trash(&paths);
+        let mut removal = ops::trash(&paths);
+        let trashed = std::mem::take(&mut removal.trashed);
         let removed = self.apply_removal(&removal);
         let Some(failure) = removal.failed else {
             let what = describe(&paths);
-            self.remember_removal(&what);
+            self.remember_removal(&what, trashed);
             self.status = format!("Moved {what} to the trash");
             return;
         };
+        // Whatever already went is still restorable, so it is recorded even
+        // though the batch failed — the rows are gone from the tree either way.
+        self.remember_removal(&describe(&removed), trashed);
         // Whatever already went is gone; only the rest is still a question.
         // Asking about paths that are already in the trash would be a prompt
         // about nothing, and confirming it would delete nothing.
@@ -5493,9 +5503,9 @@ mod ctl_tests {
     }
 
     #[test]
-    fn undo_after_a_delete_says_where_the_files_went() {
-        // The hazard: `Ctrl-Z` after a delete quietly reversing the rename
-        // before it, which is a destructive surprise.
+    fn undo_after_a_delete_brings_the_file_back() {
+        // And does not reverse the rename underneath it, which would be the
+        // destructive surprise ADR 0033 exists to prevent.
         let root = scratch("undo-delete");
         std::fs::write(root.join("a.txt"), b"x").unwrap();
         std::fs::write(root.join("gone.txt"), b"y").unwrap();
@@ -5515,13 +5525,18 @@ mod ctl_tests {
 
         h.app.undo();
         assert!(
-            h.app.status.contains("trash"),
-            "it says where they went: {}",
+            root.join("gone.txt").exists(),
+            "the file came back out of the trash: {}",
+            h.app.status
+        );
+        assert!(
+            h.app.status.starts_with("Restored"),
+            "and says so: {}",
             h.app.status
         );
         assert!(
             root.join("ab.txt").exists(),
-            "and reversed nothing else in the process"
+            "the rename underneath was not touched"
         );
         assert_eq!(
             h.app.undo_label.as_deref(),

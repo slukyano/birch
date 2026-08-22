@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
 
+use crate::disposal::{self, Ticket, Trashed};
 use crate::tree::{Entry, NodeKind, TreeDelta};
 
 /// Why an operation could not be performed. Every variant is something a user
@@ -137,48 +138,45 @@ pub fn create(directory: &Path, input: &str, force_dir: bool) -> OpResult {
 pub struct Removal {
     pub deltas: Vec<TreeDelta>,
     pub failed: Option<OpError>,
+    /// What each removed path takes to come back (ADR 0033). Only the paths
+    /// that actually went are in here, in the order they went.
+    pub trashed: Vec<Trashed>,
 }
 
-/// Moves paths to the platform trash. Stops at the first failure — a partial
-/// delete is reported, never silent.
+/// Moves paths to the platform trash, keeping what each one takes to come
+/// back. Stops at the first failure — a partial delete is reported, never
+/// silent, and what already went is still restorable.
 pub fn trash(paths: &[PathBuf]) -> Removal {
-    if let Some(directory) = REDIRECT.get() {
-        return remove_each(paths, |path| move_aside(path, directory));
+    let mut removal = Removal {
+        deltas: Vec::with_capacity(paths.len()),
+        failed: None,
+        trashed: Vec::with_capacity(paths.len()),
+    };
+    for path in paths {
+        let result = match REDIRECT.get() {
+            // The redirect moves the file itself, so it knows exactly where it
+            // put it — which makes a redirected trash restorable too, and lets
+            // the undo tests exercise the real path rather than a stub.
+            Some(directory) => move_aside(path, directory).map(|at| Trashed {
+                from: path.clone(),
+                ticket: Ticket::InTrash(at),
+            }),
+            None => disposal::to_trash(path),
+        };
+        match result {
+            Ok(trashed) => {
+                removal.trashed.push(trashed);
+                removal
+                    .deltas
+                    .push(TreeDelta::Removed { path: path.clone() });
+            }
+            Err(e) => {
+                removal.failed = Some(e);
+                break;
+            }
+        }
     }
-    let context = trash_context();
-    remove_each(paths, |path| {
-        // A failure here ends the delete. birch has no way to remove a file
-        // that does not go through the trash, so there is nothing to fall back
-        // to and nothing to ask (ADR 0031).
-        context
-            .delete(path)
-            .map_err(|e| OpError::NoTrash(e.to_string()))
-    })
-}
-
-/// The trash to delete into.
-///
-/// On macOS the crate's default is `DeleteMethod::Finder`, which runs
-/// `osascript -e 'tell application "Finder" to delete …'`. That costs two
-/// things: Finder plays its delete sound on every call, and driving Finder
-/// needs Automation permission — which the user can **deny**, and a denial
-/// turns into a `NoTrash` failure, pushing birch into the "the trash could not
-/// take it" failure for a reason that has nothing to do with the trash.
-///
-/// `NsFileManager` is silent, faster, and needs no permission. What it gives up
-/// is Finder's **Put Back**, which is the only restore a macOS user has —
-/// `trash`'s own `os_limited::restore_all` is not compiled for macOS at all.
-/// A trashed file still sits in the trash and can be dragged out; it no longer
-/// remembers where it came from. ADR 0031 records that trade.
-fn trash_context() -> trash::TrashContext {
-    #[allow(unused_mut)]
-    let mut context = trash::TrashContext::default();
-    #[cfg(target_os = "macos")]
-    {
-        use trash::macos::{DeleteMethod, TrashContextExtMacos};
-        context.set_delete_method(DeleteMethod::NsFileManager);
-    }
-    context
+    removal
 }
 
 /// Sends removals to `directory` instead of the platform trash.
@@ -195,7 +193,7 @@ static REDIRECT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 /// The redirect's stand-in for trashing: move the path into `directory`,
 /// suffixing on collision so a suite that trashes the same name twice does not
 /// fail on the second.
-fn move_aside(path: &Path, directory: &Path) -> Result<(), OpError> {
+fn move_aside(path: &Path, directory: &Path) -> Result<PathBuf, OpError> {
     fs::create_dir_all(directory)?;
     let name = display(path);
     let mut target = directory.join(&name);
@@ -206,24 +204,7 @@ fn move_aside(path: &Path, directory: &Path) -> Result<(), OpError> {
         target = directory.join(format!("{name}.{n}"));
     }
     fs::rename(path, &target)?;
-    Ok(())
-}
-
-fn remove_each(paths: &[PathBuf], mut remove: impl FnMut(&Path) -> Result<(), OpError>) -> Removal {
-    let mut deltas = Vec::with_capacity(paths.len());
-    for path in paths {
-        if let Err(e) = remove(path) {
-            return Removal {
-                deltas,
-                failed: Some(e),
-            };
-        }
-        deltas.push(TreeDelta::Removed { path: path.clone() });
-    }
-    Removal {
-        deltas,
-        failed: None,
-    }
+    Ok(target)
 }
 
 /// Resolves an inline input against a directory, refusing anything that is not
@@ -277,7 +258,7 @@ fn guard_destination(source: &Path, target: &Path) -> Result<(), OpError> {
 /// Whether anything at all occupies this path — a file, a directory, or a
 /// symlink whose target is missing. `Path::exists` follows links and so calls a
 /// dangling one absent.
-fn occupied(path: &Path) -> bool {
+pub(crate) fn occupied(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
@@ -291,7 +272,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-fn added(path: &Path) -> TreeDelta {
+pub(crate) fn added(path: &Path) -> TreeDelta {
     let kind = if path.is_dir() {
         NodeKind::Dir
     } else {

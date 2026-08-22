@@ -21,6 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::disposal::{self, Trashed};
 use crate::ops::{self, OpError};
 use crate::tree::TreeDelta;
 
@@ -29,7 +30,7 @@ use crate::tree::TreeDelta;
 const DEPTH: usize = 100;
 
 /// One thing birch did that can be spoken about in the past tense.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum Step {
     /// Paths that moved. One pair for a rename, several for a drag that
     /// carried a multi-row selection.
@@ -38,10 +39,9 @@ pub enum Step {
     /// the file may have been written to since birch made it, and destroying
     /// work birch never saw is not what undo means.
     Created { path: PathBuf },
-    /// Paths that went to the trash, which birch cannot bring them back from:
-    /// `trash`'s restore is not available on every platform it runs on.
-    /// Recorded rather than omitted — see [`History::undo`].
-    Removed { what: String },
+    /// Paths that went to the trash, each with what it takes to bring it back
+    /// (see [`crate::disposal`]).
+    Removed { what: String, trashed: Vec<Trashed> },
 }
 
 impl Step {
@@ -60,7 +60,7 @@ impl Step {
             }
             Step::Moved { pairs } => format!("Move of {} items", pairs.len()),
             Step::Created { path } => format!("New {}", name(path)),
-            Step::Removed { what } => format!("Delete of {what}"),
+            Step::Removed { what, .. } => format!("Delete of {what}"),
         }
     }
 }
@@ -104,16 +104,30 @@ impl History {
     pub fn undo(&mut self) -> Option<Undone> {
         let step = self.steps.pop()?;
         Some(match step {
-            // Reversing a removal is impossible, and saying so *is* the point:
-            // a delete that recorded nothing would let this `Ctrl-Z` reverse
-            // whatever happened before it, and the user pressing it has just
-            // deleted something. It consumes the step, so a second press
-            // reaches the operation underneath.
-            Step::Removed { what } => Undone {
-                deltas: Vec::new(),
-                message: format!("{what} is in the trash — restore it from there"),
-                failed: None,
-            },
+            // A delete comes back out of the trash. birch keeps the record
+            // the platform hands it, so this is a restore rather than an
+            // instruction to go and do one by hand.
+            Step::Removed { what, trashed } => {
+                let mut deltas = Vec::new();
+                let mut failed = None;
+                for item in &trashed {
+                    match disposal::restore(item) {
+                        Ok(()) => deltas.push(ops::added(&item.from)),
+                        Err(e) => {
+                            failed = Some(e);
+                            break;
+                        }
+                    }
+                }
+                Undone {
+                    message: match &failed {
+                        Some(e) => format!("Could not undo: {e}"),
+                        None => format!("Restored {what}"),
+                    },
+                    deltas,
+                    failed,
+                }
+            }
             Step::Created { path } => {
                 let removal = ops::trash(std::slice::from_ref(&path));
                 Undone {
@@ -231,28 +245,57 @@ mod tests {
     }
 
     #[test]
-    fn a_delete_says_where_the_files_went_instead_of_reversing_something_else() {
-        // The hazard this exists to prevent: undo after a delete quietly
-        // reversing the *rename* before it.
+    fn a_delete_comes_back_out_of_the_trash() {
+        let root = scratch("restore");
+        std::fs::write(root.join("notes.md"), b"NOTES").unwrap();
+        let removal = ops::trash(&[root.join("notes.md")]);
+        assert!(removal.failed.is_none() && !root.join("notes.md").exists());
+
         let mut history = History::default();
         history.push(Step::Moved {
-            pairs: vec![("/r/a.txt".into(), "/r/b.txt".into())],
+            pairs: vec![(root.join("a.txt"), root.join("b.txt"))],
         });
         history.push(Step::Removed {
             what: "notes.md".into(),
+            trashed: removal.trashed,
         });
 
         let undone = history.undo().expect("there was a step");
-        assert!(undone.deltas.is_empty() && undone.failed.is_none());
-        assert!(
-            undone.message.contains("trash"),
-            "it says where they went: {}",
-            undone.message
+        assert!(undone.failed.is_none(), "{}", undone.message);
+        assert_eq!(
+            std::fs::read(root.join("notes.md")).unwrap(),
+            b"NOTES",
+            "the file is back where it was, with its contents"
         );
+        assert!(undone.message.starts_with("Restored"), "{}", undone.message);
         assert!(
             matches!(history.next(), Some(Step::Moved { .. })),
-            "and the rename is still there for the next Ctrl-Z"
+            "and the rename underneath is untouched"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_delete_whose_name_was_taken_again_refuses_rather_than_overwriting() {
+        let root = scratch("restore-taken");
+        std::fs::write(root.join("notes.md"), b"NOTES").unwrap();
+        let removal = ops::trash(&[root.join("notes.md")]);
+        // Something else takes the name while the file sits in the trash.
+        std::fs::write(root.join("notes.md"), b"SOMEONE ELSE").unwrap();
+
+        let mut history = History::default();
+        history.push(Step::Removed {
+            what: "notes.md".into(),
+            trashed: removal.trashed,
+        });
+        let undone = history.undo().expect("there was a step");
+        assert!(undone.failed.is_some(), "it refused: {}", undone.message);
+        assert_eq!(
+            std::fs::read(root.join("notes.md")).unwrap(),
+            b"SOMEONE ELSE",
+            "and overwrote nothing"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -264,11 +307,9 @@ mod tests {
             });
         }
         assert_eq!(history.steps.len(), DEPTH);
-        assert_eq!(
-            history.next(),
-            Some(&Step::Created {
-                path: PathBuf::from(format!("/r/{}", DEPTH + 9))
-            }),
+        assert!(
+            matches!(history.next(), Some(Step::Created { path }) if path
+                == &PathBuf::from(format!("/r/{}", DEPTH + 9))),
             "the newest step survives"
         );
     }
