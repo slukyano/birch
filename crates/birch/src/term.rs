@@ -44,20 +44,9 @@ fn out(stderr: bool) -> TermOut {
 
 pub type Term = Terminal<CrosstermBackend<TermOut>>;
 
-/// Turns pointer-motion reporting (SGR 1003) on or off. Enabled only while the
-/// context menu is open: a menu that does not light the entry under the pointer
-/// cannot be used with a mouse, and the tree should not pay the event volume
-/// for a feature it does not have yet (task 090).
-///
-/// Written raw because crossterm's `EnableMouseCapture` bundles a fixed set of
-/// modes and offers no way to add this one on its own.
-pub fn set_motion_tracking(terminal: &mut Term, on: bool) {
-    write_raw(terminal, if on { b"\x1b[?1003h" } else { b"\x1b[?1003l" });
-}
-
-/// Writes bytes straight to the terminal. Used for sequences crossterm has no
-/// command for — motion tracking above, and the OSC 52 clipboard write, which
-/// is built in `birch_core::clipboard` and can only be delivered from here.
+/// Writes bytes straight to the terminal. Used for the OSC 52 clipboard write,
+/// which is built in `birch_core::clipboard` because choosing a transport needs
+/// no terminal — but can only be *delivered* from here, which owns one.
 pub fn write_raw(terminal: &mut Term, bytes: &[u8]) {
     let writer = terminal.backend_mut();
     let _ = writer.write_all(bytes);
@@ -78,6 +67,12 @@ pub fn hide_caret(terminal: &mut Term) {
     write_raw(terminal, b"\x1b[?25l");
 }
 
+/// Takes the terminal. `EnableMouseCapture` requests modes 1000, 1002, 1003,
+/// 1015 and 1006 as one set, and that set stays as it is for the whole session:
+/// **nothing turns a mouse mode off while birch runs.** Resetting one — 1003,
+/// say, to stop paying for motion the tree does not use — drops reporting below
+/// the level the terminal was told to use, and the terminal takes the pointer
+/// back. Declining a mode means not asking for it here, in the initial set.
 pub fn enter(mouse: bool, stderr: bool) -> io::Result<Term> {
     enable_raw_mode()?;
     let result = (|| {
@@ -114,11 +109,6 @@ pub fn leave(mouse: bool, stderr: bool) {
 pub fn restore(mouse: bool, stderr: bool) {
     let mut stream = out(stderr);
     if mouse {
-        // Motion tracking is enabled only while the context menu is open, and
-        // `DisableMouseCapture` does not cover it — so it is turned off here
-        // unconditionally. Quitting with the menu open (Ctrl-C, SIGHUP) would
-        // otherwise leave the terminal reporting every pointer move.
-        let _ = stream.write_all(b"\x1b[?1003l");
         let _ = execute!(stream, DisableMouseCapture);
     }
     let _ = execute!(stream, LeaveAlternateScreen);

@@ -801,21 +801,13 @@ impl App {
             InputAction::RightRelease { column, row } => {
                 let armed = self.armed_right.take();
                 let released = self.right_target(area(terminal), &rows, column, row);
-                if armed.is_some()
-                    && armed == released
-                    && self.open_menu(&rows, armed.flatten(), column, row)
-                {
-                    // A menu that does not light the entry under the pointer
-                    // cannot be used with a mouse; the tree does not pay the
-                    // event volume the rest of the time (task 090).
-                    if self.settings.mouse {
-                        term::set_motion_tracking(terminal, true);
-                    }
+                if armed.is_some() && armed == released {
+                    self.open_menu(&rows, armed.flatten(), column, row);
                 }
                 NavEffect::None
             }
-            // Motion is only ever reported while the menu is open, and the
-            // menu handles its own input above.
+            // The open menu consumes hover above, to light the entry under
+            // the pointer. Nothing else follows the pointer yet (task 090).
             InputAction::Hover { .. } => NavEffect::None,
             InputAction::Rename => {
                 self.begin_edit(&rows, Action::Rename);
@@ -835,10 +827,8 @@ impl App {
             InputAction::OpenMenu => {
                 if let Some(point) = self.cursor_point(area(terminal), &rows)
                     && let Some(cursor) = self.view.selection.clone()
-                    && self.open_menu(&rows, Some(cursor), point.0, point.1)
-                    && self.settings.mouse
                 {
-                    term::set_motion_tracking(terminal, true);
+                    self.open_menu(&rows, Some(cursor), point.0, point.1);
                 }
                 NavEffect::None
             }
@@ -1415,12 +1405,6 @@ impl App {
         true
     }
 
-    fn close_menu(&mut self, terminal: &mut term::Term) {
-        if self.menu.take().is_some() && self.settings.mouse {
-            term::set_motion_tracking(terminal, false);
-        }
-    }
-
     /// Input while the menu is open. Returns true when birch should quit.
     /// A thin wrapper: `menu_input` decides, and only the I/O happens here.
     fn handle_menu_input(
@@ -1432,21 +1416,21 @@ impl App {
         match self.menu_input(area(terminal), action) {
             MenuStep::Keep => false,
             MenuStep::Close => {
-                self.close_menu(terminal);
+                self.menu = None;
                 false
             }
             MenuStep::Search(c) => {
-                self.close_menu(terminal);
+                self.menu = None;
                 self.search_push(c);
                 false
             }
             MenuStep::Reopen(target) => {
-                self.close_menu(terminal);
+                self.menu = None;
                 self.armed_right = target;
                 false
             }
             MenuStep::Invoke(action) => {
-                self.close_menu(terminal);
+                self.menu = None;
                 let quit = match self.perform(action) {
                     Performed::Open(path) => self.perform_open(terminal, events, &path),
                     Performed::OpenWith(path, cmd) => {
