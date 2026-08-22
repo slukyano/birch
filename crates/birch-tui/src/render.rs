@@ -426,9 +426,6 @@ pub enum BottomKind {
     /// Something birch is telling the user, which they did not have on screen a
     /// moment ago — an error, or a report of what an operation did.
     Message,
-    /// A question waiting for an answer. The one thing on screen that blocks,
-    /// so the one thing that is allowed to be loud.
-    Question,
 }
 
 pub fn draw(
@@ -526,15 +523,11 @@ pub fn draw(
         );
     }
 
-    // Dim is right for chrome and wrong for everything else: a question drawn
-    // in the same grey as the idle hint is a question nobody answers, because
-    // nobody sees it.
+    // Dim is right for chrome and wrong for a message: an error drawn in the
+    // same grey as the idle hint is an error nobody reads.
     let bottom_style = match bottom_kind {
         BottomKind::Idle => canvas.add_modifier(Modifier::DIM),
         BottomKind::Message => canvas,
-        BottomKind::Question => canvas
-            .fg(theme.palette.selection_accent)
-            .add_modifier(Modifier::BOLD),
     };
     frame.render_widget(
         Paragraph::new(format!(" {bottom_line}")).style(bottom_style),

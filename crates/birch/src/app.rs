@@ -14,7 +14,6 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use birch_core::FileStatus;
 use birch_core::action::{Action, ActionContext, ActionTarget, CopyForm};
 use birch_core::clipboard;
 use birch_core::git::{self, GitCmd, GitEvent, GitState};
@@ -139,9 +138,6 @@ struct App {
     /// printables reach it rather than the search, because they go to whatever
     /// text field is focused.
     edit: Option<Editor>,
-    /// A pending destructive answer. Only ever `Enter` or `Esc` — a letter
-    /// answering a prompt is the letter command ADR 0008 forbids.
-    confirm: Option<Confirm>,
     /// What birch has done that it can take back (task 093). Session-only: it
     /// goes with the process, by design rather than by omission.
     history: undo::History,
@@ -257,13 +253,6 @@ struct Drag {
 struct DropTarget {
     directory: PathBuf,
     refusal: Option<String>,
-}
-
-/// A destructive question waiting for an answer. The prompt says what and why;
-/// `Enter` performs it and `Esc` does nothing (ADR 0030).
-struct Confirm {
-    prompt: String,
-    paths: Vec<PathBuf>,
 }
 
 /// What performing an action leaves for the caller to do. `perform` stays free
@@ -398,7 +387,6 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathB
         menu: None,
         armed_right: None,
         edit: None,
-        confirm: None,
         history: undo::History::default(),
         undo_label: None,
         drag: None,
@@ -591,13 +579,9 @@ impl App {
         }
         self.status.clear(); // status messages are transient
 
-        // Layers see input before the tree, outermost first: a confirmation,
-        // then an edit, then the menu. `Esc` therefore backs out of them in
-        // that order (ADR 0012, extended by ADR 0030).
-        if self.confirm.is_some() {
-            self.handle_confirm_input(action);
-            return false;
-        }
+        // Layers see input before the tree, outermost first: an edit, then the
+        // menu. `Esc` therefore backs out of them in that order (ADR 0012,
+        // extended by ADR 0030).
         if self.edit.is_some() {
             self.handle_edit_input(action);
             return false;
@@ -1846,12 +1830,10 @@ impl App {
         self.refresh_undo_label();
     }
 
-    /// How loudly the bottom line is drawn. A question outranks a message, and
-    /// both outrank the chrome they replace.
+    /// How loudly the bottom line is drawn: a message is something the user did
+    /// not have on screen a moment ago, and outranks the chrome it replaces.
     fn bottom_kind(&self) -> render::BottomKind {
-        if self.confirm.is_some() {
-            render::BottomKind::Question
-        } else if self.status.is_empty() {
+        if self.status.is_empty() {
             render::BottomKind::Idle
         } else {
             render::BottomKind::Message
@@ -1867,56 +1849,7 @@ impl App {
         if !Action::Delete.available(self.action_context(&targets, self.open_cmd.program())) {
             return;
         }
-        let paths: Vec<PathBuf> = targets.iter().map(|t| t.path.clone()).collect();
-        let untracked = paths.iter().filter(|path| self.is_untracked(path)).count();
-        if untracked == 0 {
-            self.trash_now(paths);
-            return;
-        }
-        let what = describe(&paths);
-        self.confirm = Some(Confirm {
-            // Terse on purpose: birch's status line is one row of a narrow side
-            // pane, and the question is what has to survive truncation. `Esc`
-            // backs out everywhere in birch, so only the affirmative is stated.
-            prompt: format!("Delete {what}? {untracked} untracked. Enter to confirm."),
-            paths,
-        });
-    }
-
-    /// Whether git has no copy of this path. A path git has never heard of is
-    /// absent from its status, so "untracked" is the status it reports for one
-    /// it knows is not committed; a directory is judged by what it holds.
-    fn is_untracked(&self, path: &Path) -> bool {
-        let Some(git) = &self.git_state else {
-            // Outside a repository nothing is recoverable from git.
-            return true;
-        };
-        // An ignored path is never in the status map at all, and it is exactly
-        // the content git cannot bring back.
-        if git.is_ignored(path) {
-            return true;
-        }
-        if path.is_dir() {
-            // A directory is judged by what it holds (ADR 0031). `dir_status`
-            // is a most-severe-wins rollup, so a folder with one modified
-            // tracked file *and* untracked ones rolls up to `Modified` — the
-            // rollup cannot answer this question, and the contents are asked
-            // directly instead.
-            return self.holds_unrecoverable(git, path);
-        }
-        git.status_of(path) == Some(FileStatus::Untracked)
-    }
-
-    /// Whether anything under this directory would be lost: an untracked or
-    /// ignored file at any depth. Walks the recorded git state rather than the
-    /// filesystem, which is both faster and the same set of paths git knows.
-    fn holds_unrecoverable(&self, git: &GitState, directory: &Path) -> bool {
-        if git.untracked_under(directory) {
-            return true;
-        }
-        // A directory git has never mentioned at all holds nothing it tracks,
-        // so everything in it is unrecoverable.
-        git.dir_status(directory).is_none() && git.status_of(directory).is_none()
+        self.trash_now(targets.iter().map(|t| t.path.clone()).collect());
     }
 
     fn trash_now(&mut self, paths: Vec<PathBuf>) {
@@ -1969,41 +1902,6 @@ impl App {
             self.expansion_dirty = true;
         }
         removed
-    }
-
-    /// `Enter` performs it, `Esc` abandons it, and nothing else answers —
-    /// a letter answering a prompt is the letter command ADR 0008 forbids.
-    fn handle_confirm_input(&mut self, action: InputAction) {
-        match action {
-            InputAction::Esc => {
-                self.confirm = None;
-            }
-            InputAction::Enter => {
-                let Some(confirm) = self.confirm.take() else {
-                    return;
-                };
-                self.trash_now(confirm.paths);
-            }
-            // A letter is not an answer — ADR 0030 keeps `y`/`n` permanently
-            // unavailable — but it is not nothing either. Printables are search
-            // input (ADR 0008), so the question backs out and the character
-            // reaches the query, exactly as it does under the menu.
-            InputAction::Char(c) => {
-                self.confirm = None;
-                self.search_push(c);
-            }
-            // Every other key backs out too. A question that silently eats what
-            // it does not recognise is the second mode ADR 0030 refuses: it is
-            // neither transient nor singly-exited, it just looks like birch has
-            // stopped responding. Backing out is the safe direction — the
-            // question is about deleting, and cancelling deletes nothing.
-            // The pointer is exempt: motion is reported continuously, so a
-            // pointer crossing the pane would dismiss the question unasked.
-            other if !other.is_pointer() => {
-                self.confirm = None;
-            }
-            _ => {}
-        }
     }
 
     // ---- dragging a selection into a directory (072) ----
@@ -2635,11 +2533,6 @@ impl App {
     }
 
     fn bottom_line(&self) -> String {
-        // A pending question owns the line until it is answered: it is the only
-        // thing on screen that is waiting for the user (ADR 0031).
-        if let Some(confirm) = &self.confirm {
-            return confirm.prompt.clone();
-        }
         let base = if let Some(state) = &self.search {
             let n = state.matches.len();
             // Same counter in both modes; only the prompt marker differs, so a
@@ -3002,7 +2895,6 @@ mod tests {
             menu: None,
             armed_right: None,
             edit: None,
-            confirm: None,
             history: undo::History::default(),
             undo_label: None,
             drag: None,
@@ -5583,63 +5475,34 @@ mod ctl_tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// Outside a repository nothing is recoverable from git, so a delete asks
-    /// first — and `Esc` means it did not happen (ADR 0031).
+    /// A delete never asks. It goes to the trash and `Ctrl-Z` brings it back;
+    /// a prompt guarding a reversible act is friction (ADR 0031).
     #[test]
-    fn deleting_an_untracked_path_asks_first() {
+    fn a_delete_never_asks_whatever_git_knows() {
         let root = scratch("delete");
         std::fs::write(root.join("a.txt"), b"x").unwrap();
         let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
         let rows = h.app.rows();
         h.app.view.focus(root.join("a.txt"));
 
+        // Outside a repository, where git has no copy of anything — the case
+        // that used to prompt.
         h.app.begin_delete(&rows);
-        let confirm = h.app.confirm.as_ref().expect("it asked");
-        assert!(confirm.prompt.contains("a.txt") && confirm.prompt.contains("Enter"));
-        assert_eq!(
-            h.app.bottom_line(),
-            confirm.prompt,
-            "the question owns the line"
+        assert!(
+            !root.join("a.txt").exists(),
+            "it went straight to the trash"
         );
+        assert!(h.app.status.contains("trash"), "{}", h.app.status);
 
-        // A letter is not an answer — only Enter and Esc are (ADR 0030) — but
-        // it is not swallowed either: the question backs out and the character
-        // reaches the search, exactly as it does under the menu (ADR 0008).
-        h.app.handle_confirm_input(InputAction::Char('y'));
-        assert!(h.app.confirm.is_none(), "the question backed out");
-        assert!(root.join("a.txt").exists(), "a letter deleted nothing");
-        assert_eq!(
-            h.app.search.as_ref().map(|s| s.query.as_str()),
-            Some("y"),
-            "the character reached the query"
-        );
-
-        h.app.search = None;
-        h.app.begin_delete(&rows);
-        h.app.handle_confirm_input(InputAction::Esc);
-        assert!(h.app.confirm.is_none());
-        assert!(root.join("a.txt").exists(), "Esc deleted nothing");
-
-        // A key with no meaning here backs out rather than vanishing: a
-        // question that eats every key looks like birch has stopped responding.
-        h.app.begin_delete(&rows);
-        h.app.handle_confirm_input(InputAction::Down);
-        assert!(h.app.confirm.is_none(), "an unrelated key backed out");
-        assert!(root.join("a.txt").exists());
-
-        // The pointer is exempt. Motion is reported continuously, so a pointer
-        // crossing the pane must not dismiss a question nobody answered.
-        h.app.begin_delete(&rows);
-        h.app
-            .handle_confirm_input(InputAction::Hover { column: 0, row: 0 });
-        assert!(h.app.confirm.is_some(), "hovering answered nothing");
-        h.app.confirm = None;
+        // ...and it is undoable, which is what makes the prompt unnecessary.
+        h.app.undo();
+        assert_eq!(std::fs::read(root.join("a.txt")).unwrap(), b"x");
 
         std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn a_confirmed_delete_moves_the_path_to_the_trash() {
+    fn a_delete_moves_the_path_to_the_trash() {
         let root = scratch("trash");
         std::fs::write(root.join("a.txt"), b"x").unwrap();
         let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
@@ -5647,8 +5510,6 @@ mod ctl_tests {
         h.app.view.focus(root.join("a.txt"));
 
         h.app.begin_delete(&rows);
-        h.app.handle_confirm_input(InputAction::Enter);
-        assert!(h.app.confirm.is_none());
         assert!(!root.join("a.txt").exists(), "it left the tree");
         assert!(
             h.app.status.contains("trash"),
@@ -5764,38 +5625,6 @@ mod ctl_tests {
         let target = h.app.drag.as_ref().unwrap().target.as_ref().unwrap();
         assert_eq!(target.refusal.as_deref(), Some("already there"));
         std::fs::remove_dir_all(&root).unwrap();
-    }
-
-    /// The whole delete safety gate, which had no test at all. A rollup cannot
-    /// answer this question: `dir_status` is most-severe-wins, so one modified
-    /// tracked file masks every untracked one beside it (ADR 0031).
-    #[test]
-    fn untracked_is_what_git_could_not_bring_back() {
-        let mut h = harness(Mode::Tree);
-        feed(&mut h.app, "/r", &[("src", NodeKind::Dir)]);
-        h.app.git_state = Some(Arc::new(parse_porcelain_v2(
-            b"1 .M N... 100644 100644 100644 a a src/main.rs\0? src/notes.md\0! src/x.env\0",
-            Path::new("/r"),
-        )));
-        let git = h.app.git_state.clone().unwrap();
-
-        // A tracked-and-clean file is absent from the status entirely, which
-        // means recoverable — not unknown.
-        assert!(!h.app.is_untracked(Path::new("/r/src/main.rs")));
-        assert!(h.app.is_untracked(Path::new("/r/src/notes.md")));
-        // Ignored content is never in the status map, and is exactly what git
-        // cannot recover.
-        assert!(h.app.is_untracked(Path::new("/r/src/x.env")));
-        // The rollup says `Modified`; the directory still holds losable files.
-        assert_eq!(
-            git.dir_status(Path::new("/r/src")),
-            Some(FileStatus::Modified)
-        );
-        assert!(git.untracked_under(Path::new("/r/src")));
-
-        // Outside a repository nothing is recoverable.
-        h.app.git_state = None;
-        assert!(h.app.is_untracked(Path::new("/r/anything")));
     }
 
     /// Dragging moves files, so it is a mutation — and mutations never happen
@@ -5933,10 +5762,6 @@ mod ctl_tests {
 
         assert!(!root.join("a.txt").exists(), "the first one went");
         assert!(
-            h.app.confirm.is_none(),
-            "nothing is asked: birch has no delete that bypasses the trash"
-        );
-        assert!(
             h.app.status.contains("went") && h.app.status.contains("not deleted"),
             "it reports both halves: {:?}",
             h.app.status
@@ -6003,16 +5828,7 @@ mod ctl_tests {
                 .open_menu(&rows, Some(PathBuf::from("/r/a.txt")), 2, 1)
         );
         h.app.edit = Some(Editor::create("/r".into(), false));
-        h.app.confirm = Some(Confirm {
-            prompt: "?".into(),
-            paths: Vec::new(),
-        });
 
-        h.app.handle_confirm_input(InputAction::Esc);
-        assert!(
-            h.app.confirm.is_none() && h.app.edit.is_some(),
-            "the question first"
-        );
         h.app.handle_edit_input(InputAction::Esc);
         assert!(
             h.app.edit.is_none() && h.app.menu.is_some(),

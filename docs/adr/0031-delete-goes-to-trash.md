@@ -22,21 +22,38 @@ question is asked of a set, not a file.
 
 # Decision
 
-**Delete moves to the platform trash. Confirmation appears exactly where neither trash nor git
-reaches.**
+**Delete moves to the platform trash, and never asks.**
+
+*Amended 2026-08-22.* This ADR originally made confirmation conditional: a selection whose every path
+was tracked in git deleted immediately, anything untracked confirmed once, and an unavailable trash
+confirmed that the delete was permanent. Three decisions supported that gate — the judgement was over
+the whole selection, a directory was judged by what it contained, and the answer was `Enter`/`Esc`
+rather than `y`/`n`.
+
+**All of it is withdrawn.** The gate rested on a single claim: that an untracked file, once trashed,
+existed nowhere birch could reach. [ADR 0033](0033-undo-is-a-session-stack.md) made that false —
+`Ctrl-Z` restores a deleted file out of the trash, on every platform birch runs on. A prompt guarding
+a reversible act is friction, and `docs/design.md` had already written the principle down:
+**undoable beats confirmable**. The conditional form was also the worst of it. A prompt that appears
+for some deletes and not others cannot be learned; the user cannot tell, before pressing the key,
+whether one is coming, so it fails as a safety mechanism *and* as a rhythm.
+
+What goes with it: `is_untracked` and its directory walk, `GitState::untracked_under` (added for this
+gate and used by nothing else), the whole confirmation layer, and `Esc`'s outermost layer. Delete now
+reads: move the selection to the trash, say so, and record how to bring it back.
 
 | situation | behaviour |
 |---|---|
-| trash works · every target tracked in git | **delete immediately**, no prompt. Recoverable twice over; a confirmation here is theatre, and theatre is what trains people to dismiss prompts unread. The status line reports what went. |
-| trash works · any target untracked | **confirm once**, naming the count and the reason. An untracked file exists nowhere else, and a trash can be emptied. |
+| trash works | **delete immediately**, no prompt, whatever git knows. The status line says what went. |
 | trash unavailable | **nothing is deleted.** The failure is reported and the delete ends there. |
 
-1. **The judgement is over the whole selection**, not per file: one prompt, naming how many rows and
-   why, rather than a prompt per target.
-2. **A directory is judged by what it contains.** A directory holding any untracked file is treated
-   as untracked, because that is what would be lost.
-3. **Confirmation is `Enter` / `Esc`** on the status line, never `y`/`n`
-   ([ADR 0030](0030-the-inline-editor-is-the-only-mode.md)).
+1. **No confirmation, ever.** Not for untracked content, not for a directory holding it, not outside
+   a repository. Undo is the safety net, and it is a better one than a prompt: it is available after
+   the mistake rather than before it, which is when the mistake is actually recognised.
+2. **The judgement over a selection disappears with the prompt.** A delete takes the whole selection
+   and reports it as one operation, which undo reverses as one step.
+3. **`y`/`n` prompts remain permanently unavailable** ([ADR 0030](0030-the-inline-editor-is-the-only-mode.md)),
+   which now costs nothing, since birch has no prompt here to answer.
 4. **Trash is provided by the `trash` crate**, not by moving files into a folder. The platform
    behaviour is not a rename: the XDG specification requires `.trashinfo` records and a per-mount
    trash directory with its own collision rules. Reimplementing that is a way to lose files quietly.
