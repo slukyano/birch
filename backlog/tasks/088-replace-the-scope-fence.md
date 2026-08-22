@@ -80,7 +80,7 @@ The sentence has two halves, and the fence is **both of them, jointly**:
 
 Nothing is added: the second half is the clause that was always in the sentence. Naming it is what
 keeps "the identity is the test" from collapsing into "anything an IDE does" — the panel-half alone
-would admit `Compare Selected`, breadcrumbs, and a built-in terminal.
+would admit the VS Code explorer menu's `Compare Selected` and `Open in Integrated Terminal`.
 
 ### What the deleted list was actually holding
 

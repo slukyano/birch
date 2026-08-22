@@ -105,6 +105,6 @@ in-scope line becomes descriptive.**
   concrete proposal. Declined by the maintainer. The anti-plugin instinct survives where it was
   always argued from architecture rather than scope.
 - **Adopt the identity with no second half** — "would an IDE explorer panel do this?" alone.
-  Rejected: the VS Code panel offers `Compare Selected`, breadcrumbs, an integrated terminal, and
-  cut/copy/paste of files. The medium half is what refuses those without a list, and it was already
-  written into the sentence.
+  Rejected: the VS Code explorer's own context menu offers `Compare Selected`,
+  `Open in Integrated Terminal`, and cut/copy/paste of files. The medium half is what refuses those
+  without a list, and it was already written into the sentence.
