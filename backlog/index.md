@@ -59,6 +59,7 @@ okf_version: "0.1"
 * [An open command that fails says nothing](tasks/085-report-open-cmd-failures.md) - birch discards a non-zero exit from --open-cmd, so host adapters have no failure channel at all.
 * [ADR 0016 describes a Dock coupling the code does not have](tasks/086-adr-0016-window-scoped-framing.md) - birch-cmux is window-scoped, not dock-scoped; and the ADR's Dock facts have aged out.
 * [birch-tmux and birch-herdr bake a raw $0 into --open-cmd](tasks/087-tmux-herdr-bake-raw-argv0.md) - Resolve argv[0] in the Rust carrier so all three adapters inherit it.
+* [A keyboard way to build a discontiguous selection](tasks/089-keyboard-toggle-for-multi-select.md) - Shift with the arrows extends a contiguous range; nothing on the keyboard toggles one row in or out.
 
 # Publication
 
