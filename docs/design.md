@@ -94,12 +94,14 @@ Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and 
 | `Enter` on file | Open (see Opening files). **Enter always opens — never contextual.** |
 | any printable char | Fuzzy filename search |
 | `Shift-F10` / `Menu` | Open the context menu at the cursor row, without disturbing the selection. On an Apple keyboard the `Menu` key does not exist and `F10` is Mute, so the gesture is `Fn`-`Shift`-`F10` unless standard function keys are enabled. |
-| `Esc` | Back out one layer: cancel an inline edit or a confirmation, else close the context menu, else clear the search; at top level, quit (ADR 0012, ADR 0030) |
+| `Esc` | Back out one layer: cancel an inline edit, else close the context menu, else clear the search; at top level, quit (ADR 0012, ADR 0030) |
 | `F2` | Rename (inline) |
 | `Delete` | Delete (to trash) |
 | `Ctrl-N` | New file / dir |
+| `Ctrl-X` `Ctrl-C` `Ctrl-V` | Cut, copy, paste entries (ADR 0034) |
+| `Ctrl-Z` | Undo the last mutation (ADR 0033) |
 | `Ctrl-F` | Content search source |
-| `Ctrl-C` | Quit (`q` is a search character like any other) |
+| `Ctrl-Q` | Quit (`q` alone is a search character like any other; `Ctrl-C` copies — ADR 0034) |
 
 Printable characters are permanently reserved for search — no letter hotkeys, ever. The context menu is the primary surface for everything else; hotkeys above are accelerators shown in the menu.
 
@@ -191,7 +193,7 @@ Content search swaps the pane's **source** (see Architecture): same tree widget,
 
 ## File operations
 
-**Rename, delete, new file, new dir — and move, by dragging** ([ADR 0032](adr/0032-move-by-dragging.md)). No copy. **Undo is a session stack** ([ADR 0033](adr/0033-undo-is-a-session-stack.md)): `Ctrl-Z` reverses the last mutation, the menu row names what it would reverse, and every step is validated against the filesystem when it runs rather than when it was recorded. **Delete is taken back too**: birch keeps what each trashed path needs to come back — where the OS put it, or the platform's own trash record — and `Ctrl-Z` restores it, refusing rather than overwriting if the old name has been taken meanwhile. No redo. Whether an operation accepts one target or several is settled per operation: **delete takes the whole selection**, while rename and create take exactly one — a rename edits one row, and several rows do not name one directory to create in. All four are unavailable in `--pick`, where mutations are disabled.
+**Rename, delete, new file, new dir — and move, by dragging** ([ADR 0032](adr/0032-move-by-dragging.md)). **Cut (`Ctrl-X`), copy (`Ctrl-C`) and paste (`Ctrl-V`)** ([ADR 0034](adr/0034-cut-copy-paste-and-the-key-that-quits.md)) — one slot, session-only, landing in the selected directory or the selected file's parent; a paste never overwrites and never silently renames, and is one undo step however many rows it carried. **`Ctrl-C` therefore does not quit**: quit is `Esc` and `Ctrl-Q`. **Undo is a session stack** ([ADR 0033](adr/0033-undo-is-a-session-stack.md)): `Ctrl-Z` reverses the last mutation, the menu row names what it would reverse, and every step is validated against the filesystem when it runs rather than when it was recorded. **Delete is taken back too**: birch keeps what each trashed path needs to come back — where the OS put it, or the platform's own trash record — and `Ctrl-Z` restores it, refusing rather than overwriting if the old name has been taken meanwhile. No redo. Whether an operation accepts one target or several is settled per operation: **delete takes the whole selection**, while rename and create take exactly one — a rename edits one row, and several rows do not name one directory to create in. All four are unavailable in `--pick`, where mutations are disabled.
 
 **Typing while an edit is open reaches the field, not the search.** [ADR 0030](adr/0030-the-inline-editor-is-the-only-mode.md) reads [ADR 0008](adr/0008-q-types-into-search.md) as it was always meant — printables go to whatever text field is focused, and an edit focuses a different one — so no letter becomes a command. The inline editor is birch's **only** mode, admissible because it is self-evident, transient, and singly-exited; a second one has to clear the same bar.
 

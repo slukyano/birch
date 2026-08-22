@@ -35,10 +35,11 @@ pub enum Step {
     /// Paths that moved. One pair for a rename, several for a drag that
     /// carried a multi-row selection.
     Moved { pairs: Vec<(PathBuf, PathBuf)> },
-    /// A path that was created. Reversing it **trashes** rather than unlinks:
-    /// the file may have been written to since birch made it, and destroying
-    /// work birch never saw is not what undo means.
-    Created { path: PathBuf },
+    /// Paths that were created — one for a `New File`, several for a paste.
+    /// Reversing them **trashes** rather than unlinks: a file may have been
+    /// written to since birch made it, and destroying work birch never saw is
+    /// not what undo means.
+    Created { paths: Vec<PathBuf> },
     /// Paths that went to the trash, each with what it takes to bring it back
     /// (see [`crate::disposal`]).
     Removed { what: String, trashed: Vec<Trashed> },
@@ -59,7 +60,10 @@ impl Step {
                 }
             }
             Step::Moved { pairs } => format!("Move of {} items", pairs.len()),
-            Step::Created { path } => format!("New {}", name(path)),
+            Step::Created { paths } => match paths.as_slice() {
+                [one] => format!("New {}", name(one)),
+                many => format!("New {} items", many.len()),
+            },
             Step::Removed { what, .. } => format!("Delete of {what}"),
         }
     }
@@ -128,12 +132,15 @@ impl History {
                     failed,
                 }
             }
-            Step::Created { path } => {
-                let removal = ops::trash(std::slice::from_ref(&path));
+            Step::Created { paths } => {
+                let removal = ops::trash(&paths);
                 Undone {
-                    message: match &removal.failed {
-                        Some(e) => format!("Could not undo: {e}"),
-                        None => format!("Undid New {} — it is in the trash", name(&path)),
+                    message: match (&removal.failed, paths.as_slice()) {
+                        (Some(e), _) => format!("Could not undo: {e}"),
+                        (None, [one]) => format!("Undid New {} — it is in the trash", name(one)),
+                        (None, many) => {
+                            format!("Undid New {} items — they are in the trash", many.len())
+                        }
                     },
                     deltas: removal.deltas,
                     failed: removal.failed,
@@ -303,13 +310,13 @@ mod tests {
         let mut history = History::default();
         for i in 0..DEPTH + 10 {
             history.push(Step::Created {
-                path: PathBuf::from(format!("/r/{i}")),
+                paths: vec![PathBuf::from(format!("/r/{i}"))],
             });
         }
         assert_eq!(history.steps.len(), DEPTH);
         assert!(
-            matches!(history.next(), Some(Step::Created { path }) if path
-                == &PathBuf::from(format!("/r/{}", DEPTH + 9))),
+            matches!(history.next(), Some(Step::Created { paths }) if paths
+                == &[PathBuf::from(format!("/r/{}", DEPTH + 9))]),
             "the newest step survives"
         );
     }
@@ -332,7 +339,7 @@ mod tests {
         );
         assert_eq!(
             Step::Created {
-                path: "/r/new.txt".into()
+                paths: vec!["/r/new.txt".into()]
             }
             .describe(),
             "New new.txt"

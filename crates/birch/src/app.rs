@@ -138,6 +138,12 @@ struct App {
     /// printables reach it rather than the search, because they go to whatever
     /// text field is focused.
     edit: Option<Editor>,
+    /// A selection held for a paste: the paths, and whether pasting moves them
+    /// or duplicates them. Session-only and single-slot, like every clipboard.
+    pending: Option<Pending>,
+    /// `pending` described, kept beside it so building an `ActionContext`
+    /// borrows a string instead of formatting one.
+    pending_label: Option<String>,
     /// What birch has done that it can take back (task 093). Session-only: it
     /// goes with the process, by design rather than by omission.
     history: undo::History,
@@ -253,6 +259,13 @@ struct Drag {
 struct DropTarget {
     directory: PathBuf,
     refusal: Option<String>,
+}
+
+/// A selection held for a paste. `duplicate` is what tells a cut from a copy;
+/// nothing else about them differs.
+struct Pending {
+    paths: Vec<PathBuf>,
+    duplicate: bool,
 }
 
 /// What performing an action leaves for the caller to do. `perform` stays free
@@ -389,6 +402,8 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathB
         edit: None,
         history: undo::History::default(),
         undo_label: None,
+        pending: None,
+        pending_label: None,
         drag: None,
         pending_extend: false,
         armed_press: None,
@@ -826,6 +841,18 @@ impl App {
             }
             InputAction::Undo => {
                 self.undo();
+                NavEffect::None
+            }
+            InputAction::Cut => {
+                self.hold(&rows, false);
+                NavEffect::None
+            }
+            InputAction::CopyEntries => {
+                self.hold(&rows, true);
+                NavEffect::None
+            }
+            InputAction::Paste => {
+                self.paste(&rows);
                 NavEffect::None
             }
             // The keyboard route in (task 092). Unlike a right-click it has no
@@ -1354,6 +1381,7 @@ impl App {
             open_program: program,
             system_program: OpenCmd::platform_program(),
             undo: self.undo_label.as_deref(),
+            pending: self.pending_label.as_deref(),
             // `Open` acts on the cursor, so the row that names what `Enter`
             // will do is the cursor's, not the selection's first.
             cursor: self
@@ -1604,6 +1632,14 @@ impl App {
                 self.begin_delete(&rows);
             }
             Action::Undo => self.undo(),
+            Action::Cut | Action::CopyEntries => {
+                let rows = self.rows();
+                self.hold(&rows, action == Action::CopyEntries);
+            }
+            Action::Paste => {
+                let rows = self.rows();
+                self.paste(&rows);
+            }
             // Detached like `OpenSystem`: it hands the path to another
             // application rather than taking the terminal.
             Action::Reveal => {
@@ -1775,7 +1811,7 @@ impl App {
                         });
                     }
                     (EditKind::Create { .. }, Some(path)) => {
-                        self.history.push(undo::Step::Created { path });
+                        self.history.push(undo::Step::Created { paths: vec![path] });
                     }
                     _ => {}
                 }
@@ -1791,6 +1827,109 @@ impl App {
                 self.status = e.to_string();
                 false
             }
+        }
+    }
+
+    /// Holds the selection for a paste. Replaces whatever was held: a
+    /// clipboard with one slot is the only kind anybody can keep track of.
+    fn hold(&mut self, rows: &[Row], duplicate: bool) {
+        let targets = self.action_targets(rows);
+        let action = if duplicate {
+            Action::CopyEntries
+        } else {
+            Action::Cut
+        };
+        if !action.available(self.action_context(&targets, self.open_cmd.program())) {
+            return;
+        }
+        let paths: Vec<PathBuf> = targets.iter().map(|t| t.path.clone()).collect();
+        if paths.is_empty() {
+            return;
+        }
+        let what = describe(&paths);
+        self.status = format!(
+            "{} {what} — ^V pastes",
+            if duplicate { "Copied" } else { "Cut" }
+        );
+        self.pending_label = Some(what);
+        self.pending = Some(Pending { paths, duplicate });
+    }
+
+    /// Puts what is held into the selected directory — the selection itself if
+    /// it is one, otherwise its parent, which is where a create goes too.
+    fn paste(&mut self, rows: &[Row]) {
+        let targets = self.action_targets(rows);
+        if !Action::Paste.available(self.action_context(&targets, self.open_cmd.program())) {
+            return;
+        }
+        let Some(target) = targets.first() else {
+            return;
+        };
+        let directory = if target.is_dir {
+            target.path.clone()
+        } else {
+            target.path.parent().unwrap_or(&self.root).to_path_buf()
+        };
+        let Some(held) = self.pending.take() else {
+            return;
+        };
+        self.pending_label = None;
+
+        let what = describe(&held.paths);
+        let mut moved = Vec::new();
+        let mut created = Vec::new();
+        for path in &held.paths {
+            let outcome = if held.duplicate {
+                ops::copy_into(path, &directory)
+            } else {
+                ops::move_into(path, &directory)
+            };
+            match outcome {
+                Ok(deltas) => {
+                    if let Some(to) = deltas.iter().find_map(added_path) {
+                        if held.duplicate {
+                            created.push(to);
+                        } else {
+                            moved.push((path.clone(), to));
+                        }
+                    }
+                    for delta in deltas {
+                        self.tree.apply(delta);
+                    }
+                }
+                Err(e) => {
+                    // Whatever already landed is recorded before reporting, so
+                    // a paste that stops halfway is still one `Ctrl-Z`.
+                    self.finish_paste(moved, created);
+                    self.status = e.to_string();
+                    return;
+                }
+            }
+        }
+        // Nothing landed and nothing failed: every path was already here. An
+        // operation that did nothing must not report that it did something.
+        if moved.is_empty() && created.is_empty() {
+            self.status = format!(
+                "{what} is already in {}",
+                self.format_path(&directory, PathForm::Rel)
+            );
+            return;
+        }
+        let duplicate = held.duplicate;
+        self.finish_paste(moved, created);
+        self.expansion_dirty = true;
+        self.status = format!(
+            "{} {what} \u{2192} {}",
+            if duplicate { "Copied" } else { "Moved" },
+            self.format_path(&directory, PathForm::Rel)
+        );
+    }
+
+    fn finish_paste(&mut self, moved: Vec<(PathBuf, PathBuf)>, created: Vec<PathBuf>) {
+        self.remember_moves(moved);
+        if !created.is_empty() {
+            self.history.push(undo::Step::Created { paths: created });
+            self.refresh_undo_label();
         }
     }
 
@@ -2210,7 +2349,7 @@ impl App {
 
     /// Esc backs out one layer (ADR 0012): an active search clears (tree
     /// mode restores the pre-search view); with nothing to dismiss, Esc
-    /// quits — the picker without a pick, the tree like Ctrl-C.
+    /// quits — the picker without a pick, the tree like `Ctrl-Q`.
     fn on_esc(&mut self) -> bool {
         // Esc backs out one layer at a time (ADR 0012); the menu is now the
         // outermost, so the order is menu → search → quit.
@@ -2902,6 +3041,8 @@ mod tests {
             edit: None,
             history: undo::History::default(),
             undo_label: None,
+            pending: None,
+            pending_label: None,
             drag: None,
             pending_extend: false,
             armed_press: None,
@@ -4755,6 +4896,7 @@ mod ctl_tests {
             open_program: "nvim",
             system_program: "open",
             undo: None,
+            pending: None,
             cursor: targets.first(),
         };
         assert!(Action::Open.available(context));
@@ -4769,6 +4911,7 @@ mod ctl_tests {
             open_program: "nvim",
             system_program: "open",
             undo: None,
+            pending: None,
             cursor: targets.first(),
         };
         assert!(Action::Open.available(context));
@@ -4787,6 +4930,7 @@ mod ctl_tests {
             open_program: "nvim",
             system_program: "open",
             undo: None,
+            pending: None,
             cursor: targets.first(),
         };
         assert!(
@@ -5084,8 +5228,23 @@ mod ctl_tests {
         assert_eq!(h.app.menu_input(area, entry), MenuStep::Invoke(hovered));
 
         // A right-click elsewhere moves the menu rather than stranding it.
+        // "Elsewhere" is computed rather than guessed: the menu grows as
+        // actions land, and a fixed column drifts inside it.
         open(&mut h.app);
-        let elsewhere = InputAction::RightPress { column: 4, row: 1 };
+        let layout = menu_mut(&mut h.app.menu).layout(area.x, area.y, area.width, area.height);
+        let outside = if layout.x > 0 {
+            layout.x - 1
+        } else {
+            layout.x + layout.width
+        };
+        assert!(
+            !menu_ref(&h.app.menu).covers(layout, outside, 1),
+            "the point is outside the menu"
+        );
+        let elsewhere = InputAction::RightPress {
+            column: outside,
+            row: 1,
+        };
         assert_eq!(
             h.app.menu_input(area, elsewhere),
             MenuStep::Reopen(Some(Some(rows[1].path.clone())))
@@ -5342,6 +5501,77 @@ mod ctl_tests {
         h.app.handle_edit_input(InputAction::Enter);
         assert!(h.app.edit.is_none(), "the corrected name committed");
         assert!(root.join("free.txt").exists());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn cut_and_paste_moves_and_copy_and_paste_duplicates() {
+        let root = scratch("clipboard");
+        std::fs::write(root.join("a.txt"), b"DATA").unwrap();
+        std::fs::create_dir(root.join("dest")).unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File), ("dest", NodeKind::Dir)]);
+        let rows = h.app.rows();
+
+        // Nothing held: paste is absent from the menu rather than inert.
+        h.app.view.focus(root.join("dest"));
+        let targets = h.app.action_targets(&rows);
+        assert!(!Action::Paste.available(h.app.action_context(&targets, "vim")));
+
+        h.app.view.focus(root.join("a.txt"));
+        h.app.hold(&rows, false);
+        assert_eq!(h.app.pending_label.as_deref(), Some("a.txt"));
+
+        h.app.view.focus(root.join("dest"));
+        let rows = h.app.rows();
+        h.app.paste(&rows);
+        assert!(
+            root.join("dest/a.txt").exists() && !root.join("a.txt").exists(),
+            "a cut paste moves"
+        );
+        assert!(h.app.pending.is_none(), "the clipboard is spent");
+
+        // ...and it is one undo step.
+        h.app.undo();
+        assert!(root.join("a.txt").exists() && !root.join("dest/a.txt").exists());
+
+        // A copy paste duplicates, leaving the original where it was.
+        let rows = h.app.rows();
+        h.app.view.focus(root.join("a.txt"));
+        h.app.hold(&rows, true);
+        h.app.view.focus(root.join("dest"));
+        let rows = h.app.rows();
+        h.app.paste(&rows);
+        assert_eq!(std::fs::read(root.join("dest/a.txt")).unwrap(), b"DATA");
+        assert!(root.join("a.txt").exists(), "the original stayed");
+
+        // Undoing a paste-as-copy trashes what it made, never the original.
+        h.app.undo();
+        assert!(!root.join("dest/a.txt").exists());
+        assert!(root.join("a.txt").exists(), "the original is untouched");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_paste_where_it_already_is_says_so_rather_than_claiming_a_move() {
+        let root = scratch("clipboard-noop");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+
+        h.app.view.focus(root.join("a.txt"));
+        h.app.hold(&rows, false);
+        // The root is a.txt's own directory.
+        h.app.view.focus(root.clone());
+        let rows = h.app.rows();
+        h.app.paste(&rows);
+        assert!(
+            h.app.status.contains("already in"),
+            "an operation that did nothing says nothing happened: {:?}",
+            h.app.status
+        );
+        assert!(h.app.undo_label.is_none(), "and records no undo step");
 
         std::fs::remove_dir_all(&root).unwrap();
     }

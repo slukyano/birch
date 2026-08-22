@@ -37,6 +37,12 @@ pub enum Action {
     Undo,
     /// Show the path in the desktop's file manager, without opening it.
     Reveal,
+    /// Hold the selection for a move.
+    Cut,
+    /// Hold the selection for a duplicate.
+    CopyEntries,
+    /// Put what is held into the selected directory.
+    Paste,
 }
 
 /// Which form of a path an action copies. Mirrors the socket's `PathForm`, so
@@ -114,6 +120,9 @@ pub struct ActionContext<'a> {
     /// The program the platform opener runs — `open`, or `xdg-open`. Named
     /// rather than described: "system" is not a thing anybody runs.
     pub system_program: &'a str,
+    /// What a paste would put down, already described — `None` when nothing is
+    /// held. The action layer holds no clipboard; it is told.
+    pub pending: Option<&'a str>,
     /// What the next undo would reverse, already described — `None` when there
     /// is nothing to undo. The action layer holds no history; it is told.
     pub undo: Option<&'a str>,
@@ -136,7 +145,12 @@ impl Action {
     pub fn mutates(self) -> bool {
         matches!(
             self,
-            Action::NewFile | Action::NewFolder | Action::Rename | Action::Delete | Action::Undo
+            Action::NewFile
+                | Action::NewFolder
+                | Action::Rename
+                | Action::Delete
+                | Action::Undo
+                | Action::Paste
         )
     }
 
@@ -184,6 +198,12 @@ impl Action {
                 Some(step) => Label::naming("Undo", step),
                 None => Label::plain("Undo"),
             },
+            // ...and the paste row names what it would put down, for the same
+            // reason: a clipboard nobody can see is one nobody trusts.
+            Action::Paste => match context.pending {
+                Some(held) => Label::naming("Paste", held),
+                None => Label::plain("Paste"),
+            },
             _ => Label::plain(self.label()),
         }
     }
@@ -202,6 +222,12 @@ impl Action {
             Action::CopyAbsolutePath => "Copy Absolute Path",
             Action::RevealRootHere => "Reveal Root Here",
             Action::Undo => "Undo",
+            // `Cut` and `Copy` act on the *entries*; the three rows further
+            // down copy text *about* them. The groups keep them apart, and the
+            // longer names say which is which.
+            Action::Cut => "Cut",
+            Action::CopyEntries => "Copy",
+            Action::Paste => "Paste",
             // Deliberately not "Reveal in Finder": the manager it lands in is
             // whatever the desktop runs, and on Linux it opens the containing
             // directory rather than selecting the file. A name that promised
@@ -226,13 +252,16 @@ impl Action {
             Action::Delete => Some("\u{2326}"),
             // `Ctrl-Shift-C` is not bindable: in the legacy key encoding birch
             // decodes with, `Shift` has no representation alongside a control
-            // character, so it is the same byte as `Ctrl-C` — which quits.
-            // Task 091 is what would make it possible.
+            // character, so it is the same byte as `Ctrl-C` — which copies the
+            // entries (ADR 0034). Task 091 is what would make it possible.
             Action::CopyName | Action::CopyRelativePath | Action::CopyAbsolutePath => None,
             Action::RevealRootHere => None,
             // Free to bind: raw mode clears `ISIG`, so `Ctrl-Z` has never
             // suspended birch and nothing is given up by taking it.
             Action::Undo => Some("^Z"),
+            Action::Cut => Some("^X"),
+            Action::CopyEntries => Some("^C"),
+            Action::Paste => Some("^V"),
             Action::Reveal => None,
         }
     }
@@ -279,6 +308,11 @@ impl Action {
             // The only action that ignores the selection entirely: it reverses
             // what birch last did, wherever that was.
             Action::Undo => context.undo.is_some(),
+            // Holding a selection reads nothing and writes nothing, so any
+            // selection will do — but a paste has to land somewhere, and only
+            // one row can say where.
+            Action::Cut | Action::CopyEntries => !context.picker,
+            Action::Paste => context.pending.is_some() && targets.len() == 1,
             // Hands off to another application, exactly as `OpenSystem` does,
             // so it is out of the picker for the same reason: a row that
             // launches a file manager while a script waits on a path is a mode
@@ -295,6 +329,7 @@ impl Action {
 pub const MENU_GROUPS: &[&[Action]] = &[
     &[Action::Open, Action::OpenSystem, Action::Reveal],
     &[Action::Undo],
+    &[Action::Cut, Action::CopyEntries, Action::Paste],
     &[
         Action::NewFile,
         Action::NewFolder,
@@ -362,6 +397,7 @@ mod tests {
             open_program: "nvim",
             system_program: "open",
             undo: None,
+            pending: None,
             cursor: targets.first(),
         }
     }

@@ -34,7 +34,8 @@ nvim "$(birch --pick)"              # pick a file and open it
 
 Arrows navigate: `→` expands a folder, splits a compacted chain, or else moves down; `←` collapses
 or jumps to the parent. `PgUp`/`PgDn` move a page and `Home`/`End` jump to the ends. `Enter` opens a
-file (or toggles a directory). Type anything for a fuzzy search. `Esc` or `Ctrl-C` quit.
+file (or toggles a directory). Type anything for a fuzzy search. `Esc` or `Ctrl-Q` quit — **not
+`Ctrl-C`**, which copies the selected entries.
 
 Hold `Shift` with any of those movement keys to select a range of rows, and `Ctrl`-click to add a
 row to the selection or take it out. Right-click — or press `Shift-F10` — for the context menu, the

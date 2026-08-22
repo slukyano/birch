@@ -132,6 +132,50 @@ pub fn create(directory: &Path, input: &str, force_dir: bool) -> OpResult {
     Ok(vec![added(&announce)])
 }
 
+/// Copies `path` into `directory`, keeping its name. Directories come with
+/// their contents.
+///
+/// **Never overwrites and never silently renames**, which is the rule a drop
+/// already follows ([ADR 0032](../../docs/adr/0032-move-by-dragging.md)): a
+/// collision is refused and said out loud. That makes duplicating an entry
+/// *into its own directory* impossible, which is a real limitation and a
+/// deliberate one — inventing "a copy 2" is the kind of silent renaming the
+/// same rule forbids.
+pub fn copy_into(path: &Path, directory: &Path) -> OpResult {
+    let name = path.file_name().ok_or(OpError::NoParent(path.into()))?;
+    let target = directory.join(name);
+    if same_file(path, &target) {
+        return Err(OpError::Exists(target));
+    }
+    guard_destination(path, &target)?;
+    copy_tree(path, &target)?;
+    Ok(vec![added(&target)])
+}
+
+fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
+    let meta = fs::symlink_metadata(from)?;
+    if meta.file_type().is_symlink() {
+        // Copied as a link, not as what it points at: following it would
+        // silently turn one entry into a whole tree, and could not come back.
+        let target = fs::read_link(from)?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, to)?;
+        #[cfg(not(unix))]
+        fs::copy(from, to).map(|_| ())?;
+        return Ok(());
+    }
+    if meta.is_dir() {
+        fs::create_dir(to)?;
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    fs::copy(from, to)?;
+    Ok(())
+}
+
 /// What a create with this input would put in the tree: the name of the row
 /// that will appear under `directory`, and whether it is a directory.
 ///
@@ -381,6 +425,36 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_copy_brings_a_whole_tree_and_never_overwrites() {
+        let dir = Dir::new("copy");
+        std::fs::create_dir_all(dir.join("src/deep")).unwrap();
+        std::fs::write(dir.join("src/deep/a.txt"), b"DATA").unwrap();
+        std::fs::create_dir(dir.join("dest")).unwrap();
+
+        let deltas = copy_into(&dir.join("src"), &dir.join("dest")).unwrap();
+        assert!(matches!(deltas[0], TreeDelta::Added { .. }));
+        assert_eq!(
+            std::fs::read(dir.join("dest/src/deep/a.txt")).unwrap(),
+            b"DATA",
+            "the contents came with it"
+        );
+        assert!(dir.join("src/deep/a.txt").exists(), "the original stayed");
+
+        // A second paste into the same place is a collision, and a collision is
+        // refused rather than renamed (ADR 0032's rule, applied here).
+        assert!(matches!(
+            copy_into(&dir.join("src"), &dir.join("dest")),
+            Err(OpError::Exists(_))
+        ));
+        // ...which is also why an entry cannot be duplicated where it already
+        // is: there is no name for the copy that birch may invent.
+        assert!(matches!(
+            copy_into(&dir.join("src"), &dir.0),
+            Err(OpError::Exists(_))
+        ));
     }
 
     #[test]

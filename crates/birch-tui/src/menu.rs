@@ -270,6 +270,7 @@ mod tests {
             open_program: "nvim",
             system_program: "open",
             undo: None,
+            pending: None,
             cursor: targets.first(),
         }
     }

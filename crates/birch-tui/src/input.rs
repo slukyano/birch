@@ -70,6 +70,12 @@ pub enum InputAction {
     Delete,
     /// Reverse the last mutation (`Ctrl-Z`, task 093).
     Undo,
+    /// Hold the selection for a move (`Ctrl-X`).
+    Cut,
+    /// Hold the selection for a duplicate (`Ctrl-C`).
+    CopyEntries,
+    /// Put what is held into the selected directory (`Ctrl-V`).
+    Paste,
     /// A printable character — always search input, never a hotkey
     /// (ADR 0008).
     Char(char),
@@ -242,7 +248,22 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
             // contextual hazard, and the menu is the discoverable path.
             KeyCode::Delete => Some(InputAction::Delete),
             KeyCode::Backspace => Some(InputAction::Backspace),
+            // `Ctrl-C` is copy, not quit. It is the most reflexive key in a
+            // terminal, and giving it up is a real cost — but it is also the
+            // only key anybody reaches for to copy, and `Ctrl-Shift-C` cannot
+            // be represented at all (task 091). Quit keeps `Esc` and gains
+            // `Ctrl-Q`, so it is never unreachable. Raw mode already cleared
+            // `ISIG`, so `Ctrl-C` was never a signal here — only a binding.
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputAction::CopyEntries)
+            }
+            KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputAction::Cut)
+            }
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputAction::Paste)
+            }
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(InputAction::Quit)
             }
             KeyCode::Char(c)
@@ -307,7 +328,14 @@ mod tests {
         // q is a printable char, not a hotkey (ADR 0008).
         let ev = Event::Key(KeyEvent::from(KeyCode::Char('q')));
         assert_eq!(map_event(&ev, true), Some(InputAction::Char('q')));
+        // `Ctrl-C` copies; quit moved to `Ctrl-Q` (and `Esc`, as ever).
         let ev = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(map_event(&ev, true), Some(InputAction::CopyEntries));
+        let ev = Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        assert_eq!(map_event(&ev, true), Some(InputAction::Cut));
+        let ev = Event::Key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        assert_eq!(map_event(&ev, true), Some(InputAction::Paste));
+        let ev = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
         assert_eq!(map_event(&ev, true), Some(InputAction::Quit));
         let ev = Event::Key(KeyEvent::from(KeyCode::Char(' ')));
         assert_eq!(map_event(&ev, true), Some(InputAction::Char(' ')));
