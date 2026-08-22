@@ -310,7 +310,7 @@ pub fn draw_edit(
     // A rename draws on its row; a create draws on the line *after* its parent,
     // which is where the new child will appear.
     let (anchor, depth, offset) = match editor.kind() {
-        EditKind::Rename { path } => {
+        EditKind::Rename { path, .. } => {
             let index = rows.iter().position(|row| &row.path == path)?;
             (index, rows[index].depth, 0)
         }
@@ -334,7 +334,14 @@ pub fn draw_edit(
     // The field starts where a row's *label* does, not where its indent does:
     // the glyph columns between them are part of the row, and an edit that
     // ignored them would sit two columns left of every name around it.
-    let glyphs: usize = glyph_column_spans(theme, chrome.settings, &rows[anchor])
+    //
+    // The glyphs come from what the edit *will produce*, not from the row it is
+    // anchored to — so a create shows the icon of the thing being made from its
+    // first character, and a rename's icon follows the extension as it is typed.
+    let (name, node_kind) = editor.preview();
+    let phantom = Row::phantom(name, node_kind, depth);
+    let glyph_spans = glyph_column_spans(theme, chrome.settings, &phantom);
+    let glyphs: usize = glyph_spans
         .iter()
         .map(|span| span.content.chars().count())
         .sum();
@@ -356,6 +363,20 @@ pub fn draw_edit(
     // transform, the same kind as compaction and dimming.
     if offset == 1 {
         open_gap(frame, area, &geometry, line);
+    }
+    // The glyph columns, drawn for a create (where the gap left them blank) and
+    // redrawn for a rename (where the row underneath still shows the old icon).
+    if glyphs > 0 {
+        let indent = depth as u16 * INDENT_WIDTH;
+        let width = (glyphs as u16).min(geometry.tree.width.saturating_sub(indent));
+        let at = Rect {
+            x: geometry.tree.x + indent,
+            y,
+            width,
+            height: 1,
+        };
+        frame.render_widget(Clear, at);
+        frame.render_widget(Paragraph::new(Line::from(glyph_spans)), at);
     }
     let style = Style::default().bg(theme.palette.selection_bg);
     frame.render_widget(Clear, field);
@@ -1127,6 +1148,59 @@ mod tests {
         );
         // And the rest of the row still washes, edge to edge.
         assert_eq!(buffer[(39, 0)].bg, theme.palette.selection_bg);
+    }
+
+    #[test]
+    fn the_phantom_row_carries_the_icon_the_entry_will_have() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let theme = theme();
+        let rows = vec![row("src", NodeKind::Dir, 0)];
+        let view = FlatView::default();
+        let settings = Settings::default();
+
+        let glyphs_for = |input: &str| {
+            let mut editor = Editor::create(PathBuf::from("/r").join("src"), false);
+            for c in input.chars() {
+                editor.insert(c);
+            }
+            let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        &rows,
+                        &view,
+                        chrome(&settings, &theme, false),
+                        "",
+                        BottomKind::Idle,
+                    );
+                    draw_edit(
+                        frame,
+                        &rows,
+                        &view,
+                        chrome(&settings, &theme, false),
+                        &editor,
+                    );
+                })
+                .unwrap();
+            (0..12)
+                .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
+                .collect::<String>()
+        };
+
+        let rust = glyphs_for("main.rs");
+        let python = glyphs_for("main.py");
+        let folder = glyphs_for("sub/");
+        assert_ne!(
+            rust, python,
+            "the icon follows the extension as it is typed: {rust:?} vs {python:?}"
+        );
+        assert_ne!(
+            rust, folder,
+            "and a trailing slash makes it a folder: {rust:?} vs {folder:?}"
+        );
     }
 
     #[test]

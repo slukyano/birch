@@ -132,6 +132,39 @@ pub fn create(directory: &Path, input: &str, force_dir: bool) -> OpResult {
     Ok(vec![added(&announce)])
 }
 
+/// What a create with this input would put in the tree: the name of the row
+/// that will appear under `directory`, and whether it is a directory.
+///
+/// Mirrors [`create`] exactly — the same trailing-slash rule, and the same
+/// first-component rule, since `create` announces the shallowest component it
+/// made. Pure, so the phantom row can ask it on every keystroke: the icon
+/// appears with the first character and follows the extension as it is typed.
+pub fn preview_create(directory: &Path, input: &str, force_dir: bool) -> (String, NodeKind) {
+    let trimmed = input.trim();
+    let ends_dir =
+        force_dir || trimmed.ends_with('/') || trimmed.ends_with(std::path::MAIN_SEPARATOR);
+    let fallback = if ends_dir {
+        NodeKind::Dir
+    } else {
+        NodeKind::File
+    };
+    let Ok(target) = resolve(directory, input) else {
+        return (trimmed.to_string(), fallback);
+    };
+    if !target.starts_with(directory) {
+        return (trimmed.to_string(), fallback);
+    }
+    let announce = shallowest_new(directory, &target);
+    // An announced path short of the target is an intermediate directory
+    // `create_dir_all` will make; only the leaf can be a file.
+    let kind = if announce == target {
+        fallback
+    } else {
+        NodeKind::Dir
+    };
+    (display(&announce), kind)
+}
+
 /// What a multi-path removal actually did: the deltas for the paths that went,
 /// and the failure that stopped the rest. Returning only the error would leave
 /// the tree showing rows whose files are already gone.
@@ -348,6 +381,39 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_preview_says_what_the_create_will_put_in_the_tree() {
+        let base = Path::new("/r/src");
+        // A plain name is a file, and carries its own name so the icon can be
+        // looked up from the extension.
+        assert_eq!(
+            preview_create(base, "main.rs", false),
+            ("main.rs".into(), NodeKind::File)
+        );
+        // A trailing slash is a directory, and so is `New Folder` whatever was
+        // typed.
+        assert_eq!(
+            preview_create(base, "sub/", false),
+            ("sub".into(), NodeKind::Dir)
+        );
+        assert_eq!(
+            preview_create(base, "sub", true),
+            ("sub".into(), NodeKind::Dir)
+        );
+        // A nested path announces its *first* component, exactly as `create`
+        // does — so the row that appears is the directory, not the leaf.
+        assert_eq!(
+            preview_create(base, "a/b/c.txt", false),
+            ("a".into(), NodeKind::Dir)
+        );
+        // Nothing typed yet: the kind is whichever action opened the field.
+        assert_eq!(preview_create(base, "", false).1, NodeKind::File);
+        assert_eq!(preview_create(base, "", true).1, NodeKind::Dir);
+        // An input `create` would refuse still previews something, rather than
+        // blanking the row mid-keystroke.
+        assert_eq!(preview_create(base, "../x", false).1, NodeKind::File);
     }
 
     #[test]

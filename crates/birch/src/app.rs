@@ -1691,7 +1691,12 @@ impl App {
                     .path
                     .file_name()
                     .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-                Editor::rename(target.path.clone(), &name)
+                let kind = if target.is_dir {
+                    NodeKind::Dir
+                } else {
+                    NodeKind::File
+                };
+                Editor::rename(target.path.clone(), &name, kind)
             }
             // A create needs a directory: a selected file names its parent.
             _ => Editor::create(
@@ -1753,7 +1758,7 @@ impl App {
             return false;
         }
         let result = match editor.kind() {
-            EditKind::Rename { path } => ops::rename(path, input),
+            EditKind::Rename { path, .. } => ops::rename(path, input),
             EditKind::Create { parent, directory } => ops::create(parent, input, *directory),
         };
         match result {
@@ -1764,7 +1769,7 @@ impl App {
                 // created `a`, and removing only `c.txt` would leave the rest.
                 let landed = deltas.iter().find_map(added_path);
                 match (editor.kind(), landed) {
-                    (EditKind::Rename { path }, Some(to)) => {
+                    (EditKind::Rename { path, .. }, Some(to)) => {
                         self.history.push(undo::Step::Moved {
                             pairs: vec![(path.clone(), to)],
                         });

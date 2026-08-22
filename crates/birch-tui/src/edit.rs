@@ -8,14 +8,17 @@
 //!
 //! Pure logic: no ratatui, no terminal.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use birch_core::{NodeKind, ops};
 
 /// What the editor is anchored to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditKind {
     /// Renaming a row, drawn over it. Anchored to a real path, so a reshuffle
-    /// moves the overlay with the row.
-    Rename { path: PathBuf },
+    /// moves the overlay with the row. `kind` is the row's own — a rename
+    /// cannot turn a directory into a file — and is what the icon follows.
+    Rename { path: PathBuf, kind: NodeKind },
     /// Creating under a directory, drawn as a phantom row beneath it.
     /// `directory` is what `New Folder` sets; a trailing slash in the text
     /// reaches the same place, which is the keyboard route.
@@ -35,10 +38,10 @@ impl Editor {
     /// Opens over a row, pre-filled with its current name. The cursor sits at
     /// the **extension boundary**, because renaming usually means changing the
     /// stem and typing over the extension is the common accident.
-    pub fn rename(path: PathBuf, name: &str) -> Self {
+    pub fn rename(path: PathBuf, name: &str, kind: NodeKind) -> Self {
         let cursor = stem_len(name);
         Self {
-            kind: EditKind::Rename { path },
+            kind: EditKind::Rename { path, kind },
             buffer: name.to_string(),
             cursor,
         }
@@ -55,6 +58,40 @@ impl Editor {
 
     pub fn kind(&self) -> &EditKind {
         &self.kind
+    }
+
+    /// What the row will be once this commits: the name it will carry in the
+    /// tree, and whether it is a directory. The overlay draws its icon from
+    /// this, so the icon appears with the first character and follows the
+    /// extension as it is typed.
+    ///
+    /// Cheap and pure, so it is asked on every frame rather than cached — a
+    /// cache here would be one more thing to invalidate on every keystroke.
+    pub fn preview(&self) -> (String, NodeKind) {
+        match &self.kind {
+            EditKind::Create { parent, directory } => {
+                ops::preview_create(parent, &self.buffer, *directory)
+            }
+            // A rename cannot change what the row *is*; only what it is called,
+            // which is the tail of whatever was typed — an input carrying
+            // separators moves the row, and the name it lands under is the last
+            // component.
+            EditKind::Rename { path, kind } => {
+                let typed = self
+                    .buffer
+                    .trim()
+                    .trim_end_matches(['/', std::path::MAIN_SEPARATOR]);
+                let name = Path::new(typed)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| {
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    });
+                (name, *kind)
+            }
+        }
     }
 
     pub fn buffer(&self) -> &str {
@@ -128,20 +165,20 @@ mod tests {
 
     #[test]
     fn a_rename_starts_at_the_extension_boundary() {
-        let editor = Editor::rename("/r/main.rs".into(), "main.rs");
+        let editor = Editor::rename("/r/main.rs".into(), "main.rs", NodeKind::File);
         assert_eq!(editor.buffer(), "main.rs");
         assert_eq!(editor.cursor_chars(), 4, "before the dot");
 
         // A dotfile has no extension: the whole name is the stem.
-        let editor = Editor::rename("/r/.gitignore".into(), ".gitignore");
+        let editor = Editor::rename("/r/.gitignore".into(), ".gitignore", NodeKind::File);
         assert_eq!(editor.cursor_chars(), ".gitignore".chars().count());
 
         // Several dots: the last one starts the extension.
-        let editor = Editor::rename("/r/a.tar.gz".into(), "a.tar.gz");
+        let editor = Editor::rename("/r/a.tar.gz".into(), "a.tar.gz", NodeKind::File);
         assert_eq!(editor.cursor_chars(), 5);
 
         // No dot at all.
-        let editor = Editor::rename("/r/README".into(), "README");
+        let editor = Editor::rename("/r/README".into(), "README", NodeKind::File);
         assert_eq!(editor.cursor_chars(), 6);
     }
 
@@ -190,7 +227,7 @@ mod tests {
 
     #[test]
     fn multi_byte_characters_never_split() {
-        let mut editor = Editor::rename("/r/wé.txt".into(), "wé.txt");
+        let mut editor = Editor::rename("/r/wé.txt".into(), "wé.txt", NodeKind::File);
         // "wé" is the stem: two characters, three bytes.
         assert_eq!(editor.cursor_chars(), 2);
         editor.insert('ü');
