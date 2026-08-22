@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: The inline editor is birch's only mode, and printables follow the focused field
-status: Proposed
+status: Accepted
 sprint: sprint-021
 ---
 

@@ -2,7 +2,7 @@
 type: Task
 title: Add file operations
 description: Rename/delete/new inline ops with git-aware delete - the rest of the 0.5 bundle split off to 071 (context menu) and 028 (copy paths).
-status: Draft
+status: Designed
 priority: medium
 blocked_by:
 - 002-build-core-tree-view

@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: Files move by dragging; rename-to-a-path stays as the keyboard route
-status: Proposed
+status: Accepted
 sprint: sprint-021
 ---
 

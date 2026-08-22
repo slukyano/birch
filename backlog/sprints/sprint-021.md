@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: The actions the menu was built for
-status: Designing
+status: Implementing
 branch: sprint/021
 tasks:
 - 028-add-copy-paths

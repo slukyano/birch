@@ -2,7 +2,7 @@
 type: Task
 title: Add "Open with…" to the context menu
 description: Choose an alternative open command for the selected node.
-status: Draft
+status: Designed
 priority: low
 blocked_by:
 - 029-add-file-operations

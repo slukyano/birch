@@ -2,7 +2,7 @@
 type: Task
 title: Open the context menu from the keyboard
 description: The menu has exactly one trigger - the right button - so a host that swallows right-click makes it unreachable, and there is no keyboard way in at all.
-status: Draft
+status: Designed
 priority: medium
 ---
 

@@ -2,7 +2,7 @@
 type: Task
 title: Move files and folders by dragging
 description: Drag a row onto a directory to move it - requested by the maintainer; currently forbidden by the scope fence, so it needs a fence amendment before design.
-status: Draft
+status: Designed
 priority: medium
 ---
 

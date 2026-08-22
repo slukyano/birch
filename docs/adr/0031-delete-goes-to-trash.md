@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: Delete goes to trash, and confirmation appears only where neither trash nor git can help
-status: Proposed
+status: Accepted
 sprint: sprint-021
 ---
 
