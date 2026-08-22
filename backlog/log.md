@@ -281,3 +281,41 @@
   in the archive root under their basename, which is exactly where the new binaries go, so
   `contrib/birch-cmux` and the `birch-cmux` executable both wanted `<archive>/birch-cmux`. Dropped
   the `include`; five documents claiming the scripts still ship to `share/birch/` were corrected.
+
+## 2026-08-22 (sprint 020)
+
+* **The scope fence was three fences that disagreed, and is now one.**
+  [ADR 0028](../docs/adr/0028-the-identity-is-the-scope-fence.md) deletes the permanent
+  out-of-scope list outright and makes the identity sentence the whole test, read in two halves that
+  must both hold: what the IDEA / VS Code explorer panel does, and what survives a narrow terminal
+  pane where every printable belongs to search. The in-scope line becomes a description that gates
+  nothing. Ten of the deleted list's eleven entries turned out to restate a prohibition some section
+  already made with a reason attached — so what was lost was an index, not the decisions. The one
+  entry it alone held was multi-select.
+* **Selection became a set, without disturbing anything that reads it.** `FlatView::selection` keeps
+  its name and its meaning as the cursor, so the socket, persistence, and search anchoring stayed
+  correct with no change; a set joins it, and the cursor is always in it. One pruning rule covers a
+  collapsed parent, a narrowing, and a deleted file alike: what cannot hold the selection leaves it.
+  A multi-selection deliberately does not persist — expansion and scroll are view state, but a
+  selection is intent, and restoring it hours later would re-arm an action whose targets have been
+  forgotten. That removed the sprint's own biggest listed risk.
+* **`Shift` with the mouse was designed away on evidence, then restored by decision.** ghostty's
+  `mouse-shift-capture` defaults to `false`, so the modifier never reaches the application; the
+  design initially declined the gesture. The maintainer's call: handle it wherever a terminal does
+  forward it, and never send `XTSHIFTESCAPE` to claim it back, since that would withdraw the native
+  text selection for the whole pane.
+* **The context menu has no contents.** [ADR 0029](../docs/adr/0029-the-menu-projects-the-action-layer.md)
+  makes it a projection of a new action layer: actions declare a label, an accelerator, and an
+  availability rule over a target set, and an unavailable action is absent rather than greyed. It
+  ships with the two actions that exist, and each of sprint 021's tasks adds an action instead of
+  editing a menu.
+* **Verification earned its place twice.** An independent reviewer found seven defects in the diff —
+  among them a pick from the menu that never ended the picker, and a range that kept repainting and
+  so swallowed rows that had been dimmed when it was made. Verifying that second fix in a real
+  terminal then exposed an eighth that no unit test could reach: a `Shift` extension resolving its
+  anchor *after* the cursor had moved, which only fails when the search index arrives after the
+  query is typed.
+* Filed while designing: `089-keyboard-toggle-for-multi-select` (a discontiguous selection is
+  reachable by mouse only) and `090-hover-highlight-in-the-tree` (motion tracking runs for the
+  menu's lifetime alone).
+

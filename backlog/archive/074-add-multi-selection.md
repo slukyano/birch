@@ -2,7 +2,7 @@
 type: Task
 title: Support multi-selection
 description: Finder-style selection of several rows with Shift and Ctrl, by mouse and keyboard - requested by the maintainer; currently forbidden by the scope fence, so it needs a fence amendment before design.
-status: Designed
+status: Done
 priority: medium
 ---
 

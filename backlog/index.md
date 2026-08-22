@@ -27,7 +27,7 @@ okf_version: "0.1"
 * [Sprint 017 — Pointer feel](sprints/sprint-017.md) - Done.
 * [Sprint 018 — Branch state, and critical fixes](sprints/sprint-018.md) - Done.
 * [Sprint 019 — The cmux integration, finished](sprints/sprint-019.md) - Done.
-* [Sprint 020 — Multi-select and the action surface](sprints/sprint-020.md) - Scoped.
+* [Sprint 020 — Multi-select and the action surface](sprints/sprint-020.md) - Done.
 
 # Tasks
 
@@ -38,10 +38,8 @@ okf_version: "0.1"
 * [Add a "random" theme](tasks/065-random-theme.md) - --theme random resolves to a randomly chosen built-in theme at launch.
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
 * [Show how much a filter actually matches](tasks/070-show-filter-match-counts.md) - Per-folder or total match counts, so a filtered browse knows where to go.
-* [Add the context menu](tasks/071-add-context-menu.md) - The right-click action surface, split out of the 0.5 bundle so it can land before the ops it hosts.
 * [Move files and folders by dragging](tasks/072-drag-to-move.md) - Drag a row onto a directory to move it; arguable since ADR 0028, against the File operations section's own "No move".
 * [Show a hotkey reference](tasks/073-hotkey-reference.md) - In-app discoverability: always-on footer vs. summoned overlay, with `?` unavailable (printables are search).
-* [Support multi-selection](tasks/074-add-multi-selection.md) - Shift/Ctrl range and toggle, mouse and keyboard; admitted by ADR 0028.
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
 * [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
 
@@ -52,8 +50,6 @@ okf_version: "0.1"
 * [Add the Project View source](tasks/033-add-project-view-source.md) - A curated/virtual tree source, reusing the source-as-delta-stream interface.
 * [Add "Open with…" to the context menu](tasks/034-add-open-with.md) - Choose an alternative open command for the selected node.
 * [Verify the herdr integration live](tasks/035-verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
-* [Support the standard navigation keys](tasks/081-standard-navigation-keys.md) - PgUp/PgDn/Home/End are dead keys; bind them, deciding selection-vs-viewport paging and what they mean under a live search.
-* [The identity is the scope fence](tasks/088-replace-the-scope-fence.md) - Delete the permanently-out-of-scope list; "what an IDE file tree does" becomes the whole test.
 * [birch-cmux does three things](tasks/083-birch-cmux-does-three-things.md) - Socket, birch, watcher; the watcher owns root and open command, the preview verb goes, and the unreachable fallbacks go with it.
 * [The cmux follow watcher outlives the birch it serves](tasks/084-follow-watcher-outlives-birch.md) - Nothing signals the backgrounded watcher, so it forks a cmux call and a python3 per workspace switch forever.
 * [An open command that fails says nothing](tasks/085-report-open-cmd-failures.md) - birch discards a non-zero exit from --open-cmd, so host adapters have no failure channel at all.
@@ -71,6 +67,10 @@ so outside the `docs/design.md` scope fence.
 
 # Done
 
+* [Add the context menu](archive/071-add-context-menu.md) - The right-click action surface, split out of the 0.5 bundle so it can land before the ops it hosts.
+* [Support multi-selection](archive/074-add-multi-selection.md) - Shift/Ctrl range and toggle, mouse and keyboard; admitted by ADR 0028.
+* [Support the standard navigation keys](archive/081-standard-navigation-keys.md) - PgUp/PgDn/Home/End are dead keys; bind them, deciding selection-vs-viewport paging and what they mean under a live search.
+* [The identity is the scope fence](archive/088-replace-the-scope-fence.md) - Delete the permanently-out-of-scope list; "what an IDE file tree does" becomes the whole test.
 * [Verify the name "birch" is available](archive/001-verify-name-availability.md) - Name kept per ADR 0002; crates.io conflict noted, Homebrew free.
 * [Build the core tree view (phase 0.1)](archive/002-build-core-tree-view.md) - Tree, arrows, lazy load, icons, open-cmd with {line}, basic mouse, real-tree/render split and source interface.
 * [Add git status badges](archive/003-add-git-status.md) - Badges, rollups, deleted-but-tracked rows, ignored dimming via the porcelain v2 side-table.
