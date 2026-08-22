@@ -28,6 +28,7 @@ okf_version: "0.1"
 * [Sprint 018 — Branch state, and critical fixes](sprints/sprint-018.md) - Done.
 * [Sprint 019 — The cmux integration, finished](sprints/sprint-019.md) - Done.
 * [Sprint 020 — Multi-select and the action surface](sprints/sprint-020.md) - Done.
+* [Sprint 021 — The actions the menu was built for](sprints/sprint-021.md) - Designing.
 
 # Tasks
 
