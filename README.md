@@ -38,7 +38,8 @@ file (or toggles a directory). Type anything for a fuzzy search. `Esc` or `Ctrl-
 
 Hold `Shift` with any of those movement keys to select a range of rows, and `Ctrl`-click to add a
 row to the selection or take it out. Right-click — or press `Shift-F10` — for the context menu, the
-surface birch's actions live on, since printable characters are reserved for search.
+surface birch's actions live on, since printable characters are reserved for search. Drag a row onto
+a folder to move it.
 
 ## Install
 

@@ -122,7 +122,7 @@ trigger at all — a gap that grows with every action this sprint adds to it.
 - [x] 092-open-the-menu-from-the-keyboard — implemented, gates green, verified in a pty
 - [x] 029-add-file-operations — implemented, gates green, verified on disk and with vhs
 - [x] 034-add-open-with — implemented, gates green, configured command verified
-- [ ] 072-drag-to-move
+- [x] 072-drag-to-move — implemented, gates green, verified on disk
 
 # Open questions
 

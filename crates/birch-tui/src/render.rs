@@ -342,6 +342,38 @@ pub fn draw_edit(
     (caret < width).then_some((x + caret, y))
 }
 
+/// Marks the directory a drag would drop into (ADR 0032). Distinct from the
+/// selection wash — the selection is what is being *moved*, and the two must
+/// not read as the same thing — so this is the accent colour, edge to edge.
+pub fn draw_drop_target(
+    frame: &mut Frame,
+    rows: &[Row],
+    view: &FlatView,
+    chrome: Chrome,
+    directory: &std::path::Path,
+) {
+    let area = frame.area();
+    let geometry = layout(area, chrome, rows.len());
+    if geometry.viewport == 0 {
+        return;
+    }
+    let Some(index) = rows.iter().position(|row| row.path == directory) else {
+        return;
+    };
+    let Some(offset) = index.checked_sub(view.scroll) else {
+        return;
+    };
+    if offset >= geometry.viewport {
+        return;
+    }
+    let y = geometry.tree.y + offset as u16;
+    let accent = chrome.theme.palette.selection_accent;
+    let buffer = frame.buffer_mut();
+    for x in area.left()..area.right() {
+        buffer[(x, y)].set_bg(accent);
+    }
+}
+
 pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bottom_line: &str) {
     let Chrome {
         settings,

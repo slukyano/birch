@@ -142,6 +142,11 @@ struct App {
     /// A pending destructive answer. Only ever `Enter` or `Esc` — a letter
     /// answering a prompt is the letter command ADR 0008 forbids.
     confirm: Option<Confirm>,
+    /// A drag in flight: the paths being moved, and the directory currently
+    /// under the pointer. A drag begins when the pointer leaves the row the
+    /// press started on — ADR 0025 already tracks which row that was, so there
+    /// is no threshold to tune (ADR 0032).
+    drag: Option<Drag>,
     /// A `Shift` extension waiting for its match reveal to converge. The range
     /// is painted once, when the cursor lands, rather than every frame.
     pending_extend: bool,
@@ -231,6 +236,20 @@ where
             BatchStep::Quit => return BatchStop::Quit,
         }
     }
+}
+
+/// A move in flight.
+struct Drag {
+    /// What is being moved, resolved when the drag began.
+    paths: Vec<PathBuf>,
+    /// The directory under the pointer, and whether it will accept the drop.
+    /// `None` means the pointer is somewhere that is not a target at all.
+    target: Option<DropTarget>,
+}
+
+struct DropTarget {
+    directory: PathBuf,
+    refusal: Option<String>,
 }
 
 /// A destructive question waiting for an answer. The prompt says what and why;
@@ -363,6 +382,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathB
         armed_right: None,
         edit: None,
         confirm: None,
+        drag: None,
         pending_extend: false,
         armed_press: None,
         last_rematch: None,
@@ -741,6 +761,10 @@ impl App {
                 self.arm_press(&rows, hit);
                 NavEffect::None
             }
+            InputAction::Drag { column, row } => {
+                self.update_drag(area(terminal), &rows, column, row);
+                NavEffect::None
+            }
             InputAction::Release {
                 column,
                 row,
@@ -758,7 +782,14 @@ impl App {
                     column,
                     row,
                 );
-                self.resolve_release(&rows, hit, modifier, Instant::now())
+                // A drag in flight ends here rather than completing a click:
+                // the press was consumed by the gesture.
+                if self.drag.is_some() {
+                    self.finish_drag(&rows);
+                    NavEffect::None
+                } else {
+                    self.resolve_release(&rows, hit, modifier, Instant::now())
+                }
             }
             // The press only arms: the menu opens on the release, on the row
             // the press started on — the left button's rule with no exception
@@ -1806,6 +1837,168 @@ impl App {
         }
     }
 
+    // ---- dragging a selection into a directory (072) ----
+
+    /// Called on every drag event. Promotes an armed press into a drag once the
+    /// pointer leaves the row it started on, then keeps the drop target current.
+    fn update_drag(&mut self, area: Rect, rows: &[Row], column: u16, row: u16) {
+        if self.drag.is_none() {
+            let Some((path, _)) = self.armed_press.clone() else {
+                return;
+            };
+            let Some(origin) = rows.iter().position(|r| r.path == path) else {
+                return;
+            };
+            // Still on the row the press began on: this is a click that
+            // wobbled, which ADR 0025 already treats as a click.
+            if self.row_at(area, rows, row) == Some(origin) {
+                return;
+            }
+            // The dragged set follows the menu's targeting rule: a press inside
+            // the selection drags all of it, outside it drags that row alone.
+            if !self.view.is_selected(&path) {
+                self.view.on_single_click(rows, origin);
+            }
+            let paths = self.view.selected(rows);
+            if paths.is_empty() {
+                return;
+            }
+            self.armed_press = None;
+            self.click_timer.disarm();
+            self.drag = Some(Drag {
+                paths,
+                target: None,
+            });
+        }
+        let target = self.drop_target(area, rows, column, row);
+        if let Some(drag) = self.drag.as_mut() {
+            drag.target = target;
+        }
+        self.status = self.drag_message();
+    }
+
+    /// Which row a screen line falls on, if any.
+    fn row_at(&self, area: Rect, rows: &[Row], row: u16) -> Option<usize> {
+        let viewport = render::tree_viewport_height(area);
+        let offset = row.checked_sub(area.y)? as usize;
+        if offset >= viewport {
+            return None;
+        }
+        let index = self.view.scroll + offset;
+        (index < rows.len()).then_some(index)
+    }
+
+    /// Where a drop would land, and why it would be refused. A directory takes
+    /// the drop; a file offers its parent; below the rows is the root; a dimmed
+    /// row is inert, as everywhere (ADR 0023).
+    fn drop_target(&self, area: Rect, rows: &[Row], column: u16, row: u16) -> Option<DropTarget> {
+        let chrome = render::Chrome {
+            settings: &self.settings,
+            theme: &Theme::for_id(self.settings.theme),
+            branch_axis: self.branch_axis(),
+        };
+        let directory = match render::hit_test(rows, &self.view, chrome, area, column, row) {
+            Some((index, _)) => {
+                let hit = rows.get(index)?;
+                if !hit.live {
+                    return None;
+                }
+                if hit.kind.is_dir() && !hit.missing {
+                    hit.path.clone()
+                } else {
+                    hit.path.parent()?.to_path_buf()
+                }
+            }
+            None => {
+                if !render::on_tree_surface(rows.len(), chrome, area, column, row) {
+                    return None;
+                }
+                self.root.clone()
+            }
+        };
+        let refusal = self.refusal(&directory);
+        Some(DropTarget { directory, refusal })
+    }
+
+    /// Why this directory cannot take the drop, visible before the button is
+    /// released rather than discovered after it (ADR 0032).
+    fn refusal(&self, directory: &Path) -> Option<String> {
+        let paths = self
+            .drag
+            .as_ref()
+            .map(|d| d.paths.as_slice())
+            .unwrap_or(&[]);
+        for path in paths {
+            if directory.starts_with(path) {
+                return Some("cannot move a folder inside itself".into());
+            }
+            if path.parent() == Some(directory) {
+                return Some("already there".into());
+            }
+            if let Some(name) = path.file_name()
+                && directory.join(name).exists()
+            {
+                return Some(format!("{} already exists there", name.to_string_lossy()));
+            }
+        }
+        None
+    }
+
+    fn drag_message(&self) -> String {
+        let Some(drag) = &self.drag else {
+            return String::new();
+        };
+        let what = describe(&drag.paths);
+        match &drag.target {
+            Some(DropTarget {
+                refusal: Some(why), ..
+            }) => format!("Moving {what} — {why}"),
+            Some(DropTarget { directory, .. }) => {
+                format!(
+                    "Moving {what} \u{2192} {}",
+                    self.format_path(directory, PathForm::Rel)
+                )
+            }
+            None => format!("Moving {what}"),
+        }
+    }
+
+    /// Completes the drag. A refused target does nothing and says so; the move
+    /// itself has no undo, so the status line reports where things went.
+    fn finish_drag(&mut self, rows: &[Row]) {
+        let _ = rows;
+        let Some(drag) = self.drag.take() else {
+            return;
+        };
+        let Some(target) = drag.target else {
+            self.status.clear();
+            return;
+        };
+        if let Some(why) = target.refusal {
+            self.status = format!("Not moved — {why}");
+            return;
+        }
+        let what = describe(&drag.paths);
+        for path in &drag.paths {
+            match ops::move_into(path, &target.directory) {
+                Ok(deltas) => {
+                    for delta in deltas {
+                        self.tree.apply(delta);
+                    }
+                }
+                Err(e) => {
+                    self.status = e.to_string();
+                    return;
+                }
+            }
+        }
+        self.expansion_dirty = true;
+        self.status = format!(
+            "Moved {what} \u{2192} {}",
+            self.format_path(&target.directory, PathForm::Rel)
+        );
+    }
+
     /// Why nothing happened when there is no selection to act on.
     fn nothing_selectable_message(&self) -> String {
         match &self.search {
@@ -2156,6 +2349,12 @@ impl App {
             .menu
             .as_mut()
             .map(|menu| menu.layout(area.x, area.y, area.width, area.height));
+        let drop_target = self
+            .drag
+            .as_ref()
+            .and_then(|drag| drag.target.as_ref())
+            .filter(|target| target.refusal.is_none())
+            .map(|target| target.directory.clone());
         let (view, settings, menu) = (&self.view, &self.settings, &self.menu);
         let chrome = render::Chrome {
             settings,
@@ -2166,6 +2365,11 @@ impl App {
         let mut caret = None;
         terminal.draw(|frame| {
             render::draw(frame, &rows, view, chrome, &bottom);
+            // A refused target is drawn as no target at all: the absence of the
+            // highlight is the answer, before the button is released.
+            if let Some(directory) = &drop_target {
+                render::draw_drop_target(frame, &rows, view, chrome, directory);
+            }
             // The editor sits over the tree and under the menu; the two are
             // never open together, so the order only fixes a convention.
             if let Some(editor) = editor {
@@ -2551,6 +2755,7 @@ mod tests {
             armed_right: None,
             edit: None,
             confirm: None,
+            drag: None,
             pending_extend: false,
             armed_press: None,
             last_rematch: None,
@@ -3804,7 +4009,7 @@ mod tests {
     // ---- ADR 0025: a click completes on release ----
 
     /// Arms a press on `idx` and returns the hit tuple a release would carry.
-    fn press(app: &mut App, rows: &[Row], idx: usize, on_chevron: bool) {
+    pub(super) fn press(app: &mut App, rows: &[Row], idx: usize, on_chevron: bool) {
         app.armed_press = Some((rows[idx].path.clone(), on_chevron));
     }
 
@@ -3843,7 +4048,7 @@ mod tests {
         );
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
-        press(&mut h.app, &rows, 2, false);
+        super::tests::press(&mut h.app, &rows, 2, false);
         assert_eq!(h.app.view.selection, before, "a press must not select");
     }
 
@@ -3856,7 +4061,7 @@ mod tests {
             &[("a", NodeKind::File), ("b", NodeKind::File)],
         );
         let rows = h.app.rows();
-        press(&mut h.app, &rows, 2, false);
+        super::tests::press(&mut h.app, &rows, 2, false);
         h.app.resolve_release(
             &rows,
             Some((2, false)),
@@ -3880,7 +4085,7 @@ mod tests {
         );
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app.resolve_release(
             &rows,
             Some((2, false)),
@@ -3900,7 +4105,7 @@ mod tests {
         feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app
             .resolve_release(&rows, None, input::ClickModifier::None, Instant::now());
         assert_eq!(h.app.view.selection, before);
@@ -3928,7 +4133,7 @@ mod tests {
         feed(&mut h.app, "/r/sub", &[("f", NodeKind::File)]);
         let rows = h.app.rows();
         let expanded = h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded;
-        press(&mut h.app, &rows, 1, true);
+        super::tests::press(&mut h.app, &rows, 1, true);
         h.app.resolve_release(
             &rows,
             Some((1, false)),
@@ -3948,12 +4153,12 @@ mod tests {
         feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
         let rows = h.app.rows();
         let t0 = Instant::now();
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app
             .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
         assert!(h.app.picked.is_empty(), "one click only selects");
         // A second press without its release must not activate.
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         assert!(h.app.picked.is_empty());
         h.app.resolve_release(
             &rows,
@@ -3974,10 +4179,10 @@ mod tests {
         feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
         let rows = h.app.rows();
         let t0 = Instant::now();
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app
             .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         // Beyond the window: a slow second click is two singles, not a double.
         h.app.resolve_release(
             &rows,
@@ -3998,18 +4203,18 @@ mod tests {
         );
         let rows = h.app.rows();
         let t0 = Instant::now();
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app
             .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
         // A press released elsewhere is an intervening click: it resets.
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app.resolve_release(
             &rows,
             Some((2, false)),
             input::ClickModifier::None,
             t0 + Duration::from_millis(50),
         );
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app.resolve_release(
             &rows,
             Some((1, false)),
@@ -5012,6 +5217,104 @@ mod ctl_tests {
             describe(&[PathBuf::from("/r/a"), PathBuf::from("/r/b")]),
             "2 items"
         );
+    }
+
+    /// A press that stays on its row is still a click; one that leaves it
+    /// becomes a drag. No threshold to tune (ADR 0032).
+    #[test]
+    fn a_drag_begins_only_when_the_pointer_leaves_its_row() {
+        let root = scratch("drag-begin");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let mut h = rooted(&root, &[("sub", NodeKind::Dir), ("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        // Rows: root (0), sub (1), a.txt (2).
+        super::tests::press(&mut h.app, &rows, 2, false);
+        h.app.update_drag(pane(), &rows, 4, 2);
+        assert!(h.app.drag.is_none(), "still on its own row: a click");
+
+        h.app.update_drag(pane(), &rows, 4, 1);
+        let drag = h.app.drag.as_ref().expect("it left the row");
+        assert_eq!(drag.paths, vec![root.join("a.txt")]);
+        assert_eq!(
+            drag.target.as_ref().map(|t| t.directory.clone()),
+            Some(root.join("sub"))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_drop_moves_the_paths_and_says_where_they_went() {
+        let root = scratch("drag-drop");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let mut h = rooted(&root, &[("sub", NodeKind::Dir), ("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        super::tests::press(&mut h.app, &rows, 2, false);
+        h.app.update_drag(pane(), &rows, 4, 1);
+        h.app.finish_drag(&rows);
+
+        assert!(root.join("sub/a.txt").is_file() && !root.join("a.txt").exists());
+        assert!(h.app.status.contains("sub"), "{:?}", h.app.status);
+        assert!(h.app.drag.is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Every refusal is visible during the drag rather than discovered after
+    /// it, and a refused drop moves nothing.
+    #[test]
+    fn a_refused_target_is_refused_before_release() {
+        let root = scratch("drag-refuse");
+        std::fs::create_dir_all(root.join("outer/inner")).unwrap();
+        std::fs::write(root.join("outer/inner/a.txt"), b"x").unwrap();
+        // `keep.txt` beside `inner` stops the two directories compacting into
+        // one chain row, which would otherwise make `outer` unaddressable.
+        std::fs::write(root.join("outer/keep.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("outer", NodeKind::Dir)]);
+        h.app.tree.set_expanded(&root.join("outer"), true);
+        h.app.tree.apply(TreeDelta::Snapshot {
+            dir: root.join("outer"),
+            entries: vec![
+                birch_core::Entry {
+                    name: "inner".into(),
+                    kind: NodeKind::Dir,
+                },
+                birch_core::Entry {
+                    name: "keep.txt".into(),
+                    kind: NodeKind::File,
+                },
+            ],
+        });
+        let rows = h.app.rows();
+        assert_eq!(rows.len(), 4, "root, outer, inner, keep.txt");
+        // Rows: root (0), outer (1), inner (2).
+        super::tests::press(&mut h.app, &rows, 1, false);
+        h.app.update_drag(pane(), &rows, 4, 2);
+        let target = h.app.drag.as_ref().unwrap().target.as_ref().unwrap();
+        assert!(
+            target.refusal.is_some(),
+            "a folder cannot move inside itself"
+        );
+        assert!(h.app.status.contains("inside itself"), "{:?}", h.app.status);
+
+        h.app.finish_drag(&rows);
+        assert!(root.join("outer/inner").is_dir(), "nothing moved");
+        assert!(h.app.status.starts_with("Not moved"), "{:?}", h.app.status);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_drop_onto_the_current_parent_is_refused_as_already_there() {
+        let root = scratch("drag-noop");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        super::tests::press(&mut h.app, &rows, 1, false);
+        // Row 0 is the root, which is already a.txt's parent.
+        h.app.update_drag(pane(), &rows, 4, 0);
+        let target = h.app.drag.as_ref().unwrap().target.as_ref().unwrap();
+        assert_eq!(target.refusal.as_deref(), Some("already there"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -98,6 +98,13 @@ pub enum InputAction {
         column: u16,
         row: u16,
     },
+    /// The pointer moved with the left button held. A drag begins when it
+    /// leaves the row the press started on — no threshold to tune, because
+    /// ADR 0025 already tracks which row that was (task 072).
+    Drag {
+        column: u16,
+        row: u16,
+    },
     /// Pointer motion. Only reported while the context menu is open, which is
     /// the only time birch asks for motion tracking (task 090 would generalise
     /// it to the tree).
@@ -236,6 +243,12 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
                 row: mouse.row,
             }),
             MouseEventKind::Up(MouseButton::Right) => Some(InputAction::RightRelease {
+                column: mouse.column,
+                row: mouse.row,
+            }),
+            // Button-event tracking is already on, so a drag arrives without
+            // asking the terminal for anything more (task 072).
+            MouseEventKind::Drag(MouseButton::Left) => Some(InputAction::Drag {
                 column: mouse.column,
                 row: mouse.row,
             }),
@@ -403,6 +416,28 @@ mod tests {
             map_event(&Event::Key(KeyEvent::from(KeyCode::Backspace)), true),
             Some(InputAction::Backspace)
         );
+    }
+
+    #[test]
+    fn the_left_button_reports_dragging() {
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 9,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(
+            map_event(&ev, true),
+            Some(InputAction::Drag { column: 9, row: 4 })
+        );
+        // Dragging with another button is not birch's gesture.
+        let right = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Right),
+            column: 9,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(map_event(&right, true), None);
     }
 
     #[test]
