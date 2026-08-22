@@ -13,8 +13,24 @@ use std::path::PathBuf;
 pub enum Action {
     /// Open a file, or expand/collapse a directory. In the picker it confirms.
     Open,
+    /// Copy the selection's file name to the clipboard.
+    CopyName,
+    /// Copy the selection's path, relative to the birch root.
+    CopyRelativePath,
+    /// Copy the selection's absolute path.
+    CopyAbsolutePath,
     /// Re-root the tree at the selected directory.
     RevealRootHere,
+}
+
+/// Which form of a path an action copies. Mirrors the socket's `PathForm`, so
+/// the menu and `birch ctl get-path` cannot drift apart about what "the
+/// relative path" means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyForm {
+    Name,
+    Relative,
+    Absolute,
 }
 
 /// One row an action would act on, reduced to the facts an availability rule
@@ -40,11 +56,25 @@ pub struct ActionContext<'a> {
 }
 
 impl Action {
+    /// The form of path a copy action writes, or `None` for anything that is
+    /// not a copy.
+    pub fn copy_form(self) -> Option<CopyForm> {
+        match self {
+            Action::CopyName => Some(CopyForm::Name),
+            Action::CopyRelativePath => Some(CopyForm::Relative),
+            Action::CopyAbsolutePath => Some(CopyForm::Absolute),
+            _ => None,
+        }
+    }
+
     /// The menu label. Not the accelerator — that is drawn separately and is
     /// the first thing dropped when the pane is too narrow.
     pub fn label(self) -> &'static str {
         match self {
             Action::Open => "Open",
+            Action::CopyName => "Copy Name",
+            Action::CopyRelativePath => "Copy Relative Path",
+            Action::CopyAbsolutePath => "Copy Absolute Path",
             Action::RevealRootHere => "Reveal Root Here",
         }
     }
@@ -54,6 +84,11 @@ impl Action {
     pub fn accelerator(self) -> Option<&'static str> {
         match self {
             Action::Open => Some("\u{21b5}"),
+            // `Ctrl-Shift-C` is not bindable: in the legacy key encoding birch
+            // decodes with, `Shift` has no representation alongside a control
+            // character, so it is the same byte as `Ctrl-C` — which quits.
+            // Task 091 is what would make it possible.
+            Action::CopyName | Action::CopyRelativePath | Action::CopyAbsolutePath => None,
             Action::RevealRootHere => None,
         }
     }
@@ -72,6 +107,8 @@ impl Action {
             // neither opens N files. An action that fans out over the selection
             // arrives with the task that needs it.
             Action::Open => true,
+            // A copy reads paths and writes nothing, so any selection will do.
+            Action::CopyName | Action::CopyRelativePath | Action::CopyAbsolutePath => true,
             // Re-rooting is a single-target move by nature, and only a
             // directory can become a root.
             Action::RevealRootHere => targets.len() == 1 && targets[0].is_dir,
@@ -87,8 +124,11 @@ pub const MENU_GROUPS: &[&[Action]] = &[
     &[Action::Open],
     // New File… / Rename… / Delete — 029-add-file-operations.
     &[],
-    // Copy Name / Relative Path / Absolute Path — 028-add-copy-paths.
-    &[],
+    &[
+        Action::CopyName,
+        Action::CopyRelativePath,
+        Action::CopyAbsolutePath,
+    ],
     &[Action::RevealRootHere],
 ];
 
@@ -141,27 +181,48 @@ mod tests {
         }
     }
 
+    const COPIES: [MenuRow; 3] = [
+        MenuRow::Entry(Action::CopyName),
+        MenuRow::Entry(Action::CopyRelativePath),
+        MenuRow::Entry(Action::CopyAbsolutePath),
+    ];
+
     #[test]
-    fn a_directory_offers_both_actions_and_a_file_only_open() {
+    fn a_directory_offers_re_rooting_and_a_file_does_not() {
         let dir = [target("/r/src", true)];
-        assert_eq!(
-            menu_rows(context(&dir)),
-            [
-                MenuRow::Entry(Action::Open),
-                MenuRow::Separator,
-                MenuRow::Entry(Action::RevealRootHere),
-            ]
-        );
+        let mut expected = vec![MenuRow::Entry(Action::Open), MenuRow::Separator];
+        expected.extend(COPIES);
+        expected.extend([MenuRow::Separator, MenuRow::Entry(Action::RevealRootHere)]);
+        assert_eq!(menu_rows(context(&dir)), expected);
+
         // A file cannot become a root, so its group vanishes — and the
         // separator that would have divided it goes with it.
         let file = [target("/r/main.rs", false)];
-        assert_eq!(menu_rows(context(&file)), [MenuRow::Entry(Action::Open)]);
+        let mut expected = vec![MenuRow::Entry(Action::Open), MenuRow::Separator];
+        expected.extend(COPIES);
+        assert_eq!(menu_rows(context(&file)), expected);
+    }
+
+    #[test]
+    fn a_copy_reads_paths_so_any_selection_offers_it() {
+        let many = [target("/r/a", false), target("/r/b", false)];
+        for action in [
+            Action::CopyName,
+            Action::CopyRelativePath,
+            Action::CopyAbsolutePath,
+        ] {
+            assert!(action.available(context(&many)), "{action:?}");
+            assert!(action.copy_form().is_some(), "{action:?}");
+        }
+        assert!(Action::Open.copy_form().is_none());
     }
 
     #[test]
     fn re_rooting_is_single_target_and_nothing_acts_on_a_missing_row() {
         let two = [target("/r/src", true), target("/r/docs", true)];
-        assert_eq!(menu_rows(context(&two)), [MenuRow::Entry(Action::Open)]);
+        let mut expected = vec![MenuRow::Entry(Action::Open), MenuRow::Separator];
+        expected.extend(COPIES);
+        assert_eq!(menu_rows(context(&two)), expected);
 
         let missing = [ActionTarget {
             path: PathBuf::from("/r/gone.rs"),

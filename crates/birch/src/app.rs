@@ -14,7 +14,8 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use birch_core::action::{Action, ActionContext, ActionTarget};
+use birch_core::action::{Action, ActionContext, ActionTarget, CopyForm};
+use birch_core::clipboard;
 use birch_core::git::{self, GitCmd, GitEvent, GitState};
 use birch_core::protocol::{PathForm, Request, Response, SettingKey, SettingValue, Verb};
 use birch_core::search::{self, IndexCmd, IndexEvent, Match, SearchIndex, search};
@@ -219,6 +220,33 @@ where
             BatchStep::Stop => return BatchStop::Handoff,
             BatchStep::Quit => return BatchStop::Quit,
         }
+    }
+}
+
+/// What performing an action leaves for the caller to do. `perform` stays free
+/// of the terminal — opening a file hands the tty over, and an OSC 52 copy is a
+/// sequence only the render layer can write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Performed {
+    Nothing,
+    /// A file the caller should open.
+    Open(PathBuf),
+    /// An escape sequence the caller should write to the terminal.
+    Write(String),
+}
+
+/// What was copied, for the status line. The count matters and the form is what
+/// distinguishes three otherwise identical actions.
+fn copied_message(count: usize, form: CopyForm) -> String {
+    let what = match form {
+        CopyForm::Name => "name",
+        CopyForm::Relative => "relative path",
+        CopyForm::Absolute => "absolute path",
+    };
+    if count == 1 {
+        format!("Copied {what}")
+    } else {
+        format!("Copied {count} {what}s")
     }
 }
 
@@ -1283,8 +1311,12 @@ impl App {
             MenuStep::Invoke(action) => {
                 self.close_menu(terminal);
                 let quit = match self.perform(action) {
-                    Some(path) => self.perform_open(terminal, events, &path),
-                    None => false,
+                    Performed::Open(path) => self.perform_open(terminal, events, &path),
+                    Performed::Write(sequence) => {
+                        term::write_raw(terminal, sequence.as_bytes());
+                        false
+                    }
+                    Performed::Nothing => false,
                 };
                 // The same terminator every other input path falls through to:
                 // a pick made from the menu ends the picker there, not on
@@ -1379,14 +1411,17 @@ impl App {
     /// the socket all arrive here; nothing reaches an operation another way
     /// (ADR 0029). Terminal-free, so it stays a decision about the tree: a file
     /// that needs an editor comes back for the caller to open.
-    fn perform(&mut self, action: Action) -> Option<PathBuf> {
+    fn perform(&mut self, action: Action) -> Performed {
         let rows = self.rows();
         let targets = self.action_targets(&rows);
         if !action.available(ActionContext {
             targets: &targets,
             picker: self.mode.is_pick(),
         }) {
-            return None;
+            return Performed::Nothing;
+        }
+        if let Some(form) = action.copy_form() {
+            return self.copy_selection(&rows, &targets, form);
         }
         match action {
             Action::Open => {
@@ -1395,7 +1430,7 @@ impl App {
                 match effect {
                     // In the picker `activate` has already confirmed, so this
                     // only ever carries a file the tree wants opened.
-                    NavEffect::Open(path) => return Some(path),
+                    NavEffect::Open(path) => return Performed::Open(path),
                     NavEffect::Message(message) => self.status = message,
                     NavEffect::RequestExpand(path) => {
                         let _ = self.source_cmds.send(SourceCmd::Expand(path));
@@ -1411,8 +1446,47 @@ impl App {
                     }
                 }
             }
+            // Handled above, before the match: every copy shares one path.
+            Action::CopyName | Action::CopyRelativePath | Action::CopyAbsolutePath => {}
         }
-        None
+        Performed::Nothing
+    }
+
+    /// Resolves the selection to text and hands it to the clipboard. The
+    /// transport is chosen per copy from the environment (`birch_core::
+    /// clipboard`); OSC 52 comes back as a sequence for the caller to write,
+    /// because the terminal belongs to the render layer.
+    fn copy_selection(
+        &mut self,
+        rows: &[Row],
+        targets: &[ActionTarget],
+        form: CopyForm,
+    ) -> Performed {
+        let path_form = match form {
+            CopyForm::Name => PathForm::Name,
+            CopyForm::Relative => PathForm::Rel,
+            CopyForm::Absolute => PathForm::Abs,
+        };
+        let _ = rows;
+        let text = targets
+            .iter()
+            .map(|target| self.format_path(&target.path, path_form))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let transport = clipboard::choose(clipboard::is_remote(), &clipboard::available_tools());
+        match clipboard::copy(&text, transport) {
+            Ok(sequence) => {
+                self.status = copied_message(targets.len(), form);
+                match sequence {
+                    Some(sequence) => Performed::Write(sequence),
+                    None => Performed::Nothing,
+                }
+            }
+            Err(e) => {
+                self.status = format!("could not copy: {e}");
+                Performed::Nothing
+            }
+        }
     }
 
     /// Paints a `Shift` extension once its match reveal has converged. Match
@@ -4134,7 +4208,11 @@ mod ctl_tests {
                 .open_menu(&rows, Some(PathBuf::from("/r/a.txt")), 4, 1)
         );
 
-        assert_eq!(h.app.perform(Action::Open), None, "the picker confirms");
+        assert_eq!(
+            h.app.perform(Action::Open),
+            Performed::Nothing,
+            "the picker confirms"
+        );
         assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/a.txt")]);
         assert!(
             h.app.finished(false),
@@ -4151,7 +4229,7 @@ mod ctl_tests {
             &[("src", NodeKind::Dir), ("a.txt", NodeKind::File)],
         );
         h.app.view.focus("/r/src".into());
-        assert_eq!(h.app.perform(Action::Open), None);
+        assert_eq!(h.app.perform(Action::Open), Performed::Nothing);
         assert!(
             h.app.tree.node_at(Path::new("/r/src")).unwrap().expanded,
             "Open toggles a directory, exactly as Enter does"
@@ -4160,7 +4238,10 @@ mod ctl_tests {
         // On a file it hands the path back for the caller to open, rather than
         // reaching for the terminal itself.
         h.app.view.focus("/r/a.txt".into());
-        assert_eq!(h.app.perform(Action::Open), Some(PathBuf::from("/r/a.txt")));
+        assert_eq!(
+            h.app.perform(Action::Open),
+            Performed::Open(PathBuf::from("/r/a.txt"))
+        );
         assert!(
             !h.app.finished(false),
             "the tree does not exit on an action"
@@ -4187,7 +4268,7 @@ mod ctl_tests {
         });
         h.app.view.focus(real.join("src"));
 
-        assert_eq!(h.app.perform(Action::RevealRootHere), None);
+        assert_eq!(h.app.perform(Action::RevealRootHere), Performed::Nothing);
         assert_eq!(h.app.root, real.join("src"));
         assert!(h.app.status.is_empty(), "no error was reported");
 
@@ -4211,10 +4292,12 @@ mod ctl_tests {
         // Arrows step entries and skip the rule between the groups; Home/End
         // reach the ends.
         open(&mut h.app);
+        // Rows: Open · ── · Copy Name · Copy Relative · Copy Absolute · ── ·
+        // Reveal Root Here. Stepping crosses both rules without landing on one.
         assert_eq!(h.app.menu_input(area, InputAction::Down), MenuStep::Keep);
         assert_eq!(
             menu_ref(&h.app.menu).selected_action(),
-            Some(Action::RevealRootHere)
+            Some(Action::CopyName)
         );
         h.app.menu_input(area, InputAction::Up);
         assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(Action::Open));
@@ -4258,7 +4341,7 @@ mod ctl_tests {
         );
         assert_eq!(
             menu_ref(&h.app.menu).selected_action(),
-            Some(Action::RevealRootHere)
+            Some(Action::CopyName)
         );
         assert_eq!(
             h.app.menu_input(
@@ -4298,7 +4381,7 @@ mod ctl_tests {
         };
         assert_eq!(
             h.app.menu_input(area, entry),
-            MenuStep::Invoke(Action::RevealRootHere)
+            MenuStep::Invoke(Action::CopyName)
         );
 
         // A right-click elsewhere moves the menu rather than stranding it.
@@ -4308,6 +4391,75 @@ mod ctl_tests {
             h.app.menu_input(area, elsewhere),
             MenuStep::Reopen(Some(Some(rows[1].path.clone())))
         );
+    }
+
+    /// A copy resolves through the same `format_path` the socket uses, so the
+    /// menu and `birch ctl get-path` cannot disagree about what a form means.
+    #[test]
+    fn copying_joins_the_selection_in_tree_order() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("src", NodeKind::Dir), ("a.txt", NodeKind::File)],
+        );
+        drain_expands(&h.source_rx);
+        feed(&mut h.app, "/r/src", &[("main.rs", NodeKind::File)]);
+        h.app.tree.set_expanded(Path::new("/r/src"), true);
+        let rows = h.app.rows();
+        h.app.view.focus("/r/src/main.rs".into());
+        h.app.view.move_by_extending(&rows, 1);
+
+        let targets = h.app.action_targets(&rows);
+        assert_eq!(targets.len(), 2);
+        let text = |form| {
+            targets
+                .iter()
+                .map(|t| h.app.format_path(&t.path, form))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(text(PathForm::Name), "main.rs\na.txt");
+        assert_eq!(text(PathForm::Rel), "src/main.rs\na.txt");
+        assert_eq!(text(PathForm::Abs), "/r/src/main.rs\n/r/a.txt");
+    }
+
+    /// The status line says what was copied, and pluralises on the count rather
+    /// than claiming the clipboard now holds it — with OSC 52 nothing can know.
+    #[test]
+    fn the_copy_message_names_the_form_and_the_count() {
+        assert_eq!(copied_message(1, CopyForm::Name), "Copied name");
+        assert_eq!(
+            copied_message(1, CopyForm::Relative),
+            "Copied relative path"
+        );
+        assert_eq!(
+            copied_message(3, CopyForm::Absolute),
+            "Copied 3 absolute paths"
+        );
+    }
+
+    /// OSC 52 comes back for the caller to write; a native tool leaves nothing
+    /// to do. Either way the status line reports it.
+    #[test]
+    fn a_copy_reports_what_it_did() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus("/r/a.txt".into());
+        let targets = h.app.action_targets(&rows);
+
+        // Drive the transport directly: choosing it reads the real environment,
+        // which a test must not depend on.
+        let sequence = clipboard::copy("a.txt", clipboard::Transport::Osc52).unwrap();
+        assert_eq!(sequence, Some(clipboard::osc52("a.txt")));
+
+        let performed = h.app.copy_selection(&rows, &targets, CopyForm::Name);
+        assert!(matches!(
+            performed,
+            Performed::Write(_) | Performed::Nothing
+        ));
+        assert_eq!(h.app.status, "Copied name");
     }
 
     #[test]

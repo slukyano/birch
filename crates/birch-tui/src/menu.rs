@@ -275,32 +275,56 @@ mod tests {
     }
 
     #[test]
-    fn stepping_skips_the_separator_and_stops_at_the_ends() {
+    fn stepping_skips_the_separators_and_stops_at_the_ends() {
         let mut menu = menu_at(0, 0);
-        // Open, separator, Reveal Root Here.
-        assert_eq!(menu.selected_action(), Some(Action::Open));
+        // The entries in order, with a rule between each group.
+        let entries: Vec<Action> = menu
+            .rows()
+            .iter()
+            .filter_map(|row| match row {
+                MenuRow::Entry(action) => Some(*action),
+                MenuRow::Separator => None,
+            })
+            .collect();
+        assert!(
+            entries.len() >= 3,
+            "the fixture needs several groups to cross"
+        );
+
+        assert_eq!(menu.selected_action(), Some(entries[0]));
+        for expected in &entries[1..] {
+            menu.step(true);
+            assert_eq!(menu.selected_action(), Some(*expected));
+        }
+        // At the last entry, stepping further stops rather than wrapping.
         menu.step(true);
-        assert_eq!(menu.selected_action(), Some(Action::RevealRootHere));
-        menu.step(true);
-        assert_eq!(menu.selected_action(), Some(Action::RevealRootHere));
+        assert_eq!(menu.selected_action(), entries.last().copied());
+        for expected in entries.iter().rev().skip(1) {
+            menu.step(false);
+            assert_eq!(menu.selected_action(), Some(*expected));
+        }
         menu.step(false);
-        assert_eq!(menu.selected_action(), Some(Action::Open));
-        menu.step(false);
-        assert_eq!(menu.selected_action(), Some(Action::Open));
+        assert_eq!(menu.selected_action(), Some(entries[0]));
 
         menu.go_to_edge(false);
-        assert_eq!(menu.selected_action(), Some(Action::RevealRootHere));
+        assert_eq!(menu.selected_action(), entries.last().copied());
         menu.go_to_edge(true);
-        assert_eq!(menu.selected_action(), Some(Action::Open));
+        assert_eq!(menu.selected_action(), Some(entries[0]));
     }
 
     #[test]
     fn the_highlight_never_lands_on_a_separator() {
         let mut menu = menu_at(0, 0);
-        menu.highlight(1); // the rule between the two groups
-        assert_eq!(menu.selected_action(), Some(Action::Open));
+        let first_entry = menu.action_at(0).expect("row 0 is an entry");
+        menu.highlight(1); // the rule between the first two groups
+        assert_eq!(
+            menu.selected_action(),
+            Some(first_entry),
+            "a rule does not take the highlight"
+        );
+        let after = menu.action_at(2).expect("row 2 is an entry");
         menu.highlight(2);
-        assert_eq!(menu.selected_action(), Some(Action::RevealRootHere));
+        assert_eq!(menu.selected_action(), Some(after));
     }
 
     #[test]
@@ -349,10 +373,15 @@ mod tests {
         assert_eq!(layout.height, 4, "clamped to the pane");
         assert_eq!(layout.visible_rows(), 2, "two rows inside the frame");
         assert_eq!(menu.scroll(), 0);
-        // The last entry is row 2, which does not fit in two rows from 0.
+        // The last entry does not fit in two rows from the top.
+        let last = menu.rows().len() - 1;
         menu.go_to_edge(false);
         menu.layout(0, 0, 40, 4);
-        assert_eq!(menu.scroll(), 1, "the highlight is scrolled into view");
+        assert_eq!(
+            menu.scroll(),
+            last + 1 - layout.visible_rows(),
+            "the highlight is scrolled into view"
+        );
     }
 
     /// A click on the rule between two groups must do nothing. `highlight`
@@ -363,8 +392,15 @@ mod tests {
         let menu = menu_at(0, 0);
         assert_eq!(menu.action_at(0), Some(Action::Open));
         assert_eq!(menu.action_at(1), None, "the rule between the groups");
-        assert_eq!(menu.action_at(2), Some(Action::RevealRootHere));
+        assert!(menu.action_at(2).is_some(), "the next group's first entry");
         assert_eq!(menu.action_at(99), None);
+        // Whatever the menu holds, a rule never carries an action.
+        for (index, row) in menu.rows().iter().enumerate() {
+            assert_eq!(
+                menu.action_at(index).is_none(),
+                matches!(row, MenuRow::Separator)
+            );
+        }
     }
 
     #[test]
@@ -372,10 +408,12 @@ mod tests {
         let mut menu = menu_at(0, 0);
         menu.go_to_edge(false);
         let layout = menu.layout(0, 0, 40, 4);
-        assert_eq!(menu.scroll(), 1);
-        // The first visible row is now row 1, the separator.
-        assert_eq!(menu.hit(layout, layout.x, layout.y + 1), Some(1));
-        assert_eq!(menu.hit(layout, layout.x, layout.y + 2), Some(2));
+        assert!(menu.scroll() > 0, "the last entry forced a scroll");
+        // The visible window now starts at the scroll offset, and a hit maps
+        // through it rather than from the top of the menu.
+        let top = menu.scroll();
+        assert_eq!(menu.hit(layout, layout.x, layout.y + 1), Some(top));
+        assert_eq!(menu.hit(layout, layout.x, layout.y + 2), Some(top + 1));
     }
 
     #[test]
@@ -386,6 +424,7 @@ mod tests {
         assert_eq!(menu.hit(layout, layout.x, layout.y), None);
         assert_eq!(menu.hit(layout, layout.x, layout.y + 1), Some(0));
         assert_eq!(menu.hit(layout, layout.x, layout.y + 3), Some(2));
+        assert_eq!(menu.action_at(1), None, "row 1 is the rule");
         assert_eq!(
             menu.hit(layout, layout.x, layout.y + layout.height - 1),
             None,

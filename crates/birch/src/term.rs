@@ -52,9 +52,15 @@ pub type Term = Terminal<CrosstermBackend<TermOut>>;
 /// Written raw because crossterm's `EnableMouseCapture` bundles a fixed set of
 /// modes and offers no way to add this one on its own.
 pub fn set_motion_tracking(terminal: &mut Term, on: bool) {
-    let sequence: &[u8] = if on { b"\x1b[?1003h" } else { b"\x1b[?1003l" };
+    write_raw(terminal, if on { b"\x1b[?1003h" } else { b"\x1b[?1003l" });
+}
+
+/// Writes bytes straight to the terminal. Used for sequences crossterm has no
+/// command for — motion tracking above, and the OSC 52 clipboard write, which
+/// is built in `birch_core::clipboard` and can only be delivered from here.
+pub fn write_raw(terminal: &mut Term, bytes: &[u8]) {
     let writer = terminal.backend_mut();
-    let _ = writer.write_all(sequence);
+    let _ = writer.write_all(bytes);
     let _ = writer.flush();
 }
 

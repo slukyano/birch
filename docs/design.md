@@ -98,7 +98,6 @@ Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and 
 | `Delete` | Delete (to trash) |
 | `Ctrl-N` | New file / dir |
 | `Ctrl-F` | Content search source |
-| `Ctrl-Shift-C` | Copy relative path |
 | `Ctrl-C` | Quit (`q` is a search character like any other) |
 
 Printable characters are permanently reserved for search — no letter hotkeys, ever. The context menu is the primary surface for everything else; hotkeys above are accelerators shown in the menu.
@@ -121,7 +120,7 @@ Rename…               F2     (029)
 Delete                ⌦      (029)
 ──────────
 Copy Name                    (028)
-Copy Relative Path    ^⇧C    (028)
+Copy Relative Path           (028)
 Copy Absolute Path           (028)
 ──────────
 Reveal Root Here
@@ -192,7 +191,7 @@ Exactly four: **rename, delete, new file, new dir.** No move (see below), no cop
 
 ## Copy name / paths
 
-Three variants (context menu; relative path also on `Ctrl-Shift-C`):
+Three variants, on the context menu. **No accelerator**: `Ctrl-Shift-C` cannot be bound, because in the key encoding birch decodes with `Shift` has no representation alongside a control character — it is the same byte as `Ctrl-C`, which quits. Reaching for copy would quit birch. Making it possible needs the Kitty keyboard protocol (`091-kitty-keyboard-protocol`).
 
 - **Copy Name** — `NewThing.tsx`
 - **Copy Relative Path** — relative to the **birch root** (not cwd; root-relative is what you're looking at)
@@ -200,11 +199,15 @@ Three variants (context menu; relative path also on `Ctrl-Shift-C`):
 
 Raw paths, no quoting/escaping magic (guessing the paste context is a losing game). On a compacted chain: tail's path; segment-click reaches intermediates.
 
-**Clipboard mechanics**, in fallback order:
+With several rows selected, a copy joins them with newlines, in tree order.
 
-1. **OSC 52** — terminal sets the clipboard; works over SSH and inside tmux (`set-clipboard on`); native in ghostty. First because the flagship environment is exactly where subprocess clipboards fail silently.
-2. Native fallback — `pbcopy` / `wl-copy` / `xclip`.
-3. Last resort — print to status line.
+**Clipboard mechanics.** **One transport per copy, chosen from the environment** — never two written together, so a clipboard manager sees one event and nothing fights another process for an X11 selection. OSC 52 is a one-way write with no reply, so a *reactive* chain cannot be built: there is no failure to observe and react to.
+
+1. **A remote session** (`$SSH_TTY`) takes **OSC 52** — the only transport that reaches the terminal the user is sitting at. A native tool there writes a clipboard nobody will ever paste from.
+2. **Otherwise the first native tool available** — `pbcopy`, else `wl-copy` under Wayland, else `xclip`/`xsel` under X11. This is not a backstop: Apple Terminal does not support OSC 52 at all.
+3. **With no native tool**, OSC 52 — whose silence costs nothing there, since there is nothing to fall back to.
+
+The status line then confirms what was copied. It is not a fallback tier: nothing here can know that a copy failed.
 
 "Resolve selected node → name/relpath/abspath" is one primitive with three transports: clipboard (menu), stdout (`--pick`), socket (`get-path`).
 

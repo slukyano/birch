@@ -118,7 +118,7 @@ trigger at all — a gap that grows with every action this sprint adds to it.
 
 # Checklist
 
-- [ ] 028-add-copy-paths
+- [x] 028-add-copy-paths — implemented, gates green, verified against a real clipboard
 - [ ] 092-open-the-menu-from-the-keyboard
 - [ ] 029-add-file-operations
 - [ ] 034-add-open-with

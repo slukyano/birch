@@ -5,6 +5,7 @@
 //! compiler-enforces the real-tree/render split (see `docs/design.md`).
 
 pub mod action;
+pub mod clipboard;
 pub mod config;
 pub mod files_source;
 pub mod filter;
