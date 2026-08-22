@@ -14,89 +14,77 @@ alternatives come from (config?) before it can be scheduled; post-MVP.
 
 ## Design
 
-The whole task is one product decision — where the alternatives come from — and everything else
-follows from it cheaply, because birch already has an open primitive and a template contract.
+The task was filed as *"Open with…"* with an open question about where a list of alternatives comes
+from. **There is no list.** Maintainer decision: the menu offers exactly two ways to open, and
+neither needs configuring.
 
-### Where the alternatives come from: the config file
-
-`birch.toml` ([ADR 0022](../../docs/adr/0022-config-file.md)) gains an `open_with` array. Each entry
-is a label and a command template using **exactly the contract `--open-cmd` already defines** — `{}`
-for the path, `{line}` where a line is known, and a `detached` flag for commands that are not tty
-programs:
-
-```toml
-[[open_with]]
-label = "Zed"
-cmd = "zed {}"
-detached = true
-
-[[open_with]]
-label = "Hex editor"
-cmd = "hx {}"
+```
+Open nvim
+Open system
 ```
 
-**Not the operating system's handler list.** macOS LaunchServices and Linux `.desktop` handlers would
-need no setup, which is their whole appeal, but they fail both halves of the identity test
-([ADR 0028](../../docs/adr/0028-the-identity-is-the-scope-fence.md)). The explorer panel this
-identity names lists *editors and viewers*, not every application registered for a MIME type — and a
-list of thirty GUI applications does not survive a thirty-column pane. Querying them also means
-shelling out to platform tools that are slow, differently named per platform, and absent on the
-remote machines birch is often run on.
+### Two rows, no submenu, no config
 
-Reusing the `--open-cmd` contract means no second template language, no new escaping rules, and that
-a user who has already written an open command knows how to write this one.
+- **`Open <command>`** is the existing `Open` action, relabelled to say what it will actually run.
+  Today the row says `Open` and the user has to know what birch was started with; naming the command
+  makes the menu describe the product instead of describing a category.
+- **`Open system`** hands the path to the platform opener — `open` on macOS, `xdg-open` on Linux —
+  detached, so it never takes the terminal. It is the one alternative that is universally useful and
+  universally available, which is exactly why it needs no configuration to name it.
 
-### No submenu: each entry is a menu entry
+A configurable array of alternatives is **not built**. Nobody has asked for a third way to open a
+file, and a config surface is far more expensive to change later than to add later.
 
-`docs/design.md` sketches a single `Open with…` row, whose ellipsis implies a second level. **This
-design flattens it**: each configured entry becomes its own row in its own group — `Open in Zed`,
-`Open in Hex editor` — and there is no nested menu.
+### Where the label comes from
 
-The reason is proportion. A submenu is new machinery — its own geometry, its own keyboard traversal,
-its own edge cases at the pane's edges — for a list the user curates by hand and which is therefore
-short. Flat entries need none of it, and read better besides: the menu says what will happen instead
-of promising a further choice. If a list ever grows past a handful, a submenu can be added later
-**without changing the config surface**, which is the part that would be expensive to get wrong.
+The command is already resolved at startup: `--open-cmd`, else the `open_cmd` config key, else
+`$VISUAL`, else `$EDITOR`, else the platform opener (`docs/design.md`, Opening files). The row shows
+the **program name** — the template's first word — rather than the whole template, because
+`nvim +{line} {}` truncated into a narrow pane reads as noise while `nvim` identifies it exactly.
+The menu's existing ellipsis handles a program name too long for the pane.
 
-**With no `open_with` configured, nothing appears.** The action is unavailable and an unavailable
-action is absent (ADR 0029), so the default menu is exactly what it is today. There is no empty
-submenu and no greyed row advertising a feature the user has not set up.
+Two cases keep the plain `Open` label, because no command runs:
 
-**This narrows `docs/design.md`'s menu sketch**, whose `Open with… (later)` row is replaced by a note
-that configured entries appear as their own rows.
+- **on a directory**, where `Open` toggles expansion;
+- **in `--pick`**, where `Open` confirms the selection.
 
-### Availability
+### When `Open system` is absent
 
-- **Exactly one target.** Opening several files in several applications is not this feature.
-- **Unavailable in `--pick`**, where `Open` means *confirm* and handing the path to another program
-  instead would defeat the mode.
-- **Unavailable when `open_with` is empty**, which is the default.
+**When the resolved open command already *is* the platform opener** — nothing configured, no
+`$VISUAL`, no `$EDITOR` — the two rows would do the same thing, so the second is unavailable and
+does not render (ADR 0029). The menu never shows two entries that are one entry.
+
+**In `--pick`**, `Open system` is unavailable too: `Open` there means *confirm*, and a second row
+that launches an application while the picker keeps waiting is a mode confusion, not a feature.
+
+### Arity
+
+**One target** — the cursor — for both rows, exactly as `Open` behaves today. Opening several files
+means several processes, which is a different action and not one this task proposes.
 
 ### Public-surface delta
 
 | surface | change |
 |---|---|
-| config key | **`open_with`** — an array of `{ label, cmd, detached }` tables, `cmd` using the `--open-cmd` template contract |
-| menu | one row per configured entry, in its own group |
-| CLI flags · environment variables | none |
+| menu | `Open` is relabelled with the resolved program name on files; **`Open system`** is added |
+| CLI flags · **config keys** · environment variables | **none** — the config array considered earlier is not built |
 | socket / protocol | none |
-| on-disk paths / formats | none beyond the config key |
-| library API | `birch_core::action` gains one variant carrying the entry's index |
+| on-disk paths / formats | none |
+| library API | `birch_core::action` gains `OpenSystem`; `Action::label` stops being a `&'static str` for `Open`, which now depends on its target |
 
 ### Implementation
 
-- **`crates/birch-core/src/config.rs`** — the `open_with` array, parsed tolerantly like every other
-  key: a malformed entry is dropped rather than failing the load.
-- **`crates/birch-core/src/action.rs`** — `Action::OpenWith(usize)`, indexing the configured list;
-  its label comes from the entry rather than from a `&'static str`, which is the first action whose
-  label is not a constant.
-- **`crates/birch/src/app.rs`** — a `perform` arm building an `OpenCmd` from the entry and reusing
-  `perform_open` unchanged, so tty handover and detached spawning behave exactly as `--open-cmd`
-  does.
+- **`crates/birch-core/src/action.rs`** — the `OpenSystem` variant and its availability; `label`
+  gains the context it needs to name the command, which is the first label that is not a constant.
+- **`crates/birch-core/src/open_cmd.rs`** — the platform opener as a constructible `OpenCmd`
+  (`open` / `xdg-open`, detached), which `default_cmd` already knows how to pick and can now expose.
+- **`crates/birch/src/app.rs`** — a `perform` arm reusing `perform_open` unchanged, so detached
+  spawning behaves exactly as it does for `--open-detached`.
+- **`docs/design.md`** — the menu sketch's `Open with… (later)` row is replaced by the two rows.
 
 ### Tests and verification
 
-Unit: config parsing including a malformed entry being dropped; availability with an empty list, with
-several targets, and in `--pick`; the label coming from the entry; the template resolving `{}` and
-`{line}` identically to `--open-cmd`. Hands-on: configure two entries, open each from the menu, and
-confirm one hands over the terminal while the `detached` one does not.
+Unit: the label showing the program name on a file, staying `Open` on a directory and in `--pick`;
+`Open system` unavailable when the resolved command is already the platform opener, and in `--pick`;
+the platform opener resolving per target OS. Hands-on: with `$EDITOR` set, open a file both ways from
+the menu and confirm the first hands over the terminal while `Open system` does not.
