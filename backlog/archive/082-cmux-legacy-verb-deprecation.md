@@ -2,7 +2,7 @@
 type: Task
 title: birch-cmux calls a deprecated cmux verb
 description: The adapter uses `cmux list-workspaces`, which now prints a deprecation notice; the canonical form is `cmux workspace list`.
-status: Draft
+status: Dropped
 priority: low
 ---
 
@@ -38,3 +38,8 @@ of the calls (`current-window`, `tree`, `events`, `open`, `workspace create`, `w
 are already canonical.
 
 Worth pairing with any other cmux-CLI drift found by then, rather than spending a commit alone.
+
+## Dropped
+
+Folded into [`083`](../tasks/083-birch-cmux-does-three-things.md), which rewrites the call site anyway. Two
+tasks editing the same line is worse than one.

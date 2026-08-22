@@ -52,7 +52,11 @@ okf_version: "0.1"
 * [Add "Open with…" to the context menu](tasks/034-add-open-with.md) - Choose an alternative open command for the selected node.
 * [Verify the herdr integration live](tasks/035-verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
 * [Support the standard navigation keys](tasks/081-standard-navigation-keys.md) - PgUp/PgDn/Home/End are dead keys; bind them, deciding selection-vs-viewport paging and what they mean under a live search.
-* [birch-cmux calls a deprecated cmux verb](tasks/082-cmux-legacy-verb-deprecation.md) - `cmux list-workspaces` now warns; move to `cmux workspace list`. Cosmetic today - the notice is on stderr and stdout still parses.
+* [birch-cmux does three things](tasks/083-birch-cmux-does-three-things.md) - Socket, birch, watcher; the watcher owns root and open command, the preview verb goes, and the unreachable fallbacks go with it.
+* [The cmux follow watcher outlives the birch it serves](tasks/084-follow-watcher-outlives-birch.md) - Nothing signals the backgrounded watcher, so it forks a cmux call and a python3 per workspace switch forever.
+* [An open command that fails says nothing](tasks/085-report-open-cmd-failures.md) - birch discards a non-zero exit from --open-cmd, so host adapters have no failure channel at all.
+* [ADR 0016 describes a Dock coupling the code does not have](tasks/086-adr-0016-window-scoped-framing.md) - birch-cmux is window-scoped, not dock-scoped; and the ADR's Dock facts have aged out.
+* [birch-tmux and birch-herdr bake a raw $0 into --open-cmd](tasks/087-tmux-herdr-bake-raw-argv0.md) - Resolve argv[0] in the Rust carrier so all three adapters inherit it.
 
 # Publication
 
@@ -126,3 +130,5 @@ so outside the `docs/design.md` scope fence.
 * [Verify the cmux integration live](archive/080-verify-cmux-integration-live.md) - Nine assertions against a throwaway cmux; counter-checked to fail on the pre-fix adapter.
 
 # Dropped
+
+* [birch-cmux calls a deprecated cmux verb](archive/082-cmux-legacy-verb-deprecation.md) - Folded into 083, which rewrites the call site anyway.
