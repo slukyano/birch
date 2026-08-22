@@ -165,8 +165,9 @@ Filed during the sprint and deliberately not scoped into it. Informational; no a
 
 # Bugs found and fixed
 
-**Fourteen, all from the independent review** — a fresh reviewer with no implementation context,
-reading the whole diff and running the gates itself (`a8a7404`). Three risked data:
+**Fifteen: fourteen from the independent review, one from the maintainer's own hands.** The
+reviewer was fresh, with no implementation context, and read the whole diff and ran the gates itself
+(`a8a7404`). Three of its findings risked data:
 
 1. **Dragging moved files in `--pick`**, the one place mutations are promised impossible. The gesture bypasses `Action::available`, so nothing enforced it; a script using `birch --pick` as a chooser could rearrange the tree if the pointer wandered.
 2. **The delete safety gate had two holes**, both toward less friction. An ignored path is never in git's status map, and is exactly what git cannot bring back. And `dir_status` is a most-severe-wins rollup, so a folder holding one modified tracked file masked every untracked file beside it — selecting such a folder and pressing `Delete` skipped the prompt entirely.
@@ -189,6 +190,22 @@ below came to be fixed rather than shipped.
 13. Native clipboard children were never reaped, so `pbcopy` and `wl-copy` piled up as zombies. Waiting inline would hang on `xclip`, which stays resident to serve the X11 selection, so a thread does the waiting.
 14. Two dead parameters kept only to satisfy a signature.
 
+The fifteenth came from **using birch**, and no review would have found it, because the code read
+exactly as intended (`981f2df`). The first right-click opened the menu and every one after it went
+to the terminal, in both ghostty and cmux. Closing the menu wrote `CSI ?1003l` to release motion
+tracking it believed it had switched on — but crossterm's `EnableMouseCapture` already requests
+1003 alongside 1000, 1002, 1015 and 1006, so the enable was a no-op while the disable dropped
+reporting below the level the terminal had been told to use, and the terminal took the pointer
+back. `DisableMouseCapture` ends with `?1003l` too, so the leak the sprint-020 review found and
+patched in `restore` was never a leak either.
+
+The mechanism was **removed rather than repaired**: the motion events it tried to decline were
+arriving throughout, before this sprint and after it, so the tree pays for them either way. That
+makes `090-hover-highlight-in-the-tree` cheaper than it was written to be — the wake-ups are
+already spent, and only the redraw is unbudgeted — and its notes now say so. The rule that replaces
+it is recorded on `term::enter`: the mode set is chosen once, and nothing turns a mouse mode off
+while birch runs.
+
 # Verification
 
 Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, 328 tests (316 before the
@@ -203,6 +220,7 @@ Hands-on, all run and observed:
 - **`029`** — on disk: `Ctrl-N` made nested intermediates and a trailing-slash directory, `F2` renamed, and `Delete` asked before acting — `Esc` left the file alone, `Enter` moved it to the trash.
 - **`034`** — a scripted open command wrote a marker file when the menu's first row was invoked. `Open system` is **not** driven: it would launch a real application on the machine running the check.
 - **`072`** — real SGR press, drag and release moved `a.txt` into `sub`; a second drag onto a directory already holding that name was refused with the file left where it was.
+- **The mouse-capture fix** — two right-clicks driven over a pty, with every byte birch emitted between them inspected: `?1003l` before the fix, no mouse-mode reset after it. The harness cannot show the *symptom*, only the cause — a pty relay forwards mouse reports whatever mode is set, which is exactly why a real terminal was needed to notice at all.
 - **`vhs` frames** of the two new visual states, which caught two things the driven checks could not: the inline edit field sat two columns left of every name around it, and the delete confirmation overran an 80-column pane entirely. The prompt was shortened and front-loaded — but at roughly 50 columns it **still truncates in the 30-column pane birch is designed for**, which no wording fixes: a file name, a question, and a key do not fit. What survives the cut is the question, which is the half that matters.
 
 # Remaining limitations and highlights
