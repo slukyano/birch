@@ -71,10 +71,28 @@ Both survive the legacy key encoding birch decodes with, which is the constraint
 |---|---|---|
 | **`Shift-F10`** | yes — function keys travel as CSI sequences (`CSI 21;2~`) that *do* carry a modifier parameter | **bound.** It is the Windows and Linux convention for "context menu", so it is the one a user is most likely to try. |
 | **`Menu` / `Apps`** (`KeyCode::Menu`) | yes, where the keyboard has the key | **bound too.** Semantically exact and free — binding it costs one match arm, and it does nothing on keyboards that lack it. Apple keyboards lack it, which is why it cannot be the only binding. |
-| `Ctrl-Space` | yes, as `NUL` → `Char(' ')` with `CONTROL` | **not bound.** It arrives, but it reads as nothing in particular, and `Ctrl`-modified keys are the scarce space [`091`](091-kitty-keyboard-protocol.md) would open up — spending one on a gesture that already has a conventional key is the wrong trade. |
+| `Ctrl-Space` | yes, as `NUL` → `Char(' ')` with `CONTROL` | **not bound.** macOS binds it to "Select the previous input source" by default, so it may never reach the terminal at all. |
+| any other `Ctrl`+letter | yes | **not bound**, by decision — see below. |
 
 Two bindings for one action is not a hedge here: they are the same convention on different
 keyboards, and neither collides with anything birch binds.
+
+**On a Mac both need `Fn`, and that is accepted.** Apple keyboards have no `Menu` key, and the top
+row defaults to media functions — `F10` is Mute — so the gesture is `Fn`-`Shift`-`F10` unless
+*Use F1, F2, etc. keys as standard function keys* is enabled, after which it is plain `Shift`-`F10`.
+macOS offers no convention to match instead: unlike Windows, it has **no** system shortcut for
+opening a contextual menu, so there is nothing to be consistent with.
+
+A third binding on a `Ctrl`+letter would work on a stock Mac with no configuration, and is
+**deliberately not added**. `Ctrl`-modified keys are the scarcest space birch has — printables are
+permanently reserved ([ADR 0008](../../docs/adr/0008-q-types-into-search.md)), `Cmd` is not
+expressible in the key encoding birch decodes with at all
+([`091`](091-kitty-keyboard-protocol.md)), and `Alt` is unreliable on macOS because Option produces
+special characters unless the terminal is configured otherwise. `Ctrl-C`, `Ctrl-N`, and `Ctrl-F` are
+already spent; the rest is the whole budget for every future accelerator, and `029`'s rename field
+puts readline's `Ctrl-A`/`E`/`K`/`W`/`U` out of reach on top of that. Spending one of the few
+remaining on a gesture that already has two conventional keys is the wrong trade — pressing `Fn` is
+a smaller cost than a binding birch can never get back.
 
 ### Where it opens, and what it must not disturb
 

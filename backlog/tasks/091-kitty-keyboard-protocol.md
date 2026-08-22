@@ -17,10 +17,19 @@ So the `Ctrl-Shift-C` accelerator the design doc gave Copy Relative Path was not
 undeliverable — binding it would have quit birch when a user reached for copy. It was dropped, and
 the copy actions live on the menu.
 
-The **Kitty keyboard protocol** encodes modifiers explicitly, including `Shift` with a control
-character, and ghostty supports it. Adopting it would make `Ctrl-Shift-C` and its neighbours real
-bindings — which matters more than one accelerator, because printable characters are permanently
-reserved for search, and `Ctrl`-modified keys are most of the binding space birch has left.
+The **Kitty keyboard protocol** encodes modifiers explicitly, and ghostty supports it. Adopting it
+would make `Ctrl-Shift-C` and its neighbours real bindings — which matters more than one accelerator,
+because printable characters are permanently reserved for search, and `Ctrl`-modified keys are most
+of the binding space birch has left.
+
+**It is also the only route to `Cmd` at all.** The legacy encoding's modifier bitset carries Shift,
+Alt, Ctrl and Meta — where Meta means Option, not Command — so there is no byte sequence that says
+`Cmd`-anything. It is not that terminals withhold it; they have no way to transmit it. The Kitty
+protocol's bitset includes `super`, which is what ghostty calls `Cmd` in its own configuration
+(`super`, aliased `cmd` and `command`). Whether ghostty forwards an *unbound* `Cmd` chord to the
+application once the protocol is active is unverified, and macOS terminals claim a large share of
+them for their own commands — `super+c` copy, `super+v` paste, font size, and more — so the gain
+here is a question to measure, not a certainty.
 
 ## What a design has to answer
 
