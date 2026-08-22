@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: The actions the menu was built for
-status: Implementing
+status: Done
 branch: sprint/021
 tasks:
 - 028-add-copy-paths
@@ -115,6 +115,121 @@ depends on nothing here, and `029`, which the rest of the sprint waits on.
 **Scope amended after the sprint opened**, by maintainer decision:
 `092-open-the-menu-from-the-keyboard` was added once it became clear the menu has no keyboard
 trigger at all — a gap that grows with every action this sprint adds to it.
+
+Branch `sprint/021`, base `main`. Nine commits on top of the approved design merge; 20 files,
++3107/−128. 328 tests pass; `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`
+clean.
+
+**This is the sprint where birch began writing to the user's filesystem.** Everything before it read
+the tree, painted it, and reported paths; a wrong answer was wrong on screen. From here a wrong
+answer is wrong on disk, and both the design and the review were weighted accordingly.
+
+# Task ledger
+
+Weight is size **and** importance **and** future impact together.
+
+| task | weight | what it is |
+|---|---|---|
+| `029-add-file-operations` | **major** | The op layer and the inline editor: `F2` renames, `Ctrl-N` creates (a trailing slash makes a directory, and intermediates come with it), `Delete` moves the selection to the platform trash. Renaming to a path moves. Delete asks only where neither trash nor git reaches. Delivered as designed; the watcher-ownership worry the task carried dissolved on contact with ADR 0006, since a snapshot reconciles rather than appends. |
+| `072-drag-to-move` | **major** | Drag a row onto a directory to move it. A drag is a click that left its row, so ADR 0025's model already tracks it with no threshold. Delivered as designed — and spring-loading turned out to need no carve-out, because the never-auto-expand rule is scoped to *ignored* directories and search already auto-expands. |
+| `028-add-copy-paths` | **mid** | Copy name, root-relative path, or absolute path, newline-joined in tree order for several rows. One clipboard transport per copy, chosen the way Neovim chooses it. Two changes from what `docs/design.md` sketched: the three-tier fallback cannot be built, because OSC 52 is a one-way write with no failure to react to; and `Ctrl-Shift-C` is **dropped**, being the same byte as `Ctrl-C`, which quits. |
+| `092-open-the-menu-from-the-keyboard` | **mid** | `Shift-F10` and the `Menu` key open the menu at the cursor row without disturbing the selection. **Added to scope after the sprint opened**, once it was clear the menu had exactly one trigger and a host that swallows right-click made it unreachable. |
+| `034-add-open-with` | **minor** | `Open` names the program it will run, and `Open system` hands the path to the desktop's handler. Rewritten during design from the task's "Open with…" framing: the config array and the submenu were both dropped in favour of two rows and **no config surface at all**. |
+
+All five were delivered; none was dropped or reduced.
+
+# Breaking changes
+
+**None.** No output, wire format, or on-disk format changed — `protocol.rs` is untouched, `--pick`
+output is unchanged, and no persisted format moved. Five keys that were previously **unbound** gain
+meanings: `F2`, `Ctrl-N`, `Delete`, `Shift-F10`, and the `Menu` key. `Esc` gains two layers, backing
+out of a confirmation and an edit before the menu, the search, and quitting.
+
+The documented `Ctrl-Shift-C` accelerator is **removed from the design doc**, having never worked:
+in the key encoding birch decodes with, `Shift` has no representation alongside a control character.
+
+# Backlog changes
+
+Filed during the sprint and deliberately not scoped into it. Informational; no approval is asked.
+
+| task | why it exists |
+|---|---|
+| `091-kitty-keyboard-protocol` (`Draft`) | The legacy encoding cannot represent `Shift` with a control character — nor `Cmd` at all — so `Ctrl-Shift-C` and every `Cmd` chord are unreachable. Adopting the Kitty protocol changes how *every* key is decoded, so it is its own task. |
+| `093-undo-a-file-operation` (`Draft`) | After this sprint only delete has a way back, through the trash. Rename, move, and create have none. Reversing `docs/design.md`'s "no op-history/undo stack" is its own argument with its own ADR. |
+
+# Architectural decisions
+
+- **ADR 0030** — the inline editor is birch's only mode. ADR 0008 is read as it was always meant: printables go to whatever text field is focused, and an edit focuses a different one, so no letter becomes a command. The editor is a paint-time overlay that never touches the tree, so an abandoned edit leaves nothing behind and no watcher suppression is needed. Confirmations answer to `Enter` and `Esc`, never `y`/`n`.
+- **ADR 0031** — delete goes to trash, and confirmation appears only where neither trash nor git reaches. Tracked paths delete immediately, untracked confirm once, an unavailable trash confirms saying the delete is permanent, and a trash failure is never silently upgraded.
+- **ADR 0032** — files move by dragging, and rename-to-a-path stays as the keyboard route. The original "no move" argument was right about capability and wrong about discovery: nothing on screen suggests a name field accepts `../`, and it cannot move a multi-selection at all.
+
+# Bugs found and fixed
+
+**Fourteen, all from the independent review** — a fresh reviewer with no implementation context,
+reading the whole diff and running the gates itself (`a8a7404`). Three risked data:
+
+1. **Dragging moved files in `--pick`**, the one place mutations are promised impossible. The gesture bypasses `Action::available`, so nothing enforced it; a script using `birch --pick` as a chooser could rearrange the tree if the pointer wandered.
+2. **The delete safety gate had two holes**, both toward less friction. An ignored path is never in git's status map, and is exactly what git cannot bring back. And `dir_status` is a most-severe-wins rollup, so a folder holding one modified tracked file masked every untracked file beside it — selecting such a folder and pressing `Delete` skipped the prompt entirely.
+3. **Renaming a compacted chain pre-filled the row's label** (`a/b/c`) while the editor's path is the tail, so committing resolved against the tail's parent — usually a baffling error, and where the intermediate directory existed, a directory moved somewhere nobody asked for.
+
+And a fourth of a different kind: **spring-loading and edge auto-scroll were documented as shipped
+and were absent from the binary.** A patch script aborted on an assertion before writing and the
+loss went unnoticed; an audit of that batch then found a second silent no-op, which is how finding 4
+below came to be fixed rather than shipped.
+
+4. A multi-row drag could not see collisions **inside its own set**, so two selected rows sharing a basename both passed and the move half-applied.
+5. `ops::trash` and `delete_permanently` discarded the deltas for paths they had already removed, so a partial removal left the tree showing rows whose files were gone — and then offered a permanent-delete prompt over paths already in the trash, which would have deleted nothing.
+6. A **case-only rename was impossible** on macOS: `exists()` resolves case-insensitively, so `readme.md` → `README.md` read as a collision with itself.
+7. `exists()` also follows symlinks, so a **dangling link at a destination was silently replaced**, contradicting "nothing here overwrites".
+8. `open_is_platform` compared only the program name, so `$VISUAL="open -a Preview"` hid `Open system`.
+9. A `create` could **climb out of its directory** and write a file no row could ever show.
+10. A trailing space hid a trailing slash, giving a file where a directory was asked for.
+11. A phantom row one line past the viewport left the editor **open and invisible** — exactly what ADR 0030 admits the mode for not being.
+12. A whitespace-only name was dropped in silence.
+13. Native clipboard children were never reaped.
+14. Two dead parameters kept only to satisfy a signature.
+
+# Verification
+
+Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, 328 tests (316 before the
+review round). The reviewer's list of uncovered branches is closed — the delete safety gate had no
+test at all, and neither did the picker refusal, the partial removal, the within-set collision,
+spring-loading, or the `Esc` layering order.
+
+Hands-on, all run and observed:
+
+- **`028`** — a sentinel placed in the real clipboard first, then copying a two-row selection from the menu left `src\na.txt` in it, with OSC 52 correctly unused on a local session that has `pbcopy`.
+- **`092`** — `Shift-F10` in a pty opened a layer, proven by birch surviving the following `Esc`, with the selection undisturbed.
+- **`029`** — on disk: `Ctrl-N` made nested intermediates and a trailing-slash directory, `F2` renamed, and `Delete` asked before acting — `Esc` left the file alone, `Enter` moved it to the trash.
+- **`034`** — a scripted open command wrote a marker file when the menu's first row was invoked. `Open system` is **not** driven: it would launch a real application on the machine running the check.
+- **`072`** — real SGR press, drag and release moved `a.txt` into `sub`; a second drag onto a directory already holding that name was refused with the file left where it was.
+- **`vhs` frames** of the two new visual states, which caught two things the driven checks could not: the inline edit field sat two columns left of every name around it, and the delete confirmation was too long for an 80-column pane, let alone the 30-column one birch is designed for.
+
+# Remaining limitations and highlights
+
+- **birch now writes to the filesystem, and there is no undo.** The trash is delete's way back and it lives outside birch; rename, move, and create have none. `093-undo-a-file-operation` holds this.
+- **On an Apple keyboard the key labelled *Delete* sends Backspace**, which belongs to the search, so deleting is `Fn`-`Delete`. Binding Backspace to a destructive action whose meaning depended on whether a search was open would be a contextual hazard; the menu is the discoverable path.
+- **`Shift-F10` needs `Fn` on a Mac** unless standard function keys are enabled, and the `Menu` key does not exist on Apple keyboards. macOS has no contextual-menu shortcut of its own to match instead, and no `Ctrl`+letter was spent — that space is the scarcest birch has.
+- **Edge auto-scroll during a drag needs the pointer to keep moving.** Holding still at the pane's edge does not keep scrolling, because motion events only arrive when the pointer moves; a timer would be machinery this event loop needs for nothing else.
+- **A drop refuses rather than offering a new name.** `029`'s editor makes that possible later; a drop that sometimes opens a text field is a surprising drop.
+- **Which mouse modifiers arrive is the terminal's decision.** ghostty's `mouse-shift-capture` defaults to `false`, so `Shift`-click never reaches birch there. Nothing in the behaviour depends on the answer.
+- **A very large copy may be truncated.** Terminals and tmux cap OSC 52 payloads, and birch neither chunks nor warns — consistent with the design's position that nothing here can know a copy failed.
+
+# Session log
+
+- Scoped and cut: `028`, `029`, `034`, `072`. Branch `sprint/021` cut from `main`.
+- **Scope amended after opening**: `092-open-the-menu-from-the-keyboard` added by maintainer
+  decision, once it was clear the menu had exactly one trigger.
+- Design: five questions answered — the clipboard transport (settled on Neovim's shape after
+  surveying yazi, Helix, nnn and broot), dropping `Ctrl-Shift-C`, the menu's keyboard binding,
+  `034` rewritten to two rows with no config surface, and the scope amendment. ADRs 0030, 0031
+  and 0032 proposed and accepted.
+- Implementation: `028` and `092` first, being independent of the op layer; then `029`, which the
+  rest waited on; then `034` and `072`.
+- Close-out: gates green (fmt, clippy, 328 tests, hands-on verification of all five tasks,
+  publication hygiene). The independent review found **fourteen** defects, three of which risked
+  data, and one feature documented as shipped that was absent from the binary because a patch
+  script aborted before writing. All fixed on the branch.
 
 # Checklist
 
