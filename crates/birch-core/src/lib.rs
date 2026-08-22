@@ -11,6 +11,7 @@ pub mod files_source;
 pub mod filter;
 pub mod git;
 pub mod open_cmd;
+pub mod ops;
 pub mod persist;
 pub mod protocol;
 pub mod search;
