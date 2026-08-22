@@ -5,6 +5,7 @@ status: Designing
 branch: sprint/021
 tasks:
 - 028-add-copy-paths
+- 092-open-the-menu-from-the-keyboard
 - 029-add-file-operations
 - 034-add-open-with
 - 072-drag-to-move
@@ -34,6 +35,13 @@ trash over confirmation, and a drag that cannot be mistaken for a click.
   `pbcopy`/`wl-copy`/`xclip` as native fallback and the status line as last resort. Three menu
   entries and the `Ctrl-Shift-C` accelerator. Open for design: what a failed copy says, since OSC 52
   fails silently by nature — a clipboard that quietly did nothing is worse than one that refused.
+- **`092-open-the-menu-from-the-keyboard`** — *medium, mid.* Added to scope after the sprint opened.
+  The menu has exactly one trigger — the right button — so a host that consumes right-click before it
+  reaches birch makes the menu unreachable there entirely, and there is no keyboard way in at all.
+  That gap costs little today, when the menu holds two entries; by the end of this sprint it hides
+  Copy, New File, Rename, and Delete. Open for design: which key (printables are reserved, so
+  `Ctrl-Space`, `Shift-F10`, and the `Menu` key are the candidates), where the menu appears when no
+  pointer placed it, and whether a keyboard trigger disturbs the selection — it should not.
 - **`029-add-file-operations`** — *medium, design-heavy.* The op layer: rename, delete-to-trash, new
   file, new dir, as **inline row editing** rather than a prompt bar (prompt bars grow verbs).
   Git-aware delete — a tracked file is nearly free and recoverable, an untracked one gets friction
@@ -55,7 +63,10 @@ trash over confirmation, and a drag that cannot be mistaken for a click.
 
 - **`028` first** — it needs nothing from the op layer, and it exercises the new action layer end to
   end with an action that cannot destroy anything.
-- **`029` second** — it is the op layer the two remaining tasks ride on.
+- **`092` early, and independent of the rest** — it touches the menu's trigger, not its contents, so
+  it neither waits on the op layer nor blocks it. Landing it early means every action this sprint
+  adds is reachable from the keyboard the day it arrives, rather than retrofitted at the end.
+- **`029` next** — it is the op layer the two remaining tasks ride on.
 - **`034` and `072` after `029`** — `034` adds an entry beside `Open`; `072` needs the mutation path
   and the watcher ownership `029` builds.
 
@@ -97,9 +108,14 @@ trash over confirmation, and a drag that cannot be mistaken for a click.
 Scope committed to `main`; branch `sprint/021` cut from it. The design phase opens with `028`, which
 depends on nothing here, and `029`, which the rest of the sprint waits on.
 
+**Scope amended after the sprint opened**, by maintainer decision:
+`092-open-the-menu-from-the-keyboard` was added once it became clear the menu has no keyboard
+trigger at all — a gap that grows with every action this sprint adds to it.
+
 # Checklist
 
 - [ ] 028-add-copy-paths
+- [ ] 092-open-the-menu-from-the-keyboard
 - [ ] 029-add-file-operations
 - [ ] 034-add-open-with
 - [ ] 072-drag-to-move

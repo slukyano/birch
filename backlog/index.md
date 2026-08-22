@@ -59,6 +59,7 @@ okf_version: "0.1"
 * [A keyboard way to build a discontiguous selection](tasks/089-keyboard-toggle-for-multi-select.md) - Shift with the arrows extends a contiguous range; nothing on the keyboard toggles one row in or out.
 * [Hover highlight in the tree](tasks/090-hover-highlight-in-the-tree.md) - Motion tracking so the row under the pointer lights up; the context menu enables it only for its own lifetime.
 * [Adopt the Kitty keyboard protocol where the terminal supports it](tasks/091-kitty-keyboard-protocol.md) - The legacy encoding cannot represent Shift with a control character, so Ctrl-Shift-C is the same byte as Ctrl-C.
+* [Open the context menu from the keyboard](tasks/092-open-the-menu-from-the-keyboard.md) - The menu has exactly one trigger, the right button; a host that swallows right-click makes it unreachable.
 
 # Publication
 
