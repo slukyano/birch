@@ -28,7 +28,7 @@ okf_version: "0.1"
 * [Sprint 018 — Branch state, and critical fixes](sprints/sprint-018.md) - Done.
 * [Sprint 019 — The cmux integration, finished](sprints/sprint-019.md) - Done.
 * [Sprint 020 — Multi-select and the action surface](sprints/sprint-020.md) - Done.
-* [Sprint 021 — The actions the menu was built for](sprints/sprint-021.md) - Designing.
+* [Sprint 021 — The actions the menu was built for](sprints/sprint-021.md) - Done.
 
 # Tasks
 
@@ -39,17 +39,13 @@ okf_version: "0.1"
 * [Add a "random" theme](tasks/065-random-theme.md) - --theme random resolves to a randomly chosen built-in theme at launch.
 * [Support animated gradient colours](tasks/066-animated-gradient-themes.md) - Moving colour bands (rainbow left-to-right); needs a frame clock, focus-aware pausing, strictly opt-in.
 * [Show how much a filter actually matches](tasks/070-show-filter-match-counts.md) - Per-folder or total match counts, so a filtered browse knows where to go.
-* [Move files and folders by dragging](tasks/072-drag-to-move.md) - Drag a row onto a directory to move it; arguable since ADR 0028, against the File operations section's own "No move".
 * [Show a hotkey reference](tasks/073-hotkey-reference.md) - In-app discoverability: always-on footer vs. summoned overlay, with `?` unavailable (printables are search).
 * [Support multiple roots](tasks/026-add-multiple-roots.md) - Sibling roots in one instance; needs design.
-* [Add copy name and paths](tasks/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
 
 
-* [Add file operations](tasks/029-add-file-operations.md) - Rename/delete/new inline ops with git-aware delete; context menu split to 071, copy paths to 028.
 * [Add the content search source](tasks/030-add-content-search.md) - Ctrl-F swaps the pane's source to files-with-matches, built on the ripgrep crates.
 * [Add the Git Changes source](tasks/032-add-git-changes-source.md) - A third source listing changed files, reusing the source-as-delta-stream interface.
 * [Add the Project View source](tasks/033-add-project-view-source.md) - A curated/virtual tree source, reusing the source-as-delta-stream interface.
-* [Add "Open with…" to the context menu](tasks/034-add-open-with.md) - Choose an alternative open command for the selected node.
 * [Verify the herdr integration live](tasks/035-verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
 * [birch-cmux does three things](tasks/083-birch-cmux-does-three-things.md) - Socket, birch, watcher; the watcher owns root and open command, the preview verb goes, and the unreachable fallbacks go with it.
 * [The cmux follow watcher outlives the birch it serves](tasks/084-follow-watcher-outlives-birch.md) - Nothing signals the backgrounded watcher, so it forks a cmux call and a python3 per workspace switch forever.
@@ -59,7 +55,6 @@ okf_version: "0.1"
 * [A keyboard way to build a discontiguous selection](tasks/089-keyboard-toggle-for-multi-select.md) - Shift with the arrows extends a contiguous range; nothing on the keyboard toggles one row in or out.
 * [Hover highlight in the tree](tasks/090-hover-highlight-in-the-tree.md) - Motion tracking so the row under the pointer lights up; the context menu enables it only for its own lifetime.
 * [Adopt the Kitty keyboard protocol where the terminal supports it](tasks/091-kitty-keyboard-protocol.md) - The legacy encoding cannot represent Shift with a control character, so Ctrl-Shift-C is the same byte as Ctrl-C.
-* [Open the context menu from the keyboard](tasks/092-open-the-menu-from-the-keyboard.md) - The menu has exactly one trigger, the right button; a host that swallows right-click makes it unreachable.
 * [Undo a file operation](tasks/093-undo-a-file-operation.md) - Sprint 021 makes birch mutate the filesystem; trash covers delete and nothing covers rename, move, or create.
 
 # Publication
@@ -71,6 +66,11 @@ so outside the `docs/design.md` scope fence.
 
 # Done
 
+* [Move files and folders by dragging](archive/072-drag-to-move.md) - Drag a row onto a directory to move it; arguable since ADR 0028, against the File operations section's own "No move".
+* [Add copy name and paths](archive/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
+* [Add file operations](archive/029-add-file-operations.md) - Rename/delete/new inline ops with git-aware delete; context menu split to 071, copy paths to 028.
+* [Add "Open with…" to the context menu](archive/034-add-open-with.md) - Choose an alternative open command for the selected node.
+* [Open the context menu from the keyboard](archive/092-open-the-menu-from-the-keyboard.md) - The menu has exactly one trigger, the right button; a host that swallows right-click makes it unreachable.
 * [Add the context menu](archive/071-add-context-menu.md) - The right-click action surface, split out of the 0.5 bundle so it can land before the ops it hosts.
 * [Support multi-selection](archive/074-add-multi-selection.md) - Shift/Ctrl range and toggle, mouse and keyboard; admitted by ADR 0028.
 * [Support the standard navigation keys](archive/081-standard-navigation-keys.md) - PgUp/PgDn/Home/End are dead keys; bind them, deciding selection-vs-viewport paging and what they mean under a live search.

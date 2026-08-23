@@ -22,27 +22,64 @@ question is asked of a set, not a file.
 
 # Decision
 
-**Delete moves to the platform trash. Confirmation appears exactly where neither trash nor git
-reaches.**
+**Delete moves to the platform trash, and never asks.**
+
+*Amended 2026-08-22.* This ADR originally made confirmation conditional: a selection whose every path
+was tracked in git deleted immediately, anything untracked confirmed once, and an unavailable trash
+confirmed that the delete was permanent. Three decisions supported that gate — the judgement was over
+the whole selection, a directory was judged by what it contained, and the answer was `Enter`/`Esc`
+rather than `y`/`n`.
+
+**All of it is withdrawn.** The gate rested on a single claim: that an untracked file, once trashed,
+existed nowhere birch could reach. [ADR 0033](0033-undo-is-a-session-stack.md) made that false —
+`Ctrl-Z` restores a deleted file out of the trash, on every platform birch runs on. A prompt guarding
+a reversible act is friction, and `docs/design.md` had already written the principle down:
+**undoable beats confirmable**. The conditional form was also the worst of it. A prompt that appears
+for some deletes and not others cannot be learned; the user cannot tell, before pressing the key,
+whether one is coming, so it fails as a safety mechanism *and* as a rhythm.
+
+What goes with it: `is_untracked` and its directory walk, `GitState::untracked_under` (added for this
+gate and used by nothing else), the whole confirmation layer, and `Esc`'s outermost layer. Delete now
+reads: move the selection to the trash, say so, and record how to bring it back.
 
 | situation | behaviour |
 |---|---|
-| trash works · every target tracked in git | **delete immediately**, no prompt. Recoverable twice over; a confirmation here is theatre, and theatre is what trains people to dismiss prompts unread. The status line reports what went. |
-| trash works · any target untracked | **confirm once**, naming the count and the reason. An untracked file exists nowhere else, and a trash can be emptied. |
-| trash unavailable | **confirm**, stating plainly that the delete is permanent. Declining does nothing. |
+| trash works | **delete immediately**, no prompt, whatever git knows. The status line says what went. |
+| trash unavailable | **nothing is deleted.** The failure is reported and the delete ends there. |
 
-1. **The judgement is over the whole selection**, not per file: one prompt, naming how many rows and
-   why, rather than a prompt per target.
-2. **A directory is judged by what it contains.** A directory holding any untracked file is treated
-   as untracked, because that is what would be lost.
-3. **Confirmation is `Enter` / `Esc`** on the status line, never `y`/`n`
-   ([ADR 0030](0030-the-inline-editor-is-the-only-mode.md)).
+1. **No confirmation, ever.** Not for untracked content, not for a directory holding it, not outside
+   a repository. Undo is the safety net, and it is a better one than a prompt: it is available after
+   the mistake rather than before it, which is when the mistake is actually recognised.
+2. **The judgement over a selection disappears with the prompt.** A delete takes the whole selection
+   and reports it as one operation, which undo reverses as one step.
+3. **`y`/`n` prompts remain permanently unavailable** ([ADR 0030](0030-the-inline-editor-is-the-only-mode.md)),
+   which now costs nothing, since birch has no prompt here to answer.
 4. **Trash is provided by the `trash` crate**, not by moving files into a folder. The platform
-   behaviour is not a rename: macOS records put-back information, and the XDG specification requires
-   `.trashinfo` records and a per-mount trash directory with its own collision rules. Reimplementing
-   that is a way to lose files quietly.
-5. **Trash failure is never silently upgraded to a permanent delete.** When trash is unavailable the
-   user is told, and the permanent delete happens only on their confirmation.
+   behaviour is not a rename: the XDG specification requires `.trashinfo` records and a per-mount
+   trash directory with its own collision rules. Reimplementing that is a way to lose files quietly.
+
+   *Amended 2026-08-22:* **on macOS birch selects `DeleteMethod::NsFileManager`**, not the crate's
+   `Finder` default. Finder's method runs `osascript -e 'tell application "Finder" to delete …'`,
+   which plays Finder's delete sound on every call and needs Automation permission. That permission
+   can be **denied**, and a denial surfaces as a trash failure — pushing the user into decision 5's
+   "the trash could not take it" failure for a reason that has nothing to do with the trash — and
+   since decision 5's amendment, that failure is the end of the delete rather than a prompt. The cost is Finder's **Put Back**: a trashed file still sits in the
+   trash and can be dragged out, but no longer remembers where it came from. This paragraph
+   originally cited put-back as a reason to prefer the crate; that reason is withdrawn — birch now
+   provides the restore itself, through [ADR 0033](0033-undo-is-a-session-stack.md)'s undo stack,
+   which does not depend on Finder remembering anything. The XDG half stands.
+5. **There is no delete that bypasses the trash** — not as a fallback, not as a deliberate choice.
+   When the trash cannot take a path, birch reports the failure and deletes nothing.
+
+   *Amended 2026-08-22.* This decision originally offered a permanent delete on confirmation when
+   the trash was unavailable, on the reasoning that a user who asked to delete should get an answer
+   rather than a dead end. That was the wrong trade. The whole of this ADR rests on delete being
+   **recoverable** — that is what buys the no-prompt fast path for tracked files, and what makes one
+   prompt enough for untracked ones. A route that removes the recoverability removes the foundation,
+   and it was reachable exactly when birch understood the situation *least*: the trash had already
+   failed for a reason birch could not explain. A failure is a better answer than an irreversible
+   one. `ops::delete_permanently` is deleted rather than left unreachable, so nothing can wire a
+   path back to it by accident.
 
 # Consequences
 
@@ -54,8 +91,12 @@ reaches.**
 - **Deleting is plural.** It is the first action to consume a whole selection, and the first place
   multi-select does something a user could regret — which is why the confirmation reasons about the
   set.
-- **There is no undo inside birch.** The trash is the undo, and it lives outside; the status line
-  therefore has to say what happened and where it went, because nothing in birch can show it.
+- **There is no undo inside birch *for delete*.** The trash is the undo, and it lives outside; the
+  status line therefore has to say what happened and where it went, because nothing in birch can
+  show it. Amended by [ADR 0033](0033-undo-is-a-session-stack.md): birch gained an undo stack, and
+  delete is the one step on it that cannot be reversed — `trash`'s `restore_all` is not compiled on
+  macOS — so `Ctrl-Z` after a delete repeats where the files went rather than reversing something
+  else.
 - **A non-git directory always confirms.** Everything there is untracked by definition. That is
   correct rather than annoying, but it is the case a user meets most often outside a repository.
 

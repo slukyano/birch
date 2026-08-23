@@ -2,7 +2,7 @@
 type: Task
 title: Add copy name and paths
 description: Copy Name / Relative Path / Absolute Path over OSC 52 with fallbacks - split out of the 0.5 bundle.
-status: Designed
+status: Done
 priority: medium
 ---
 

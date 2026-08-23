@@ -319,3 +319,41 @@
   reachable by mouse only) and `090-hover-highlight-in-the-tree` (motion tracking runs for the
   menu's lifetime alone).
 
+## 2026-08-22 (sprint 021)
+
+* **birch writes to the filesystem now.** Rename, create, delete-to-trash, and move-by-dragging —
+  the four operations the context menu was built for, plus the gesture that makes moving
+  discoverable. Everything before this sprint could be wrong on screen; from here it can be wrong on
+  disk, and both the design and the review were weighted for that.
+* **The inline editor is the first mode birch has, and the last it should get.**
+  [ADR 0030](../docs/adr/0030-the-inline-editor-is-the-only-mode.md) reconciles it with the rule
+  that printable characters are search input, by reading that rule as it was always meant: printables
+  go to whatever text field is focused, and an edit focuses a different one, so no letter becomes a
+  command. What makes the mode admissible is that it is self-evident, transient, and singly-exited —
+  a bar a second proposal has to clear rather than argue around. It also forced `y`/`n` prompts out
+  of the product permanently: a letter answering a question is exactly the letter command that is
+  forbidden, so confirmations answer to `Enter` and `Esc`.
+* **Delete has two safety nets, and the friction goes where neither reaches.**
+  [ADR 0031](../docs/adr/0031-delete-goes-to-trash.md): tracked paths delete at once, because a
+  prompt that is right to ignore nine times in ten is ignored the tenth; untracked ask; and an
+  unavailable trash asks again, saying the delete is permanent. A trash failure is never silently
+  upgraded.
+* **"No move" did not survive contact with a maintainer request** — which is what
+  [ADR 0028](../docs/adr/0028-the-identity-is-the-scope-fence.md) made possible by turning it from a
+  fence entry into the section's own decision. [ADR 0032](../docs/adr/0032-move-by-dragging.md)
+  records the argument: rename-to-a-path performs a move and nobody discovers it, and it cannot move
+  a multi-selection at all.
+* **Two documented promises turned out unbuildable and were withdrawn rather than faked.** The
+  clipboard's three-tier fallback cannot be written — OSC 52 is a one-way write with no failure to
+  react to — so birch picks one transport the way Neovim does. And `Ctrl-Shift-C` is the same byte
+  as `Ctrl-C` in the encoding birch decodes with, so binding it would have quit birch when a user
+  reached for copy.
+* **The review earned its place again.** Fourteen findings, three risking data: dragging worked in
+  `--pick` where mutations are promised impossible; the delete confirmation was bypassed for ignored
+  files and for folders whose git rollup masked their untracked contents; and renaming a compacted
+  chain could move a directory somewhere nobody asked for. A fourth was of a different kind —
+  spring-loading was documented as shipped and was absent from the binary, because a patch script
+  aborted on an assertion before writing and the loss went unnoticed.
+* Filed rather than scoped: `091-kitty-keyboard-protocol` (the only route to `Ctrl-Shift-*` and to
+  `Cmd` at all) and `093-undo-a-file-operation` (after this sprint, only delete has a way back).
+

@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 
 use birch_core::action::MenuRow;
 
+use crate::edit::{EditKind, Editor};
 use crate::flat_view::{FlatView, Row};
 use crate::icons;
 use crate::menu::{Menu, MenuLayout};
@@ -229,8 +230,9 @@ pub fn draw_menu(frame: &mut Frame, menu: &Menu, layout: MenuLayout, theme: &The
                     ""
                 };
                 let room = content.saturating_sub(accel.chars().count());
-                let label = truncate(action.label(), room);
-                let pad = room.saturating_sub(label.chars().count());
+                let label = menu.label(index);
+                let text = truncate(&label.text(), room);
+                let pad = room.saturating_sub(text.chars().count());
                 let mut style = canvas;
                 if index == menu.highlighted() {
                     style = style.bg(theme.palette.selection_bg);
@@ -238,8 +240,19 @@ pub fn draw_menu(frame: &mut Frame, menu: &Menu, layout: MenuLayout, theme: &The
                         style = style.fg(fg);
                     }
                 }
+                // The program a row names is drawn dim, so `Open with vim`
+                // reads as an instruction and its parameter rather than as one
+                // compound verb. Split by character count, because truncation
+                // may already have eaten into the name — or all of it.
+                let verb_len = label.verb.chars().count();
+                let split = text
+                    .char_indices()
+                    .nth(verb_len)
+                    .map_or(text.len(), |(at, _)| at);
+                let (verb, subject) = text.split_at(split);
                 let mut spans = vec![
-                    Span::styled(label, style),
+                    Span::styled(verb.to_string(), style),
+                    Span::styled(subject.to_string(), style.add_modifier(Modifier::DIM)),
                     Span::styled(" ".repeat(pad), style),
                 ];
                 if !accel.is_empty() {
@@ -275,7 +288,175 @@ fn truncate(label: &str, width: usize) -> String {
     out
 }
 
-pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bottom_line: &str) {
+/// Paints the inline editor over the tree (ADR 0030) — over the row being
+/// renamed, or as a phantom row under the directory being created in. Drawn
+/// after the tree and before the menu, into the same `Rect`, so the row
+/// geometry underneath is untouched and an edit never shifts the tree.
+///
+/// Returns the caret's screen position, for the caller to place the cursor.
+pub fn draw_edit(
+    frame: &mut Frame,
+    rows: &[Row],
+    view: &FlatView,
+    chrome: Chrome,
+    editor: &Editor,
+) -> Option<(u16, u16)> {
+    let area = frame.area();
+    let geometry = layout(area, chrome, rows.len());
+    let viewport = geometry.viewport;
+    if viewport == 0 {
+        return None;
+    }
+    // A rename draws on its row; a create draws on the line *after* its parent,
+    // which is where the new child will appear.
+    let (anchor, depth, offset) = match editor.kind() {
+        EditKind::Rename { path, .. } => {
+            let index = rows.iter().position(|row| &row.path == path)?;
+            (index, rows[index].depth, 0)
+        }
+        EditKind::Create { parent, .. } => {
+            let index = rows.iter().position(|row| &row.path == parent)?;
+            (index, rows[index].depth + 1, 1)
+        }
+    };
+    let line = anchor.checked_sub(view.scroll)? + offset;
+    if line >= viewport {
+        // A phantom row one line past the bottom would leave the field open and
+        // invisible, which is exactly what ADR 0030 admits the mode for *not*
+        // being. Drawn on the last line instead, over the row beneath it.
+        if offset == 0 || line > viewport {
+            return None;
+        }
+    }
+    let line = line.min(viewport.saturating_sub(1));
+
+    let theme = chrome.theme;
+    // The field starts where a row's *label* does, not where its indent does:
+    // the glyph columns between them are part of the row, and an edit that
+    // ignored them would sit two columns left of every name around it.
+    //
+    // The glyphs come from what the edit *will produce*, not from the row it is
+    // anchored to — so a create shows the icon of the thing being made from its
+    // first character, and a rename's icon follows the extension as it is typed.
+    let (name, node_kind) = editor.preview();
+    let phantom = Row::phantom(name, node_kind, depth);
+    let glyph_spans = glyph_column_spans(theme, chrome.settings, &phantom);
+    let glyphs: usize = glyph_spans
+        .iter()
+        .map(|span| span.content.chars().count())
+        .sum();
+    let x = geometry.tree.x + depth as u16 * INDENT_WIDTH + glyphs as u16;
+    let y = geometry.tree.y + line as u16;
+    let width = geometry.tree.width.saturating_sub(x - geometry.tree.x);
+    if width == 0 {
+        return None;
+    }
+    let field = Rect {
+        x,
+        y,
+        width,
+        height: 1,
+    };
+    // A create needs a *line*, not a row to paint over: without this the field
+    // draws on top of the directory's first child and hides a real file behind
+    // an edit. The tree is untouched (ADR 0030) — the gap is a paint-time
+    // transform, the same kind as compaction and dimming.
+    if offset == 1 {
+        open_gap(frame, area, &geometry, line);
+    }
+    // The glyph columns, drawn for a create (where the gap left them blank) and
+    // redrawn for a rename (where the row underneath still shows the old icon).
+    if glyphs > 0 {
+        let indent = depth as u16 * INDENT_WIDTH;
+        let width = (glyphs as u16).min(geometry.tree.width.saturating_sub(indent));
+        let at = Rect {
+            x: geometry.tree.x + indent,
+            y,
+            width,
+            height: 1,
+        };
+        frame.render_widget(Clear, at);
+        frame.render_widget(Paragraph::new(Line::from(glyph_spans)), at);
+    }
+    let style = Style::default().bg(theme.palette.selection_bg);
+    frame.render_widget(Clear, field);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(editor.buffer().to_string(), style))).style(style),
+        field,
+    );
+    let caret = editor.cursor_chars() as u16;
+    (caret < width).then_some((x + caret, y))
+}
+
+/// Pushes the painted rows from `line` down one, leaving `line` blank. Runs to
+/// the scrollbar and no further, matching the selection wash: the bar is
+/// furniture outside the rows, and sliding it would smear the track.
+fn open_gap(frame: &mut Frame, area: Rect, geometry: &Layout, line: usize) {
+    let bar_width = geometry.bar.map_or(0, |bar| bar.width);
+    let top = geometry.tree.y;
+    let buffer = frame.buffer_mut();
+    for row in (line + 1..geometry.viewport).rev() {
+        for x in area.left()..area.right() - bar_width {
+            let above = buffer[(x, top + row as u16 - 1)].clone();
+            buffer[(x, top + row as u16)] = above;
+        }
+    }
+    for x in area.left()..area.right() - bar_width {
+        buffer[(x, top + line as u16)].reset();
+    }
+}
+
+/// Marks the directory a drag would drop into (ADR 0032). Distinct from the
+/// selection wash — the selection is what is being *moved*, and the two must
+/// not read as the same thing — so this is the accent colour, edge to edge.
+pub fn draw_drop_target(
+    frame: &mut Frame,
+    rows: &[Row],
+    view: &FlatView,
+    chrome: Chrome,
+    directory: &std::path::Path,
+) {
+    let area = frame.area();
+    let geometry = layout(area, chrome, rows.len());
+    if geometry.viewport == 0 {
+        return;
+    }
+    let Some(index) = rows.iter().position(|row| row.path == directory) else {
+        return;
+    };
+    let Some(offset) = index.checked_sub(view.scroll) else {
+        return;
+    };
+    if offset >= geometry.viewport {
+        return;
+    }
+    let y = geometry.tree.y + offset as u16;
+    let accent = chrome.theme.palette.selection_accent;
+    let buffer = frame.buffer_mut();
+    for x in area.left()..area.right() {
+        buffer[(x, y)].set_bg(accent);
+    }
+}
+
+/// What the bottom line is carrying, which decides how loudly it is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BottomKind {
+    /// Chrome: the idle hint, the search counter. Dim, because it is always
+    /// there and competing with the tree would be worse than saying nothing.
+    Idle,
+    /// Something birch is telling the user, which they did not have on screen a
+    /// moment ago — an error, or a report of what an operation did.
+    Message,
+}
+
+pub fn draw(
+    frame: &mut Frame,
+    rows: &[Row],
+    view: &FlatView,
+    chrome: Chrome,
+    bottom_line: &str,
+    bottom_kind: BottomKind,
+) {
     let Chrome {
         settings,
         theme,
@@ -363,8 +544,14 @@ pub fn draw(frame: &mut Frame, rows: &[Row], view: &FlatView, chrome: Chrome, bo
         );
     }
 
+    // Dim is right for chrome and wrong for a message: an error drawn in the
+    // same grey as the idle hint is an error nobody reads.
+    let bottom_style = match bottom_kind {
+        BottomKind::Idle => canvas.add_modifier(Modifier::DIM),
+        BottomKind::Message => canvas,
+    };
     frame.render_widget(
-        Paragraph::new(format!(" {bottom_line}")).style(canvas.add_modifier(Modifier::DIM)),
+        Paragraph::new(format!(" {bottom_line}")).style(bottom_style),
         status_area,
     );
 
@@ -945,6 +1132,7 @@ mod tests {
                     &view,
                     chrome(&Settings::default(), &theme, false),
                     "",
+                    BottomKind::Idle,
                 )
             })
             .unwrap();
@@ -960,6 +1148,124 @@ mod tests {
         );
         // And the rest of the row still washes, edge to edge.
         assert_eq!(buffer[(39, 0)].bg, theme.palette.selection_bg);
+    }
+
+    #[test]
+    fn the_phantom_row_carries_the_icon_the_entry_will_have() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let theme = theme();
+        let rows = vec![row("src", NodeKind::Dir, 0)];
+        let view = FlatView::default();
+        let settings = Settings::default();
+
+        let glyphs_for = |input: &str| {
+            let mut editor = Editor::create(PathBuf::from("/r").join("src"), false);
+            for c in input.chars() {
+                editor.insert(c);
+            }
+            let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        &rows,
+                        &view,
+                        chrome(&settings, &theme, false),
+                        "",
+                        BottomKind::Idle,
+                    );
+                    draw_edit(
+                        frame,
+                        &rows,
+                        &view,
+                        chrome(&settings, &theme, false),
+                        &editor,
+                    );
+                })
+                .unwrap();
+            (0..12)
+                .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
+                .collect::<String>()
+        };
+
+        let rust = glyphs_for("main.rs");
+        let python = glyphs_for("main.py");
+        let folder = glyphs_for("sub/");
+        assert_ne!(
+            rust, python,
+            "the icon follows the extension as it is typed: {rust:?} vs {python:?}"
+        );
+        assert_ne!(
+            rust, folder,
+            "and a trailing slash makes it a folder: {rust:?} vs {folder:?}"
+        );
+    }
+
+    #[test]
+    fn a_create_pushes_the_rows_below_it_down_instead_of_painting_over_one() {
+        // The field used to draw on the line after its parent, which is the
+        // directory's *first child* — a real file, hidden behind an edit.
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let theme = theme();
+        let rows = vec![
+            row("src", NodeKind::Dir, 0),
+            row("first.rs", NodeKind::File, 1),
+            row("second.rs", NodeKind::File, 1),
+        ];
+        let view = FlatView::default();
+        let editor = Editor::create(PathBuf::from("/r").join("src"), false);
+        let settings = Settings::default();
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &rows,
+                    &view,
+                    chrome(&settings, &theme, false),
+                    "",
+                    BottomKind::Idle,
+                );
+                draw_edit(
+                    frame,
+                    &rows,
+                    &view,
+                    chrome(&settings, &theme, false),
+                    &editor,
+                );
+            })
+            .unwrap();
+
+        let line = |y: u16| {
+            (0..40)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                .collect::<String>()
+        };
+        assert!(
+            line(0).contains("src"),
+            "the parent stays put: {:?}",
+            line(0)
+        );
+        assert!(
+            !line(1).contains("first.rs"),
+            "the gap is where the field goes: {:?}",
+            line(1)
+        );
+        assert!(
+            line(2).contains("first.rs"),
+            "the first child moved down rather than being covered: {:?}",
+            line(2)
+        );
+        assert!(
+            line(3).contains("second.rs"),
+            "and everything below it followed: {:?}",
+            line(3)
+        );
     }
 
     #[test]
@@ -1528,7 +1834,16 @@ mod tests {
         let column_of = |branch_axis: bool| {
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             terminal
-                .draw(|frame| draw(frame, &rows, &view, chrome(&settings, &th, branch_axis), ""))
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        &rows,
+                        &view,
+                        chrome(&settings, &th, branch_axis),
+                        "",
+                        BottomKind::Idle,
+                    )
+                })
                 .unwrap();
             let buffer = terminal.backend().buffer();
             let at = |x: u16| buffer[(x, 0)].symbol().to_string();
@@ -1579,7 +1894,14 @@ mod tests {
                 let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
                 terminal
                     .draw(|frame| {
-                        draw(frame, &rows, &view, chrome(&settings, &th, branch_axis), "")
+                        draw(
+                            frame,
+                            &rows,
+                            &view,
+                            chrome(&settings, &th, branch_axis),
+                            "",
+                            BottomKind::Idle,
+                        )
                     })
                     .unwrap();
                 let buffer = terminal.backend().buffer();
@@ -1631,7 +1953,16 @@ mod tests {
             };
             let mut terminal = Terminal::new(TestBackend::new(30, 3)).unwrap();
             terminal
-                .draw(|frame| draw(frame, &rows, &view, chrome(&settings, &th, true), ""))
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        &rows,
+                        &view,
+                        chrome(&settings, &th, true),
+                        "",
+                        BottomKind::Idle,
+                    )
+                })
                 .unwrap();
             let buffer = terminal.backend().buffer();
             (0..30u16)
@@ -1706,6 +2037,7 @@ mod tests {
                                     &view,
                                     chrome(&settings, &theme, branch_axis),
                                     "",
+                                    BottomKind::Idle,
                                 )
                             })
                             .unwrap();
@@ -1737,6 +2069,7 @@ mod tests {
                     &view,
                     chrome(&Settings::default(), &theme, false),
                     "",
+                    BottomKind::Idle,
                 )
             })
             .unwrap();

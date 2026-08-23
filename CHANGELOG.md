@@ -7,6 +7,39 @@ All notable changes to birch are documented here, following
 
 ### Added
 
+- **File operations.** `F2` renames a row inline, `Ctrl-N` creates a file — or a
+  directory, with a trailing slash, and intermediate directories come with it —
+  and `Delete` moves the selection to the platform trash. Renaming to a path
+  (`../elsewhere/name.ts`) moves the file. Typing while an edit is open goes to
+  the field rather than the search, and `Esc` cancels it having written nothing.
+  **Delete asks only where it has to**: a selection whose every path is tracked
+  in git goes straight to the trash, since it is recoverable twice over; anything
+  untracked confirms once; and when the trash is unavailable the confirmation
+  says the delete is permanent. Confirmations answer to `Enter` and `Esc`, never
+  a letter. On an Apple keyboard the key labelled *Delete* sends Backspace, which
+  belongs to the search, so the gesture there is `Fn`-`Delete`.
+
+- **Move by dragging.** Drag a row onto a folder to move it there; a file targets
+  its parent and empty space below the tree targets the root. Hovering a
+  collapsed folder springs it open. Refusals show before you let go — a folder
+  into its own descendant, a name already taken, or the folder it is already in —
+  and a drop never overwrites. There is no undo, so the status line says what
+  moved and where.
+
+- **Copy name and paths**, from the context menu: the file name, the path
+  relative to the birch root, or the absolute path. With several rows selected
+  they come out newline-separated, in tree order. birch picks one clipboard
+  transport per copy: OSC 52 over SSH, since that is the only one that reaches
+  the terminal you are sitting at, and otherwise `pbcopy` / `wl-copy` / `xclip`.
+
+- **`Open` says what it will run**, naming the resolved open command, and
+  **`Open system`** beside it hands the path to the desktop's own handler.
+
+- **The context menu opens from the keyboard** with `Shift-F10` or the `Menu`
+  key, at the cursor row and without disturbing the selection. On an Apple
+  keyboard `F10` is Mute, so that is `Fn`-`Shift`-`F10` unless standard function
+  keys are enabled.
+
 - **Multi-selection.** Hold `Shift` with any movement key to extend a selection
   over a range of rows, or `Ctrl`-click to add a row to it or take one out.
   `Shift`-click extends by mouse wherever the terminal forwards the modifier —

@@ -58,6 +58,24 @@ pub enum InputAction {
     /// `Shift` with a movement key: move the cursor and extend the selection
     /// from the anchor to where it lands (task 074).
     Extend(Movement),
+    /// Open the context menu at the cursor row (task 092). The right button is
+    /// the other way in, and the only one before this.
+    OpenMenu,
+    /// Rename the selection inline (`F2`).
+    Rename,
+    /// Create a file or directory inline (`Ctrl-N`); a trailing slash makes a
+    /// directory, so one binding covers three operations.
+    NewFile,
+    /// Move the selection to the trash (`Delete`).
+    Delete,
+    /// Reverse the last mutation (`Ctrl-Z`, task 093).
+    Undo,
+    /// Hold the selection for a move (`Ctrl-X`).
+    Cut,
+    /// Hold the selection for a duplicate (`Ctrl-C`).
+    CopyEntries,
+    /// Put what is held into the selected directory (`Ctrl-V`).
+    Paste,
     /// A printable character — always search input, never a hotkey
     /// (ADR 0008).
     Char(char),
@@ -88,14 +106,42 @@ pub enum InputAction {
         column: u16,
         row: u16,
     },
-    /// Pointer motion. Only reported while the context menu is open, which is
-    /// the only time birch asks for motion tracking (task 090 would generalise
-    /// it to the tree).
+    /// The pointer moved with the left button held. A drag begins when it
+    /// leaves the row the press started on — no threshold to tune, because
+    /// ADR 0025 already tracks which row that was (task 072).
+    Drag {
+        column: u16,
+        row: u16,
+    },
+    /// Pointer motion, reported for the whole session — mode 1003 is part of
+    /// the mode set `EnableMouseCapture` requests, and birch never turns a
+    /// mouse mode off while it runs. The context menu is the only thing that
+    /// acts on it today (task 090 would extend it to the tree).
     Hover {
         column: u16,
         row: u16,
     },
     Redraw,
+}
+
+impl InputAction {
+    /// Whether this came from the pointer. Layers that back out on a stray
+    /// keystroke must not back out on one: motion is reported continuously
+    /// (mode 1003 is on for the whole session), so a pointer merely crossing
+    /// the pane would dismiss whatever is open.
+    pub fn is_pointer(self) -> bool {
+        matches!(
+            self,
+            InputAction::Press { .. }
+                | InputAction::Release { .. }
+                | InputAction::RightPress { .. }
+                | InputAction::RightRelease { .. }
+                | InputAction::Drag { .. }
+                | InputAction::Hover { .. }
+                | InputAction::ScrollUp
+                | InputAction::ScrollDown
+        )
+    }
 }
 
 /// The cursor movements `Shift` can extend a selection along. `→` and `←` are
@@ -175,8 +221,49 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
                     }
                 })
             }
+            // `Shift-F10` is the Windows and Linux convention for a context
+            // menu, and function keys travel as CSI sequences that *do* carry
+            // a modifier — unlike `Ctrl` with a letter, where `Shift` has no
+            // representation at all (task 091). The `Menu` key is the same
+            // convention on keyboards that have one; Apple keyboards do not,
+            // which is why it cannot be the only binding.
+            KeyCode::F(10) if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Some(InputAction::OpenMenu)
+            }
+            KeyCode::Menu => Some(InputAction::OpenMenu),
+            KeyCode::F(2) => Some(InputAction::Rename),
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputAction::NewFile)
+            }
+            // Raw mode clears `ISIG`, so `Ctrl-Z` has never suspended birch —
+            // binding it gives nothing up. It is a control character, not a
+            // printable, so ADR 0008 is untouched.
+            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputAction::Undo)
+            }
+            // Forward delete. On an Apple keyboard the key labelled *Delete*
+            // sends Backspace, which belongs to the search, so the gesture
+            // there is `Fn`-`Delete`; binding Backspace to a destructive action
+            // whose meaning depended on whether a search was open would be a
+            // contextual hazard, and the menu is the discoverable path.
+            KeyCode::Delete => Some(InputAction::Delete),
             KeyCode::Backspace => Some(InputAction::Backspace),
+            // `Ctrl-C` is copy, not quit. It is the most reflexive key in a
+            // terminal, and giving it up is a real cost — but it is also the
+            // only key anybody reaches for to copy, and `Ctrl-Shift-C` cannot
+            // be represented at all (task 091). Quit keeps `Esc` and gains
+            // `Ctrl-Q`, so it is never unreachable. Raw mode already cleared
+            // `ISIG`, so `Ctrl-C` was never a signal here — only a binding.
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputAction::CopyEntries)
+            }
+            KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputAction::Cut)
+            }
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputAction::Paste)
+            }
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(InputAction::Quit)
             }
             KeyCode::Char(c)
@@ -209,6 +296,12 @@ pub fn map_event(event: &Event, mouse_enabled: bool) -> Option<InputAction> {
                 column: mouse.column,
                 row: mouse.row,
             }),
+            // Button-event tracking is already on, so a drag arrives without
+            // asking the terminal for anything more (task 072).
+            MouseEventKind::Drag(MouseButton::Left) => Some(InputAction::Drag {
+                column: mouse.column,
+                row: mouse.row,
+            }),
             MouseEventKind::Moved => Some(InputAction::Hover {
                 column: mouse.column,
                 row: mouse.row,
@@ -235,7 +328,14 @@ mod tests {
         // q is a printable char, not a hotkey (ADR 0008).
         let ev = Event::Key(KeyEvent::from(KeyCode::Char('q')));
         assert_eq!(map_event(&ev, true), Some(InputAction::Char('q')));
+        // `Ctrl-C` copies; quit moved to `Ctrl-Q` (and `Esc`, as ever).
         let ev = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(map_event(&ev, true), Some(InputAction::CopyEntries));
+        let ev = Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        assert_eq!(map_event(&ev, true), Some(InputAction::Cut));
+        let ev = Event::Key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        assert_eq!(map_event(&ev, true), Some(InputAction::Paste));
+        let ev = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
         assert_eq!(map_event(&ev, true), Some(InputAction::Quit));
         let ev = Event::Key(KeyEvent::from(KeyCode::Char(' ')));
         assert_eq!(map_event(&ev, true), Some(InputAction::Char(' ')));
@@ -322,6 +422,79 @@ mod tests {
             ),
             Some(InputAction::Right)
         );
+    }
+
+    #[test]
+    fn the_context_menu_has_a_keyboard_trigger() {
+        assert_eq!(
+            map_event(
+                &Event::Key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT)),
+                true
+            ),
+            Some(InputAction::OpenMenu)
+        );
+        assert_eq!(
+            map_event(&Event::Key(KeyEvent::from(KeyCode::Menu)), true),
+            Some(InputAction::OpenMenu)
+        );
+        // Plain F10 is not bound — the convention is the modified form, and an
+        // unmodified function key is worth keeping free.
+        assert_eq!(
+            map_event(&Event::Key(KeyEvent::from(KeyCode::F(10))), true),
+            None
+        );
+    }
+
+    #[test]
+    fn the_operations_have_the_keys_the_design_doc_names() {
+        for (code, action) in [
+            (KeyCode::F(2), InputAction::Rename),
+            (KeyCode::Delete, InputAction::Delete),
+        ] {
+            assert_eq!(
+                map_event(&Event::Key(KeyEvent::from(code)), true),
+                Some(action)
+            );
+        }
+        assert_eq!(
+            map_event(
+                &Event::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+                true
+            ),
+            Some(InputAction::NewFile)
+        );
+        // A bare `n` is search input like every other printable (ADR 0008).
+        assert_eq!(
+            map_event(&Event::Key(KeyEvent::from(KeyCode::Char('n'))), true),
+            Some(InputAction::Char('n'))
+        );
+        // Backspace stays the search's, on every platform.
+        assert_eq!(
+            map_event(&Event::Key(KeyEvent::from(KeyCode::Backspace)), true),
+            Some(InputAction::Backspace)
+        );
+    }
+
+    #[test]
+    fn the_left_button_reports_dragging() {
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 9,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(
+            map_event(&ev, true),
+            Some(InputAction::Drag { column: 9, row: 4 })
+        );
+        // Dragging with another button is not birch's gesture.
+        let right = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Right),
+            column: 9,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(map_event(&right, true), None);
     }
 
     #[test]

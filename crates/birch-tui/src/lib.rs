@@ -5,6 +5,7 @@
 //! The view-model (`flat_view`) lives here per ADR 0003 but is pure logic
 //! with no ratatui types, so it stays unit-testable without a terminal.
 
+pub mod edit;
 pub mod flat_view;
 pub mod icons;
 pub mod input;

@@ -44,6 +44,8 @@ panel the identity names.
    directories, and search already auto-expands. A normal directory opens on hover; an ignored one
    stays shut while remaining a legal target.
 5. **There is no undo**, here or anywhere in birch. The status line reports what moved and where.
+   *Amended by [ADR 0033](0033-undo-is-a-session-stack.md):* `Ctrl-Z` takes a drop back, and a
+   multi-row drag is one step rather than one per row.
 
 # Consequences
 

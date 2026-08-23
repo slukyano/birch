@@ -63,6 +63,37 @@ pub struct Row {
     pub last_sibling: bool,
 }
 
+impl Row {
+    /// A row that stands for an edit in progress rather than anything on disk
+    /// — the phantom row a create draws, or a rename's row as it will look once
+    /// committed. Everything a real row carries from the filesystem or from git
+    /// is absent, because none of it is known yet.
+    pub fn phantom(name: String, kind: NodeKind, depth: usize) -> Self {
+        Self {
+            path: PathBuf::new(),
+            name,
+            kind,
+            depth,
+            expanded: false,
+            loaded: false,
+            chain: Vec::new(),
+            status: None,
+            in_branch: false,
+            ignored: false,
+            missing: false,
+            live: true,
+            matched: false,
+            pickable: false,
+            match_indices: Vec::new(),
+            annotation: None,
+            // The guides belong to the row it is drawn beside; a phantom
+            // borrows them from its anchor rather than inventing a spine.
+            guides: Vec::new(),
+            last_sibling: false,
+        }
+    }
+}
+
 /// What a navigation action asks the app to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NavEffect {

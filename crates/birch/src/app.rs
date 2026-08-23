@@ -14,15 +14,18 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use birch_core::action::{Action, ActionContext, ActionTarget};
+use birch_core::action::{Action, ActionContext, ActionTarget, CopyForm};
+use birch_core::clipboard;
 use birch_core::git::{self, GitCmd, GitEvent, GitState};
+use birch_core::ops;
 use birch_core::protocol::{PathForm, Request, Response, SettingKey, SettingValue, Verb};
 use birch_core::search::{self, IndexCmd, IndexEvent, Match, SearchIndex, search};
 use birch_core::watcher::{WatchCmd, WatchEvent};
 use birch_core::{
     Filter, NodeKind, OpenCmd, OpenMode, Settings, SourceCmd, SourceEvent, ThemeId, Tree,
-    TreeDelta, persist, settings,
+    TreeDelta, persist, settings, undo,
 };
+use birch_tui::edit::{EditKind, Editor};
 use birch_tui::flat_view::{self, Decor, FlatView, NavEffect, Row, SelectionSnapshot};
 use birch_tui::input::{self, InputAction};
 use birch_tui::menu::Menu;
@@ -131,6 +134,28 @@ struct App {
     /// Keyed on the row, not the cell, so a pointer that drifts a column
     /// between press and release still opens the menu (ADR 0025).
     armed_right: Option<Option<PathBuf>>,
+    /// The open inline editor: birch's only mode (ADR 0030). While one is open
+    /// printables reach it rather than the search, because they go to whatever
+    /// text field is focused.
+    edit: Option<Editor>,
+    /// A selection held for a paste: the paths, and whether pasting moves them
+    /// or duplicates them. Session-only and single-slot, like every clipboard.
+    pending: Option<Pending>,
+    /// `pending` described, kept beside it so building an `ActionContext`
+    /// borrows a string instead of formatting one.
+    pending_label: Option<String>,
+    /// What birch has done that it can take back (task 093). Session-only: it
+    /// goes with the process, by design rather than by omission.
+    history: undo::History,
+    /// The next step's description, kept beside the history so building an
+    /// `ActionContext` — which happens on every menu open and every hotkey —
+    /// borrows a string instead of formatting one.
+    undo_label: Option<String>,
+    /// A drag in flight: the paths being moved, and the directory currently
+    /// under the pointer. A drag begins when the pointer leaves the row the
+    /// press started on — ADR 0025 already tracks which row that was, so there
+    /// is no threshold to tune (ADR 0032).
+    drag: Option<Drag>,
     /// A `Shift` extension waiting for its match reveal to converge. The range
     /// is painted once, when the cursor lands, rather than every frame.
     pending_extend: bool,
@@ -222,6 +247,81 @@ where
     }
 }
 
+/// A move in flight.
+struct Drag {
+    /// What is being moved, resolved when the drag began.
+    paths: Vec<PathBuf>,
+    /// The directory under the pointer, and whether it will accept the drop.
+    /// `None` means the pointer is somewhere that is not a target at all.
+    target: Option<DropTarget>,
+}
+
+struct DropTarget {
+    directory: PathBuf,
+    refusal: Option<String>,
+}
+
+/// A selection held for a paste. `duplicate` is what tells a cut from a copy;
+/// nothing else about them differs.
+struct Pending {
+    paths: Vec<PathBuf>,
+    duplicate: bool,
+}
+
+/// What performing an action leaves for the caller to do. `perform` stays free
+/// of the terminal — opening a file hands the tty over, and an OSC 52 copy is a
+/// sequence only the render layer can write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Performed {
+    Nothing,
+    /// A file the caller should open with the configured command.
+    Open(PathBuf),
+    /// A path the caller should open with a specific command — the platform
+    /// opener, for `Open system`.
+    OpenWith(PathBuf, OpenCmd),
+    /// An escape sequence the caller should write to the terminal.
+    Write(String),
+}
+
+/// Names a set of paths for a message: one by name, several by count.
+/// The path a delta announced. How the app learns what an operation actually
+/// produced, without the op layer growing a second return value for undo's
+/// benefit — and it is the *announced* path, so a create that made
+/// `a/b/c.txt` from nothing reports `a`, which is what taking it back means.
+fn added_path(delta: &TreeDelta) -> Option<PathBuf> {
+    match delta {
+        TreeDelta::Added { parent, entries } => {
+            entries.first().map(|entry| parent.join(&entry.name))
+        }
+        _ => None,
+    }
+}
+
+fn describe(paths: &[PathBuf]) -> String {
+    match paths {
+        [one] => one.file_name().map_or_else(
+            || one.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        many => format!("{} items", many.len()),
+    }
+}
+
+/// What was copied, for the status line. The count matters and the form is what
+/// distinguishes three otherwise identical actions.
+fn copied_message(count: usize, form: CopyForm) -> String {
+    let what = match form {
+        CopyForm::Name => "name",
+        CopyForm::Relative => "relative path",
+        CopyForm::Absolute => "absolute path",
+    };
+    if count == 1 {
+        format!("Copied {what}")
+    } else {
+        format!("Copied {count} {what}s")
+    }
+}
+
 /// What an input asks of the open menu. Keeps the decision separable from the
 /// I/O it implies, so every branch is testable without a terminal.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -299,6 +399,12 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathB
         click_timer: input::ClickTimer::default(),
         menu: None,
         armed_right: None,
+        edit: None,
+        history: undo::History::default(),
+        undo_label: None,
+        pending: None,
+        pending_label: None,
+        drag: None,
         pending_extend: false,
         armed_press: None,
         last_rematch: None,
@@ -488,7 +594,13 @@ impl App {
         }
         self.status.clear(); // status messages are transient
 
-        // The menu is a layer over the tree, so it sees input first (ADR 0029).
+        // Layers see input before the tree, outermost first: an edit, then the
+        // menu. `Esc` therefore backs out of them in that order (ADR 0012,
+        // extended by ADR 0030).
+        if self.edit.is_some() {
+            self.handle_edit_input(action);
+            return false;
+        }
         if self.menu.is_some() {
             return self.handle_menu_input(terminal, events, action);
         }
@@ -667,6 +779,10 @@ impl App {
                 self.arm_press(&rows, hit);
                 NavEffect::None
             }
+            InputAction::Drag { column, row } => {
+                self.update_drag(area(terminal), &rows, column, row);
+                NavEffect::None
+            }
             InputAction::Release {
                 column,
                 row,
@@ -684,7 +800,14 @@ impl App {
                     column,
                     row,
                 );
-                self.resolve_release(&rows, hit, modifier, Instant::now())
+                // A drag in flight ends here rather than completing a click:
+                // the press was consumed by the gesture.
+                if self.drag.is_some() {
+                    self.finish_drag();
+                    NavEffect::None
+                } else {
+                    self.resolve_release(&rows, hit, modifier, Instant::now())
+                }
             }
             // The press only arms: the menu opens on the release, on the row
             // the press started on — the left button's rule with no exception
@@ -696,22 +819,53 @@ impl App {
             InputAction::RightRelease { column, row } => {
                 let armed = self.armed_right.take();
                 let released = self.right_target(area(terminal), &rows, column, row);
-                if armed.is_some()
-                    && armed == released
-                    && self.open_menu(&rows, armed.flatten(), column, row)
-                {
-                    // A menu that does not light the entry under the pointer
-                    // cannot be used with a mouse; the tree does not pay the
-                    // event volume the rest of the time (task 090).
-                    if self.settings.mouse {
-                        term::set_motion_tracking(terminal, true);
-                    }
+                if armed.is_some() && armed == released {
+                    self.open_menu(&rows, armed.flatten(), column, row);
                 }
                 NavEffect::None
             }
-            // Motion is only ever reported while the menu is open, and the
-            // menu handles its own input above.
+            // The open menu consumes hover above, to light the entry under
+            // the pointer. Nothing else follows the pointer yet (task 090).
             InputAction::Hover { .. } => NavEffect::None,
+            InputAction::Rename => {
+                self.begin_edit(&rows, Action::Rename);
+                NavEffect::None
+            }
+            InputAction::NewFile => {
+                self.begin_edit(&rows, Action::NewFile);
+                NavEffect::None
+            }
+            InputAction::Delete => {
+                self.begin_delete(&rows);
+                NavEffect::None
+            }
+            InputAction::Undo => {
+                self.undo();
+                NavEffect::None
+            }
+            InputAction::Cut => {
+                self.hold(&rows, false);
+                NavEffect::None
+            }
+            InputAction::CopyEntries => {
+                self.hold(&rows, true);
+                NavEffect::None
+            }
+            InputAction::Paste => {
+                self.paste(&rows);
+                NavEffect::None
+            }
+            // The keyboard route in (task 092). Unlike a right-click it has no
+            // pointer to reconcile with the selection, so it disturbs nothing:
+            // it opens on whatever is already selected.
+            InputAction::OpenMenu => {
+                if let Some(point) = self.cursor_point(area(terminal), &rows)
+                    && let Some(cursor) = self.view.selection.clone()
+                {
+                    self.open_menu(&rows, Some(cursor), point.0, point.1);
+                }
+                NavEffect::None
+            }
             // Scrolling returned above, from the count-only fast path.
             InputAction::ScrollUp
             | InputAction::ScrollDown
@@ -1168,6 +1322,7 @@ impl App {
             .map(|row| ActionTarget {
                 path: row.path.clone(),
                 is_dir: row.kind.is_dir(),
+                expanded: row.expanded,
                 missing: row.missing,
             })
             .collect()
@@ -1209,9 +1364,57 @@ impl App {
         }
     }
 
+    /// The action layer's view of right now: what is selected, which mode, and
+    /// what `Open` would actually run. Built in one place so a new fact is
+    /// added once rather than at every call site.
+    fn action_context<'a>(
+        &'a self,
+        targets: &'a [ActionTarget],
+        program: &'a str,
+    ) -> ActionContext<'a> {
+        ActionContext {
+            targets,
+            picker: self.mode.is_pick(),
+            // The whole command, not just its program: `open -a Preview` runs
+            // `open` without being the platform handler.
+            open_is_platform: self.open_cmd == OpenCmd::platform_opener(),
+            open_program: program,
+            system_program: OpenCmd::platform_program(),
+            undo: self.undo_label.as_deref(),
+            pending: self.pending_label.as_deref(),
+            // `Open` acts on the cursor, so the row that names what `Enter`
+            // will do is the cursor's, not the selection's first.
+            cursor: self
+                .view
+                .selection
+                .as_deref()
+                .and_then(|cursor| targets.iter().find(|target| target.path == cursor)),
+        }
+    }
+
     /// Opens the menu on a right-click. The selection is only disturbed when it
     /// has to be: a click inside it acts on all of it, a click outside collapses
     /// to that row first, and a click below the last row collapses to the root.
+    /// Where a keyboard-opened menu should appear: the cursor row's own line,
+    /// at the column its text starts on. Column zero would hang the menu off
+    /// the far left of a deep row, reading as part of the tree rather than as
+    /// something attached to the selection. `None` when the cursor is not on
+    /// screen or nothing can hold the selection at all.
+    fn cursor_point(&self, area: Rect, rows: &[Row]) -> Option<(u16, u16)> {
+        let cursor = self.view.selection.as_deref()?;
+        let index = rows.iter().position(|row| row.path == cursor)?;
+        let viewport = render::tree_viewport_height(area);
+        let offset = index.checked_sub(self.view.scroll)?;
+        if offset >= viewport {
+            return None;
+        }
+        let indent = rows[index].depth as u16 * render::INDENT_WIDTH;
+        Some((
+            area.x + indent.min(area.width.saturating_sub(1)),
+            area.y + offset as u16,
+        ))
+    }
+
     /// Returns true when a menu opened, so the caller can turn motion tracking
     /// on. Terminal-free: opening a menu is a decision about rows, and only the
     /// tracking is I/O. `right_target` has already refused the points where a
@@ -1239,21 +1442,12 @@ impl App {
         }
         let rows = self.rows();
         let targets = self.action_targets(&rows);
-        let context = ActionContext {
-            targets: &targets,
-            picker: self.mode.is_pick(),
-        };
+        let context = self.action_context(&targets, self.open_cmd.program());
         let Some(menu) = Menu::open(context, column, row) else {
             return false;
         };
         self.menu = Some(menu);
         true
-    }
-
-    fn close_menu(&mut self, terminal: &mut term::Term) {
-        if self.menu.take().is_some() && self.settings.mouse {
-            term::set_motion_tracking(terminal, false);
-        }
     }
 
     /// Input while the menu is open. Returns true when birch should quit.
@@ -1267,24 +1461,34 @@ impl App {
         match self.menu_input(area(terminal), action) {
             MenuStep::Keep => false,
             MenuStep::Close => {
-                self.close_menu(terminal);
+                self.menu = None;
                 false
             }
             MenuStep::Search(c) => {
-                self.close_menu(terminal);
+                self.menu = None;
                 self.search_push(c);
                 false
             }
             MenuStep::Reopen(target) => {
-                self.close_menu(terminal);
+                self.menu = None;
                 self.armed_right = target;
                 false
             }
             MenuStep::Invoke(action) => {
-                self.close_menu(terminal);
+                self.menu = None;
                 let quit = match self.perform(action) {
-                    Some(path) => self.perform_open(terminal, events, &path),
-                    None => false,
+                    Performed::Open(path) => self.perform_open(terminal, events, &path),
+                    Performed::OpenWith(path, cmd) => {
+                        let configured = std::mem::replace(&mut self.open_cmd, cmd);
+                        let quit = self.perform_open(terminal, events, &path);
+                        self.open_cmd = configured;
+                        quit
+                    }
+                    Performed::Write(sequence) => {
+                        term::write_raw(terminal, sequence.as_bytes());
+                        false
+                    }
+                    Performed::Nothing => false,
                 };
                 // The same terminator every other input path falls through to:
                 // a pick made from the menu ends the picker there, not on
@@ -1379,14 +1583,14 @@ impl App {
     /// the socket all arrive here; nothing reaches an operation another way
     /// (ADR 0029). Terminal-free, so it stays a decision about the tree: a file
     /// that needs an editor comes back for the caller to open.
-    fn perform(&mut self, action: Action) -> Option<PathBuf> {
+    fn perform(&mut self, action: Action) -> Performed {
         let rows = self.rows();
         let targets = self.action_targets(&rows);
-        if !action.available(ActionContext {
-            targets: &targets,
-            picker: self.mode.is_pick(),
-        }) {
-            return None;
+        if !action.available(self.action_context(&targets, self.open_cmd.program())) {
+            return Performed::Nothing;
+        }
+        if let Some(form) = action.copy_form() {
+            return self.copy_selection(&targets, form);
         }
         match action {
             Action::Open => {
@@ -1395,7 +1599,7 @@ impl App {
                 match effect {
                     // In the picker `activate` has already confirmed, so this
                     // only ever carries a file the tree wants opened.
-                    NavEffect::Open(path) => return Some(path),
+                    NavEffect::Open(path) => return Performed::Open(path),
                     NavEffect::Message(message) => self.status = message,
                     NavEffect::RequestExpand(path) => {
                         let _ = self.source_cmds.send(SourceCmd::Expand(path));
@@ -1411,8 +1615,76 @@ impl App {
                     }
                 }
             }
+            // The desktop's own handler, detached: it hands off to another
+            // application rather than taking the terminal, so `perform_open`
+            // does the same thing it does for `--open-detached`.
+            Action::OpenSystem => {
+                if let Some(target) = targets.first() {
+                    return Performed::OpenWith(target.path.clone(), OpenCmd::platform_opener());
+                }
+            }
+            Action::Rename | Action::NewFile | Action::NewFolder => {
+                let rows = self.rows();
+                self.begin_edit(&rows, action);
+            }
+            Action::Delete => {
+                let rows = self.rows();
+                self.begin_delete(&rows);
+            }
+            Action::Undo => self.undo(),
+            Action::Cut | Action::CopyEntries => {
+                let rows = self.rows();
+                self.hold(&rows, action == Action::CopyEntries);
+            }
+            Action::Paste => {
+                let rows = self.rows();
+                self.paste(&rows);
+            }
+            // Detached like `OpenSystem`: it hands the path to another
+            // application rather than taking the terminal.
+            Action::Reveal => {
+                if let Some(target) = targets.first() {
+                    return Performed::OpenWith(
+                        OpenCmd::reveal_target(&target.path),
+                        OpenCmd::reveal(),
+                    );
+                }
+            }
+            // Handled above, before the match: every copy shares one path.
+            Action::CopyName | Action::CopyRelativePath | Action::CopyAbsolutePath => {}
         }
-        None
+        Performed::Nothing
+    }
+
+    /// Resolves the selection to text and hands it to the clipboard. The
+    /// transport is chosen per copy from the environment (`birch_core::
+    /// clipboard`); OSC 52 comes back as a sequence for the caller to write,
+    /// because the terminal belongs to the render layer.
+    fn copy_selection(&mut self, targets: &[ActionTarget], form: CopyForm) -> Performed {
+        let path_form = match form {
+            CopyForm::Name => PathForm::Name,
+            CopyForm::Relative => PathForm::Rel,
+            CopyForm::Absolute => PathForm::Abs,
+        };
+        let text = targets
+            .iter()
+            .map(|target| self.format_path(&target.path, path_form))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let transport = clipboard::choose(clipboard::is_remote(), &clipboard::available_tools());
+        match clipboard::copy(&text, transport) {
+            Ok(sequence) => {
+                self.status = copied_message(targets.len(), form);
+                match sequence {
+                    Some(sequence) => Performed::Write(sequence),
+                    None => Performed::Nothing,
+                }
+            }
+            Err(e) => {
+                self.status = format!("could not copy: {e}");
+                Performed::Nothing
+            }
+        }
     }
 
     /// Paints a `Shift` extension once its match reveal has converged. Match
@@ -1431,6 +1703,587 @@ impl App {
     /// exactly what once left a pick sitting until the next keystroke.
     fn finished(&self, quit: bool) -> bool {
         quit || !self.picked.is_empty()
+    }
+
+    // ---- the inline editor and the delete confirmation (029) ----
+
+    /// Opens an editor over the cursor row (rename) or as a phantom under the
+    /// target directory (create). Nothing touches the tree until `Enter`.
+    fn begin_edit(&mut self, rows: &[Row], action: Action) {
+        let targets = self.action_targets(rows);
+        if !action.available(self.action_context(&targets, self.open_cmd.program())) {
+            return;
+        }
+        let Some(target) = targets.first() else {
+            return;
+        };
+        self.edit = Some(match action {
+            Action::Rename => {
+                // The *tail's* name, not the row's label: a compacted chain
+                // renders as `a/b/c` while its path is the tail, and pre-filling
+                // the label would resolve against the tail's parent and move the
+                // directory somewhere nobody asked for.
+                let name = target
+                    .path
+                    .file_name()
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+                let kind = if target.is_dir {
+                    NodeKind::Dir
+                } else {
+                    NodeKind::File
+                };
+                Editor::rename(target.path.clone(), &name, kind)
+            }
+            // A create needs a directory: a selected file names its parent.
+            _ => Editor::create(
+                if target.is_dir {
+                    target.path.clone()
+                } else {
+                    target.path.parent().unwrap_or(&self.root).to_path_buf()
+                },
+                action == Action::NewFolder,
+            ),
+        });
+    }
+
+    /// Input while an editor is open. Printables reach the field rather than
+    /// the search, which is ADR 0008 read as it was always meant: they go to
+    /// whatever text field is focused, and an edit focuses a different one.
+    fn handle_edit_input(&mut self, action: InputAction) {
+        match action {
+            InputAction::Esc => self.edit = None,
+            InputAction::Enter => {
+                if let Some(editor) = self.edit.take() {
+                    // A refused name keeps the field open with the text intact.
+                    // The usual refusal is a clash, and the fix is a few
+                    // keystrokes — closing the field would throw the name away
+                    // and, with the tree unchanged behind it, read as though
+                    // the create had silently overwritten something.
+                    if !self.commit_edit(&editor) {
+                        self.edit = Some(editor);
+                    }
+                }
+            }
+            editing => {
+                let Some(editor) = self.edit.as_mut() else {
+                    return;
+                };
+                match editing {
+                    InputAction::Char(c) => editor.insert(c),
+                    InputAction::Backspace => editor.backspace(),
+                    InputAction::Delete => editor.delete(),
+                    InputAction::Left => editor.left(),
+                    InputAction::Right => editor.right(),
+                    InputAction::Home => editor.home(),
+                    InputAction::End => editor.end(),
+                    // Everything else leaves the field alone rather than acting
+                    // on the tree behind it.
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Returns whether the edit went through. A `false` keeps the field open.
+    fn commit_edit(&mut self, editor: &Editor) -> bool {
+        let input = editor.buffer();
+        if input.trim().is_empty() {
+            // Every other failure path says something; silence here reads as a
+            // field that swallowed the edit.
+            self.status = "a name is required".into();
+            return false;
+        }
+        let result = match editor.kind() {
+            EditKind::Rename { path, .. } => ops::rename(path, input),
+            EditKind::Create { parent, directory } => ops::create(parent, input, *directory),
+        };
+        match result {
+            Ok(deltas) => {
+                // Recorded from the deltas rather than re-derived: `create`
+                // announces the *shallowest* path it made, which is what undo
+                // has to take back — `a/b/c.txt` typed into an empty tree
+                // created `a`, and removing only `c.txt` would leave the rest.
+                let landed = deltas.iter().find_map(added_path);
+                match (editor.kind(), landed) {
+                    (EditKind::Rename { path, .. }, Some(to)) => {
+                        self.history.push(undo::Step::Moved {
+                            pairs: vec![(path.clone(), to)],
+                        });
+                    }
+                    (EditKind::Create { .. }, Some(path)) => {
+                        self.history.push(undo::Step::Created { paths: vec![path] });
+                    }
+                    _ => {}
+                }
+                for delta in deltas {
+                    self.tree.apply(delta);
+                }
+                self.expansion_dirty = true;
+                self.status.clear();
+                self.refresh_undo_label();
+                true
+            }
+            Err(e) => {
+                self.status = e.to_string();
+                false
+            }
+        }
+    }
+
+    /// Holds the selection for a paste. Replaces whatever was held: a
+    /// clipboard with one slot is the only kind anybody can keep track of.
+    fn hold(&mut self, rows: &[Row], duplicate: bool) {
+        let targets = self.action_targets(rows);
+        let action = if duplicate {
+            Action::CopyEntries
+        } else {
+            Action::Cut
+        };
+        if !action.available(self.action_context(&targets, self.open_cmd.program())) {
+            return;
+        }
+        let paths: Vec<PathBuf> = targets.iter().map(|t| t.path.clone()).collect();
+        if paths.is_empty() {
+            return;
+        }
+        let what = describe(&paths);
+        self.status = format!(
+            "{} {what} — ^V pastes",
+            if duplicate { "Copied" } else { "Cut" }
+        );
+        self.pending_label = Some(what);
+        self.pending = Some(Pending { paths, duplicate });
+    }
+
+    /// Puts what is held into the selected directory — the selection itself if
+    /// it is one, otherwise its parent, which is where a create goes too.
+    fn paste(&mut self, rows: &[Row]) {
+        let targets = self.action_targets(rows);
+        if !Action::Paste.available(self.action_context(&targets, self.open_cmd.program())) {
+            return;
+        }
+        let Some(target) = targets.first() else {
+            return;
+        };
+        let directory = if target.is_dir {
+            target.path.clone()
+        } else {
+            target.path.parent().unwrap_or(&self.root).to_path_buf()
+        };
+        let Some(held) = self.pending.take() else {
+            return;
+        };
+        self.pending_label = None;
+
+        let what = describe(&held.paths);
+        let mut moved = Vec::new();
+        let mut created = Vec::new();
+        for path in &held.paths {
+            let outcome = if held.duplicate {
+                ops::copy_into(path, &directory)
+            } else {
+                ops::move_into(path, &directory)
+            };
+            match outcome {
+                Ok(deltas) => {
+                    if let Some(to) = deltas.iter().find_map(added_path) {
+                        if held.duplicate {
+                            created.push(to);
+                        } else {
+                            moved.push((path.clone(), to));
+                        }
+                    }
+                    for delta in deltas {
+                        self.tree.apply(delta);
+                    }
+                }
+                Err(e) => {
+                    // Whatever already landed is recorded before reporting, so
+                    // a paste that stops halfway is still one `Ctrl-Z`.
+                    self.finish_paste(moved, created);
+                    self.status = e.to_string();
+                    return;
+                }
+            }
+        }
+        // Nothing landed and nothing failed: every path was already here. An
+        // operation that did nothing must not report that it did something.
+        if moved.is_empty() && created.is_empty() {
+            self.status = format!(
+                "{what} is already in {}",
+                self.format_path(&directory, PathForm::Rel)
+            );
+            return;
+        }
+        let duplicate = held.duplicate;
+        self.finish_paste(moved, created);
+        self.expansion_dirty = true;
+        self.status = format!(
+            "{} {what} \u{2192} {}",
+            if duplicate { "Copied" } else { "Moved" },
+            self.format_path(&directory, PathForm::Rel)
+        );
+    }
+
+    fn finish_paste(&mut self, moved: Vec<(PathBuf, PathBuf)>, created: Vec<PathBuf>) {
+        self.remember_moves(moved);
+        if !created.is_empty() {
+            self.history.push(undo::Step::Created { paths: created });
+            self.refresh_undo_label();
+        }
+    }
+
+    /// Records a batch of moves as one undo step, so a drag that carried five
+    /// rows is taken back in one `Ctrl-Z` rather than five.
+    fn remember_moves(&mut self, pairs: Vec<(PathBuf, PathBuf)>) {
+        if pairs.is_empty() {
+            return;
+        }
+        self.history.push(undo::Step::Moved { pairs });
+        self.refresh_undo_label();
+    }
+
+    /// Records a delete. It cannot be reversed — the trash's restore is not
+    /// available on every platform birch runs on — but it is still recorded, so
+    /// that `Ctrl-Z` after a delete says where the files went instead of
+    /// silently reversing whatever happened *before* it.
+    fn remember_removal(&mut self, what: &str, trashed: Vec<birch_core::disposal::Trashed>) {
+        if trashed.is_empty() {
+            return;
+        }
+        self.history.push(undo::Step::Removed {
+            what: what.into(),
+            trashed,
+        });
+        self.refresh_undo_label();
+    }
+
+    fn refresh_undo_label(&mut self) {
+        self.undo_label = self.history.next().map(undo::Step::describe);
+    }
+
+    fn undo(&mut self) {
+        let Some(undone) = self.history.undo() else {
+            return;
+        };
+        for delta in undone.deltas {
+            self.tree.apply(delta);
+        }
+        self.expansion_dirty = true;
+        self.status = undone.message;
+        self.refresh_undo_label();
+    }
+
+    /// How loudly the bottom line is drawn: a message is something the user did
+    /// not have on screen a moment ago, and outranks the chrome it replaces.
+    fn bottom_kind(&self) -> render::BottomKind {
+        if self.status.is_empty() {
+            render::BottomKind::Idle
+        } else {
+            render::BottomKind::Message
+        }
+    }
+
+    /// Starts a delete. Tracked files go straight to the trash — recoverable
+    /// twice over, and a prompt there is theatre. Anything untracked asks
+    /// first, because it exists nowhere else and a trash can be emptied
+    /// (ADR 0031).
+    fn begin_delete(&mut self, rows: &[Row]) {
+        let targets = self.action_targets(rows);
+        if !Action::Delete.available(self.action_context(&targets, self.open_cmd.program())) {
+            return;
+        }
+        self.trash_now(targets.iter().map(|t| t.path.clone()).collect());
+    }
+
+    fn trash_now(&mut self, paths: Vec<PathBuf>) {
+        let mut removal = ops::trash(&paths);
+        let trashed = std::mem::take(&mut removal.trashed);
+        let removed = self.apply_removal(&removal);
+        let Some(failure) = removal.failed else {
+            let what = describe(&paths);
+            self.remember_removal(&what, trashed);
+            self.status = format!("Moved {what} to the trash");
+            return;
+        };
+        // Whatever already went is still restorable, so it is recorded even
+        // though the batch failed — the rows are gone from the tree either way.
+        self.remember_removal(&describe(&removed), trashed);
+        // Whatever already went is gone; only the rest is still a question.
+        // Asking about paths that are already in the trash would be a prompt
+        // about nothing, and confirming it would delete nothing.
+        let remaining: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|path| !removed.contains(path))
+            .collect();
+        if remaining.is_empty() {
+            self.status = failure.to_string();
+            return;
+        }
+        // The delete ends here. birch has no removal that bypasses the trash
+        // (ADR 0031), so there is nothing to fall back to and nothing to ask —
+        // only the failure to report, and what already went, since the tree no
+        // longer shows those rows.
+        let moved = if removed.is_empty() {
+            String::new()
+        } else {
+            format!("{} went. ", describe(&removed))
+        };
+        self.status = format!("{moved}{} not deleted — {failure}", describe(&remaining));
+    }
+
+    /// Applies a removal's deltas and returns the paths that actually went, so
+    /// a caller can tell what is left to ask about.
+    fn apply_removal(&mut self, removal: &ops::Removal) -> Vec<PathBuf> {
+        let mut removed = Vec::with_capacity(removal.deltas.len());
+        for delta in &removal.deltas {
+            if let TreeDelta::Removed { path } = delta {
+                removed.push(path.clone());
+            }
+            self.tree.apply(delta.clone());
+        }
+        if !removed.is_empty() {
+            self.expansion_dirty = true;
+        }
+        removed
+    }
+
+    // ---- dragging a selection into a directory (072) ----
+
+    /// Called on every drag event. Promotes an armed press into a drag once the
+    /// pointer leaves the row it started on, then keeps the drop target current.
+    fn update_drag(&mut self, area: Rect, rows: &[Row], column: u16, row: u16) {
+        // A drag moves files, and mutations are human-initiated and disabled in
+        // the picker (ADR 0032). The gesture bypasses `Action::available`, so
+        // the rule has to be stated here too.
+        if self.mode.is_pick() {
+            return;
+        }
+        if self.drag.is_none() {
+            let Some((path, _)) = self.armed_press.clone() else {
+                return;
+            };
+            let Some(origin) = rows.iter().position(|r| r.path == path) else {
+                return;
+            };
+            // Still on the row the press began on: this is a click that
+            // wobbled, which ADR 0025 already treats as a click.
+            if self.row_at(area, rows, row) == Some(origin) {
+                return;
+            }
+            // The dragged set follows the menu's targeting rule: a press inside
+            // the selection drags all of it, outside it drags that row alone.
+            if !self.view.is_selected(&path) {
+                self.view.on_single_click(rows, origin);
+            }
+            let paths = self.view.selected(rows);
+            if paths.is_empty() {
+                return;
+            }
+            self.armed_press = None;
+            self.click_timer.disarm();
+            self.drag = Some(Drag {
+                paths,
+                target: None,
+            });
+        }
+        let target = self.drop_target(area, rows, column, row);
+        self.spring_load(rows, target.as_ref());
+        self.scroll_at_edge(area, rows, row);
+        if let Some(drag) = self.drag.as_mut() {
+            drag.target = target;
+        }
+        self.status = self.drag_message();
+    }
+
+    /// Hovering a collapsed directory during a drag opens it. This needs no
+    /// carve-out from "never auto-expand": that rule is scoped to **ignored**
+    /// directories, and search already auto-expands. An ignored directory stays
+    /// shut while remaining a legal target — it simply does not open itself to
+    /// show you (ADR 0032).
+    fn spring_load(&mut self, rows: &[Row], target: Option<&DropTarget>) {
+        let Some(target) = target else { return };
+        let Some(row) = rows.iter().find(|row| row.path == target.directory) else {
+            return;
+        };
+        if !row.kind.is_dir() || row.expanded || row.ignored || row.missing {
+            return;
+        }
+        let (path, loaded) = (row.path.clone(), row.loaded);
+        self.tree.set_expanded(&path, true);
+        self.expansion_dirty = true;
+        if !loaded && self.requested_peeks.insert(path.clone()) {
+            let _ = self.source_cmds.send(SourceCmd::Expand(path));
+        }
+    }
+
+    /// Dragging into the top or bottom row scrolls by one. Holding the pointer
+    /// still does not keep scrolling — motion events only arrive when the
+    /// pointer moves — which is the documented limit rather than a timer this
+    /// event loop does not otherwise need (ADR 0032).
+    fn scroll_at_edge(&mut self, area: Rect, rows: &[Row], row: u16) {
+        let viewport = render::tree_viewport_height(area);
+        if viewport == 0 {
+            return;
+        }
+        let Some(offset) = row.checked_sub(area.y) else {
+            return;
+        };
+        let delta = if offset == 0 {
+            -1
+        } else if offset as usize + 1 >= viewport {
+            1
+        } else {
+            return;
+        };
+        let before = self.view.scroll;
+        self.view.scroll_by(rows.len(), delta, viewport);
+        if self.view.scroll != before {
+            self.rows_len = rows.len();
+        }
+    }
+
+    /// Which row a screen line falls on, if any.
+    fn row_at(&self, area: Rect, rows: &[Row], row: u16) -> Option<usize> {
+        let viewport = render::tree_viewport_height(area);
+        let offset = row.checked_sub(area.y)? as usize;
+        if offset >= viewport {
+            return None;
+        }
+        let index = self.view.scroll + offset;
+        (index < rows.len()).then_some(index)
+    }
+
+    /// Where a drop would land, and why it would be refused. A directory takes
+    /// the drop; a file offers its parent; below the rows is the root; a dimmed
+    /// row is inert, as everywhere (ADR 0023).
+    fn drop_target(&self, area: Rect, rows: &[Row], column: u16, row: u16) -> Option<DropTarget> {
+        let chrome = render::Chrome {
+            settings: &self.settings,
+            theme: &Theme::for_id(self.settings.theme),
+            branch_axis: self.branch_axis(),
+        };
+        let directory = match render::hit_test(rows, &self.view, chrome, area, column, row) {
+            Some((index, _)) => {
+                let hit = rows.get(index)?;
+                if !hit.live {
+                    return None;
+                }
+                if hit.kind.is_dir() && !hit.missing {
+                    hit.path.clone()
+                } else {
+                    hit.path.parent()?.to_path_buf()
+                }
+            }
+            None => {
+                if !render::on_tree_surface(rows.len(), chrome, area, column, row) {
+                    return None;
+                }
+                self.root.clone()
+            }
+        };
+        let refusal = self.refusal(&directory);
+        Some(DropTarget { directory, refusal })
+    }
+
+    /// Why this directory cannot take the drop, visible before the button is
+    /// released rather than discovered after it (ADR 0032).
+    fn refusal(&self, directory: &Path) -> Option<String> {
+        let paths = self
+            .drag
+            .as_ref()
+            .map(|d| d.paths.as_slice())
+            .unwrap_or(&[]);
+        let mut landing: HashSet<&std::ffi::OsStr> = HashSet::new();
+        for path in paths {
+            if directory.starts_with(path) {
+                return Some("cannot move a folder inside itself".into());
+            }
+            if path.parent() == Some(directory) {
+                return Some("already there".into());
+            }
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            // Two dragged rows sharing a basename collide with *each other*,
+            // which the filesystem cannot yet show — a refusal has to reason
+            // about where the whole set would land, not only where it is now.
+            if !landing.insert(name) {
+                return Some(format!(
+                    "two selected rows are named {}",
+                    name.to_string_lossy()
+                ));
+            }
+            // Not `exists()`: it follows links, so a dangling one would read as
+            // free and be replaced.
+            if std::fs::symlink_metadata(directory.join(name)).is_ok() {
+                return Some(format!("{} already exists there", name.to_string_lossy()));
+            }
+        }
+        None
+    }
+
+    fn drag_message(&self) -> String {
+        let Some(drag) = &self.drag else {
+            return String::new();
+        };
+        let what = describe(&drag.paths);
+        match &drag.target {
+            Some(DropTarget {
+                refusal: Some(why), ..
+            }) => format!("Moving {what} — {why}"),
+            Some(DropTarget { directory, .. }) => {
+                format!(
+                    "Moving {what} \u{2192} {}",
+                    self.format_path(directory, PathForm::Rel)
+                )
+            }
+            None => format!("Moving {what}"),
+        }
+    }
+
+    /// Completes the drag. A refused target does nothing and says so; the move
+    /// itself has no undo, so the status line reports where things went.
+    fn finish_drag(&mut self) {
+        let Some(drag) = self.drag.take() else {
+            return;
+        };
+        let Some(target) = drag.target else {
+            self.status.clear();
+            return;
+        };
+        if let Some(why) = target.refusal {
+            self.status = format!("Not moved — {why}");
+            return;
+        }
+        let what = describe(&drag.paths);
+        let mut moved = Vec::new();
+        for path in &drag.paths {
+            match ops::move_into(path, &target.directory) {
+                Ok(deltas) => {
+                    if let Some(to) = deltas.iter().find_map(added_path) {
+                        moved.push((path.clone(), to));
+                    }
+                    for delta in deltas {
+                        self.tree.apply(delta);
+                    }
+                }
+                Err(e) => {
+                    // Whatever already moved is recorded even though the batch
+                    // failed: a half-applied drag is exactly the thing a user
+                    // reaches for undo about.
+                    self.remember_moves(moved);
+                    self.status = e.to_string();
+                    return;
+                }
+            }
+        }
+        self.remember_moves(moved);
+        self.expansion_dirty = true;
+        self.status = format!(
+            "Moved {what} \u{2192} {}",
+            self.format_path(&target.directory, PathForm::Rel)
+        );
     }
 
     /// Why nothing happened when there is no selection to act on.
@@ -1496,7 +2349,7 @@ impl App {
 
     /// Esc backs out one layer (ADR 0012): an active search clears (tree
     /// mode restores the pre-search view); with nothing to dismiss, Esc
-    /// quits — the picker without a pick, the tree like Ctrl-C.
+    /// quits — the picker without a pick, the tree like `Ctrl-Q`.
     fn on_esc(&mut self) -> bool {
         // Esc backs out one layer at a time (ADR 0012); the menu is now the
         // outermost, so the order is menu → search → quit.
@@ -1774,6 +2627,7 @@ impl App {
             self.save_persisted(false);
         }
         let bottom = self.bottom_line();
+        let bottom_kind = self.bottom_kind();
         let branch_axis = self.branch_axis();
         let theme = Theme::for_id(self.settings.theme);
         let area = area(terminal);
@@ -1783,18 +2637,42 @@ impl App {
             .menu
             .as_mut()
             .map(|menu| menu.layout(area.x, area.y, area.width, area.height));
+        let drop_target = self
+            .drag
+            .as_ref()
+            .and_then(|drag| drag.target.as_ref())
+            .filter(|target| target.refusal.is_none())
+            .map(|target| target.directory.clone());
         let (view, settings, menu) = (&self.view, &self.settings, &self.menu);
         let chrome = render::Chrome {
             settings,
             theme: &theme,
             branch_axis,
         };
+        let editor = &self.edit;
+        let mut caret = None;
         terminal.draw(|frame| {
-            render::draw(frame, &rows, view, chrome, &bottom);
+            render::draw(frame, &rows, view, chrome, &bottom, bottom_kind);
+            // A refused target is drawn as no target at all: the absence of the
+            // highlight is the answer, before the button is released.
+            if let Some(directory) = &drop_target {
+                render::draw_drop_target(frame, &rows, view, chrome, directory);
+            }
+            // The editor sits over the tree and under the menu; the two are
+            // never open together, so the order only fixes a convention.
+            if let Some(editor) = editor {
+                caret = render::draw_edit(frame, &rows, view, chrome, editor);
+            }
             if let (Some(menu), Some(layout)) = (menu, menu_layout) {
                 render::draw_menu(frame, menu, layout, &theme);
             }
         })?;
+        // A visible caret is what makes the edit self-evident, which is the
+        // property that makes it an admissible mode at all (ADR 0030).
+        match caret {
+            Some((x, y)) => term::show_caret(terminal, x, y),
+            None => term::hide_caret(terminal),
+        }
         Ok(())
     }
 
@@ -1829,10 +2707,12 @@ impl App {
             // stays clear for messages.
             String::new()
         };
-        if self.status.is_empty() {
-            base
-        } else {
-            format!("{base} — {}", self.status)
+        match (base.is_empty(), self.status.is_empty()) {
+            (_, true) => base,
+            // Nothing to hang the message off: an idle tree has no bottom line
+            // of its own, and a leading dash reads as a truncated sentence.
+            (true, false) => self.status.clone(),
+            (false, false) => format!("{base} — {}", self.status),
         }
     }
 
@@ -2158,6 +3038,12 @@ mod tests {
             click_timer: input::ClickTimer::default(),
             menu: None,
             armed_right: None,
+            edit: None,
+            history: undo::History::default(),
+            undo_label: None,
+            pending: None,
+            pending_label: None,
+            drag: None,
             pending_extend: false,
             armed_press: None,
             last_rematch: None,
@@ -2196,7 +3082,7 @@ mod tests {
         dirs
     }
 
-    fn index_of(entries: &[(&str, bool)]) -> Arc<SearchIndex> {
+    pub(super) fn index_of(entries: &[(&str, bool)]) -> Arc<SearchIndex> {
         Arc::new(SearchIndex::from_paths(Path::new("/r"), entries))
     }
 
@@ -2627,7 +3513,7 @@ mod tests {
     fn esc_backs_out_search_then_quits() {
         let mut h = harness(Mode::Tree);
         feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
-        h.app.index = Some(index_of(&[("a.txt", false)]));
+        h.app.index = Some(super::tests::index_of(&[("a.txt", false)]));
         h.app.search_push('a');
         assert!(!h.app.on_esc(), "first Esc clears the search");
         assert!(h.app.search.is_none());
@@ -3411,7 +4297,7 @@ mod tests {
     // ---- ADR 0025: a click completes on release ----
 
     /// Arms a press on `idx` and returns the hit tuple a release would carry.
-    fn press(app: &mut App, rows: &[Row], idx: usize, on_chevron: bool) {
+    pub(super) fn press(app: &mut App, rows: &[Row], idx: usize, on_chevron: bool) {
         app.armed_press = Some((rows[idx].path.clone(), on_chevron));
     }
 
@@ -3450,7 +4336,7 @@ mod tests {
         );
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
-        press(&mut h.app, &rows, 2, false);
+        super::tests::press(&mut h.app, &rows, 2, false);
         assert_eq!(h.app.view.selection, before, "a press must not select");
     }
 
@@ -3463,7 +4349,7 @@ mod tests {
             &[("a", NodeKind::File), ("b", NodeKind::File)],
         );
         let rows = h.app.rows();
-        press(&mut h.app, &rows, 2, false);
+        super::tests::press(&mut h.app, &rows, 2, false);
         h.app.resolve_release(
             &rows,
             Some((2, false)),
@@ -3487,7 +4373,7 @@ mod tests {
         );
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app.resolve_release(
             &rows,
             Some((2, false)),
@@ -3507,7 +4393,7 @@ mod tests {
         feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
         let rows = h.app.rows();
         let before = h.app.view.selection.clone();
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app
             .resolve_release(&rows, None, input::ClickModifier::None, Instant::now());
         assert_eq!(h.app.view.selection, before);
@@ -3535,7 +4421,7 @@ mod tests {
         feed(&mut h.app, "/r/sub", &[("f", NodeKind::File)]);
         let rows = h.app.rows();
         let expanded = h.app.tree.node_at(Path::new("/r/sub")).unwrap().expanded;
-        press(&mut h.app, &rows, 1, true);
+        super::tests::press(&mut h.app, &rows, 1, true);
         h.app.resolve_release(
             &rows,
             Some((1, false)),
@@ -3555,12 +4441,12 @@ mod tests {
         feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
         let rows = h.app.rows();
         let t0 = Instant::now();
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app
             .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
         assert!(h.app.picked.is_empty(), "one click only selects");
         // A second press without its release must not activate.
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         assert!(h.app.picked.is_empty());
         h.app.resolve_release(
             &rows,
@@ -3581,10 +4467,10 @@ mod tests {
         feed(&mut h.app, "/r", &[("a", NodeKind::File)]);
         let rows = h.app.rows();
         let t0 = Instant::now();
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app
             .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         // Beyond the window: a slow second click is two singles, not a double.
         h.app.resolve_release(
             &rows,
@@ -3605,18 +4491,18 @@ mod tests {
         );
         let rows = h.app.rows();
         let t0 = Instant::now();
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app
             .resolve_release(&rows, Some((1, false)), input::ClickModifier::None, t0);
         // A press released elsewhere is an intervening click: it resets.
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app.resolve_release(
             &rows,
             Some((2, false)),
             input::ClickModifier::None,
             t0 + Duration::from_millis(50),
         );
-        press(&mut h.app, &rows, 1, false);
+        super::tests::press(&mut h.app, &rows, 1, false);
         h.app.resolve_release(
             &rows,
             Some((1, false)),
@@ -3663,7 +4549,7 @@ mod tests {
         assert!(!h.app.bottom_line().contains("no matches"));
 
         // Complete and holding nothing: now it is true, and said.
-        h.app.index = Some(index_of(&[("a.txt", false)]));
+        h.app.index = Some(super::tests::index_of(&[("a.txt", false)]));
         h.app.rematch();
         assert!(
             h.app.bottom_line().contains("no matches"),
@@ -4006,6 +4892,12 @@ mod ctl_tests {
         let context = ActionContext {
             targets: &targets,
             picker: false,
+            open_is_platform: false,
+            open_program: "nvim",
+            system_program: "open",
+            undo: None,
+            pending: None,
+            cursor: targets.first(),
         };
         assert!(Action::Open.available(context));
         assert!(Action::RevealRootHere.available(context));
@@ -4015,6 +4907,12 @@ mod ctl_tests {
         let context = ActionContext {
             targets: &targets,
             picker: false,
+            open_is_platform: false,
+            open_program: "nvim",
+            system_program: "open",
+            undo: None,
+            pending: None,
+            cursor: targets.first(),
         };
         assert!(Action::Open.available(context));
         assert!(
@@ -4028,6 +4926,12 @@ mod ctl_tests {
         let context = ActionContext {
             targets: &targets,
             picker: false,
+            open_is_platform: false,
+            open_program: "nvim",
+            system_program: "open",
+            undo: None,
+            pending: None,
+            cursor: targets.first(),
         };
         assert!(
             !Action::RevealRootHere.available(context),
@@ -4134,7 +5038,11 @@ mod ctl_tests {
                 .open_menu(&rows, Some(PathBuf::from("/r/a.txt")), 4, 1)
         );
 
-        assert_eq!(h.app.perform(Action::Open), None, "the picker confirms");
+        assert_eq!(
+            h.app.perform(Action::Open),
+            Performed::Nothing,
+            "the picker confirms"
+        );
         assert_eq!(h.app.picked.as_slice(), [PathBuf::from("/r/a.txt")]);
         assert!(
             h.app.finished(false),
@@ -4151,7 +5059,7 @@ mod ctl_tests {
             &[("src", NodeKind::Dir), ("a.txt", NodeKind::File)],
         );
         h.app.view.focus("/r/src".into());
-        assert_eq!(h.app.perform(Action::Open), None);
+        assert_eq!(h.app.perform(Action::Open), Performed::Nothing);
         assert!(
             h.app.tree.node_at(Path::new("/r/src")).unwrap().expanded,
             "Open toggles a directory, exactly as Enter does"
@@ -4160,7 +5068,10 @@ mod ctl_tests {
         // On a file it hands the path back for the caller to open, rather than
         // reaching for the terminal itself.
         h.app.view.focus("/r/a.txt".into());
-        assert_eq!(h.app.perform(Action::Open), Some(PathBuf::from("/r/a.txt")));
+        assert_eq!(
+            h.app.perform(Action::Open),
+            Performed::Open(PathBuf::from("/r/a.txt"))
+        );
         assert!(
             !h.app.finished(false),
             "the tree does not exit on an action"
@@ -4187,7 +5098,7 @@ mod ctl_tests {
         });
         h.app.view.focus(real.join("src"));
 
-        assert_eq!(h.app.perform(Action::RevealRootHere), None);
+        assert_eq!(h.app.perform(Action::RevealRootHere), Performed::Nothing);
         assert_eq!(h.app.root, real.join("src"));
         assert!(h.app.status.is_empty(), "no error was reported");
 
@@ -4211,20 +5122,30 @@ mod ctl_tests {
         // Arrows step entries and skip the rule between the groups; Home/End
         // reach the ends.
         open(&mut h.app);
+        // Derived from the menu itself: the projection grows as actions land,
+        // and this test is about traversal rather than about which rows exist.
+        let entries: Vec<Action> = menu_ref(&h.app.menu)
+            .rows()
+            .iter()
+            .filter_map(|row| match row {
+                birch_core::action::MenuRow::Entry(action) => Some(*action),
+                birch_core::action::MenuRow::Separator => None,
+            })
+            .collect();
+        assert!(entries.len() >= 3, "several groups to cross");
+
+        // Stepping crosses the rules without ever landing on one.
         assert_eq!(h.app.menu_input(area, InputAction::Down), MenuStep::Keep);
-        assert_eq!(
-            menu_ref(&h.app.menu).selected_action(),
-            Some(Action::RevealRootHere)
-        );
+        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(entries[1]));
         h.app.menu_input(area, InputAction::Up);
-        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(Action::Open));
+        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(entries[0]));
         h.app.menu_input(area, InputAction::End);
         assert_eq!(
             menu_ref(&h.app.menu).selected_action(),
-            Some(Action::RevealRootHere)
+            entries.last().copied()
         );
         h.app.menu_input(area, InputAction::Home);
-        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(Action::Open));
+        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(entries[0]));
 
         // Enter invokes what is highlighted; Esc closes and changes nothing.
         assert_eq!(
@@ -4249,17 +5170,25 @@ mod ctl_tests {
 
         // Hover moves the highlight; a press inside keeps the menu, a press
         // outside dismisses it.
+        // Located by kind rather than by index: the projection grows as
+        // actions land, and this test is about the mechanism.
+        let rule = menu_ref(&h.app.menu)
+            .rows()
+            .iter()
+            .position(|row| matches!(row, birch_core::action::MenuRow::Separator))
+            .expect("the menu has groups");
+        let after_rule = rule + 1;
+        let hovered = menu_ref(&h.app.menu)
+            .action_at(after_rule)
+            .expect("the next group's first entry");
         h.app.menu_input(
             area,
             InputAction::Hover {
                 column: layout.x,
-                row: layout.y + 3,
+                row: layout.y + 1 + after_rule as u16,
             },
         );
-        assert_eq!(
-            menu_ref(&h.app.menu).selected_action(),
-            Some(Action::RevealRootHere)
-        );
+        assert_eq!(menu_ref(&h.app.menu).selected_action(), Some(hovered));
         assert_eq!(
             h.app.menu_input(
                 area,
@@ -4286,28 +5215,865 @@ mod ctl_tests {
         h.app.menu_input(area, InputAction::Home);
         let separator = InputAction::Release {
             column: layout.x,
-            row: layout.y + 2,
+            row: layout.y + 1 + rule as u16,
             modifier: input::ClickModifier::None,
         };
         assert_eq!(h.app.menu_input(area, separator), MenuStep::Keep);
         // ...while a click on an entry invokes that entry, not the highlight.
         let entry = InputAction::Release {
             column: layout.x,
-            row: layout.y + 3,
+            row: layout.y + 1 + after_rule as u16,
             modifier: input::ClickModifier::None,
         };
-        assert_eq!(
-            h.app.menu_input(area, entry),
-            MenuStep::Invoke(Action::RevealRootHere)
-        );
+        assert_eq!(h.app.menu_input(area, entry), MenuStep::Invoke(hovered));
 
         // A right-click elsewhere moves the menu rather than stranding it.
+        // "Elsewhere" is computed rather than guessed: the menu grows as
+        // actions land, and a fixed column drifts inside it.
         open(&mut h.app);
-        let elsewhere = InputAction::RightPress { column: 4, row: 1 };
+        let layout = menu_mut(&mut h.app.menu).layout(area.x, area.y, area.width, area.height);
+        let outside = if layout.x > 0 {
+            layout.x - 1
+        } else {
+            layout.x + layout.width
+        };
+        assert!(
+            !menu_ref(&h.app.menu).covers(layout, outside, 1),
+            "the point is outside the menu"
+        );
+        let elsewhere = InputAction::RightPress {
+            column: outside,
+            row: 1,
+        };
         assert_eq!(
             h.app.menu_input(area, elsewhere),
             MenuStep::Reopen(Some(Some(rows[1].path.clone())))
         );
+    }
+
+    /// A copy resolves through the same `format_path` the socket uses, so the
+    /// menu and `birch ctl get-path` cannot disagree about what a form means.
+    #[test]
+    fn copying_joins_the_selection_in_tree_order() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[("src", NodeKind::Dir), ("a.txt", NodeKind::File)],
+        );
+        drain_expands(&h.source_rx);
+        feed(&mut h.app, "/r/src", &[("main.rs", NodeKind::File)]);
+        h.app.tree.set_expanded(Path::new("/r/src"), true);
+        let rows = h.app.rows();
+        h.app.view.focus("/r/src/main.rs".into());
+        h.app.view.move_by_extending(&rows, 1);
+
+        let targets = h.app.action_targets(&rows);
+        assert_eq!(targets.len(), 2);
+        let text = |form| {
+            targets
+                .iter()
+                .map(|t| h.app.format_path(&t.path, form))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(text(PathForm::Name), "main.rs\na.txt");
+        assert_eq!(text(PathForm::Rel), "src/main.rs\na.txt");
+        assert_eq!(text(PathForm::Abs), "/r/src/main.rs\n/r/a.txt");
+    }
+
+    /// The status line says what was copied, and pluralises on the count rather
+    /// than claiming the clipboard now holds it — with OSC 52 nothing can know.
+    #[test]
+    fn the_copy_message_names_the_form_and_the_count() {
+        assert_eq!(copied_message(1, CopyForm::Name), "Copied name");
+        assert_eq!(
+            copied_message(1, CopyForm::Relative),
+            "Copied relative path"
+        );
+        assert_eq!(
+            copied_message(3, CopyForm::Absolute),
+            "Copied 3 absolute paths"
+        );
+    }
+
+    /// OSC 52 comes back for the caller to write; a native tool leaves nothing
+    /// to do. Either way the status line reports it.
+    #[test]
+    fn a_copy_reports_what_it_did() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus("/r/a.txt".into());
+        let targets = h.app.action_targets(&rows);
+
+        // Drive the transport directly: choosing it reads the real environment,
+        // which a test must not depend on.
+        let sequence = clipboard::copy("a.txt", clipboard::Transport::Osc52).unwrap();
+        assert_eq!(sequence, Some(clipboard::osc52("a.txt")));
+
+        let performed = h.app.copy_selection(&targets, CopyForm::Name);
+        assert!(matches!(
+            performed,
+            Performed::Write(_) | Performed::Nothing
+        ));
+        assert_eq!(h.app.status, "Copied name");
+    }
+
+    /// The keyboard route in has no pointer to reconcile with the selection, so
+    /// unlike a right-click outside it, it disturbs nothing.
+    #[test]
+    fn opening_the_menu_from_the_keyboard_leaves_the_selection_alone() {
+        let mut h = harness(Mode::Tree);
+        feed(
+            &mut h.app,
+            "/r",
+            &[
+                ("a.txt", NodeKind::File),
+                ("b.txt", NodeKind::File),
+                ("c.txt", NodeKind::File),
+            ],
+        );
+        let rows = h.app.rows();
+        h.app.view.focus("/r/a.txt".into());
+        h.app.view.move_by_extending(&rows, 1);
+        assert_eq!(h.app.view.selection_len(), 2);
+
+        let point = h
+            .app
+            .cursor_point(pane(), &rows)
+            .expect("the cursor is on screen");
+        assert!(
+            h.app
+                .open_menu(&rows, h.app.view.selection.clone(), point.0, point.1)
+        );
+        assert_eq!(
+            h.app.view.selection_len(),
+            2,
+            "the selection survives the menu opening"
+        );
+        assert_eq!(h.app.action_targets(&rows).len(), 2);
+    }
+
+    /// The menu lands on the cursor's own row, indented to where its text
+    /// starts rather than at column zero.
+    #[test]
+    fn the_keyboard_menu_opens_at_the_cursor_row() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("src", NodeKind::Dir)]);
+        drain_expands(&h.source_rx);
+        feed(&mut h.app, "/r/src", &[("main.rs", NodeKind::File)]);
+        h.app.tree.set_expanded(Path::new("/r/src"), true);
+        let rows = h.app.rows();
+
+        // Rows: /r (depth 0), src (1), main.rs (2).
+        h.app.view.focus("/r".into());
+        assert_eq!(h.app.cursor_point(pane(), &rows), Some((0, 0)));
+        h.app.view.focus("/r/src/main.rs".into());
+        let (x, y) = h.app.cursor_point(pane(), &rows).expect("on screen");
+        assert_eq!(y, 2, "the cursor's own row");
+        assert_eq!(x, 2 * render::INDENT_WIDTH, "indented to the row's text");
+
+        // Scrolled out of the viewport, there is nowhere to put it.
+        h.app.view.scroll = 99;
+        assert_eq!(h.app.cursor_point(pane(), &rows), None);
+    }
+
+    /// A scratch tree on the real filesystem, since operations write to it.
+    fn scratch(tag: &str) -> PathBuf {
+        // No test reaches the developer's real trash. Installed here rather
+        // than per-test because every test that trashes builds a scratch
+        // directory first, so future ones inherit it.
+        birch_core::ops::redirect_trash_for_tests(
+            std::env::temp_dir().join(format!("birch-test-trash-{}", std::process::id())),
+        );
+        let path = std::env::temp_dir().join(format!(
+            "birch-app-{}-{tag}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path.canonicalize().unwrap()
+    }
+
+    fn rooted(root: &Path, entries: &[(&str, NodeKind)]) -> super::tests::Harness {
+        let mut h = harness(Mode::Tree);
+        h.app.root = root.to_path_buf();
+        h.app.tree = Tree::new(root.to_path_buf());
+        h.app.tree.set_expanded(root, true);
+        h.app.tree.apply(TreeDelta::Snapshot {
+            dir: root.to_path_buf(),
+            entries: entries
+                .iter()
+                .map(|(name, kind)| birch_core::Entry {
+                    name: (*name).into(),
+                    kind: *kind,
+                })
+                .collect(),
+        });
+        h
+    }
+
+    /// Typing goes to the field rather than the search, `Enter` commits, and
+    /// nothing touches the tree until it does (ADR 0030).
+    #[test]
+    fn an_inline_rename_only_touches_disk_on_enter() {
+        let root = scratch("rename");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.join("a.txt"));
+
+        h.app.begin_edit(&rows, Action::Rename);
+        assert!(h.app.edit.is_some(), "the field is open");
+        // A printable reaches the field, not the search.
+        h.app.handle_edit_input(InputAction::Char('b'));
+        assert!(h.app.search.is_none(), "typing did not start a search");
+        assert!(root.join("a.txt").exists(), "nothing has happened yet");
+
+        h.app.handle_edit_input(InputAction::Enter);
+        assert!(h.app.edit.is_none());
+        assert!(root.join("ab.txt").exists() && !root.join("a.txt").exists());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_abandoned_edit_leaves_nothing_behind() {
+        let root = scratch("abandon");
+        let mut h = rooted(&root, &[]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.clone());
+
+        h.app.begin_edit(&rows, Action::NewFile);
+        for c in "ghost.txt".chars() {
+            h.app.handle_edit_input(InputAction::Char(c));
+        }
+        h.app.handle_edit_input(InputAction::Esc);
+        assert!(h.app.edit.is_none());
+        assert!(!root.join("ghost.txt").exists(), "Esc wrote nothing");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_refused_name_keeps_the_field_and_the_text() {
+        // Closing the field on a clash threw away what was typed and left the
+        // tree unchanged behind it, which reads as a create that silently
+        // overwrote the file it collided with.
+        let root = scratch("clash");
+        std::fs::write(root.join("taken.txt"), b"KEEP").unwrap();
+        let mut h = rooted(&root, &[("taken.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.clone());
+
+        h.app.begin_edit(&rows, Action::NewFile);
+        for c in "taken.txt".chars() {
+            h.app.handle_edit_input(InputAction::Char(c));
+        }
+        h.app.handle_edit_input(InputAction::Enter);
+
+        assert!(h.app.edit.is_some(), "the field stayed open");
+        assert_eq!(
+            h.app.edit.as_ref().map(|e| e.buffer()),
+            Some("taken.txt"),
+            "with the text intact, so a typo costs a keystroke and not a retype"
+        );
+        assert!(
+            h.app.status.contains("already exists"),
+            "and it says why: {:?}",
+            h.app.status
+        );
+        assert_eq!(
+            std::fs::read(root.join("taken.txt")).unwrap(),
+            b"KEEP",
+            "the file it collided with is untouched"
+        );
+
+        // Correcting the name in the same field commits.
+        for _ in 0..9 {
+            h.app.handle_edit_input(InputAction::Backspace);
+        }
+        for c in "free.txt".chars() {
+            h.app.handle_edit_input(InputAction::Char(c));
+        }
+        h.app.handle_edit_input(InputAction::Enter);
+        assert!(h.app.edit.is_none(), "the corrected name committed");
+        assert!(root.join("free.txt").exists());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn cut_and_paste_moves_and_copy_and_paste_duplicates() {
+        let root = scratch("clipboard");
+        std::fs::write(root.join("a.txt"), b"DATA").unwrap();
+        std::fs::create_dir(root.join("dest")).unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File), ("dest", NodeKind::Dir)]);
+        let rows = h.app.rows();
+
+        // Nothing held: paste is absent from the menu rather than inert.
+        h.app.view.focus(root.join("dest"));
+        let targets = h.app.action_targets(&rows);
+        assert!(!Action::Paste.available(h.app.action_context(&targets, "vim")));
+
+        h.app.view.focus(root.join("a.txt"));
+        h.app.hold(&rows, false);
+        assert_eq!(h.app.pending_label.as_deref(), Some("a.txt"));
+
+        h.app.view.focus(root.join("dest"));
+        let rows = h.app.rows();
+        h.app.paste(&rows);
+        assert!(
+            root.join("dest/a.txt").exists() && !root.join("a.txt").exists(),
+            "a cut paste moves"
+        );
+        assert!(h.app.pending.is_none(), "the clipboard is spent");
+
+        // ...and it is one undo step.
+        h.app.undo();
+        assert!(root.join("a.txt").exists() && !root.join("dest/a.txt").exists());
+
+        // A copy paste duplicates, leaving the original where it was.
+        let rows = h.app.rows();
+        h.app.view.focus(root.join("a.txt"));
+        h.app.hold(&rows, true);
+        h.app.view.focus(root.join("dest"));
+        let rows = h.app.rows();
+        h.app.paste(&rows);
+        assert_eq!(std::fs::read(root.join("dest/a.txt")).unwrap(), b"DATA");
+        assert!(root.join("a.txt").exists(), "the original stayed");
+
+        // Undoing a paste-as-copy trashes what it made, never the original.
+        h.app.undo();
+        assert!(!root.join("dest/a.txt").exists());
+        assert!(root.join("a.txt").exists(), "the original is untouched");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_paste_where_it_already_is_says_so_rather_than_claiming_a_move() {
+        let root = scratch("clipboard-noop");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+
+        h.app.view.focus(root.join("a.txt"));
+        h.app.hold(&rows, false);
+        // The root is a.txt's own directory.
+        h.app.view.focus(root.clone());
+        let rows = h.app.rows();
+        h.app.paste(&rows);
+        assert!(
+            h.app.status.contains("already in"),
+            "an operation that did nothing says nothing happened: {:?}",
+            h.app.status
+        );
+        assert!(h.app.undo_label.is_none(), "and records no undo step");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn undo_takes_back_a_rename_and_then_a_create() {
+        let root = scratch("undo");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.join("a.txt"));
+
+        // Nothing done yet: the action is absent rather than inert (ADR 0029).
+        let targets = h.app.action_targets(&rows);
+        assert!(
+            !Action::Undo.available(h.app.action_context(&targets, "vim")),
+            "there is nothing to take back"
+        );
+
+        // The field opens pre-filled with the current name, cursor at the
+        // extension boundary, so one character makes `ab.txt`.
+        h.app.begin_edit(&rows, Action::Rename);
+        h.app.handle_edit_input(InputAction::Char('b'));
+        h.app.handle_edit_input(InputAction::Enter);
+        assert!(root.join("ab.txt").exists());
+        assert_eq!(h.app.undo_label.as_deref(), Some("Rename of ab.txt"));
+
+        h.app.undo();
+        assert!(
+            root.join("a.txt").exists() && !root.join("ab.txt").exists(),
+            "the name came back"
+        );
+        assert_eq!(h.app.undo_label, None, "and the stack is empty again");
+
+        // Undoing a create trashes what it made rather than unlinking it: the
+        // file may have been written to since birch made it.
+        let rows = h.app.rows();
+        h.app.view.focus(root.clone());
+        h.app.begin_edit(&rows, Action::NewFile);
+        for c in "made.txt".chars() {
+            h.app.handle_edit_input(InputAction::Char(c));
+        }
+        h.app.handle_edit_input(InputAction::Enter);
+        assert!(root.join("made.txt").exists());
+        assert_eq!(h.app.undo_label.as_deref(), Some("New made.txt"));
+
+        h.app.undo();
+        assert!(!root.join("made.txt").exists(), "it went to the trash");
+        assert!(
+            h.app.status.contains("trash"),
+            "and says so: {}",
+            h.app.status
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn undo_after_a_delete_brings_the_file_back() {
+        // And does not reverse the rename underneath it, which would be the
+        // destructive surprise ADR 0033 exists to prevent.
+        let root = scratch("undo-delete");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        std::fs::write(root.join("gone.txt"), b"y").unwrap();
+        let mut h = rooted(
+            &root,
+            &[("a.txt", NodeKind::File), ("gone.txt", NodeKind::File)],
+        );
+        let rows = h.app.rows();
+
+        h.app.view.focus(root.join("a.txt"));
+        h.app.begin_edit(&rows, Action::Rename);
+        h.app.handle_edit_input(InputAction::Char('b'));
+        h.app.handle_edit_input(InputAction::Enter);
+
+        h.app.trash_now(vec![root.join("gone.txt")]);
+        assert_eq!(h.app.undo_label.as_deref(), Some("Delete of gone.txt"));
+
+        h.app.undo();
+        assert!(
+            root.join("gone.txt").exists(),
+            "the file came back out of the trash: {}",
+            h.app.status
+        );
+        assert!(
+            h.app.status.starts_with("Restored"),
+            "and says so: {}",
+            h.app.status
+        );
+        assert!(
+            root.join("ab.txt").exists(),
+            "the rename underneath was not touched"
+        );
+        assert_eq!(
+            h.app.undo_label.as_deref(),
+            Some("Rename of ab.txt"),
+            "the rename is still there for the next Ctrl-Z"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_empty_name_keeps_the_field_open_too() {
+        let root = scratch("empty-name");
+        let mut h = rooted(&root, &[]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.clone());
+
+        h.app.begin_edit(&rows, Action::NewFile);
+        h.app.handle_edit_input(InputAction::Enter);
+        assert!(h.app.edit.is_some(), "nothing to commit, nothing to close");
+        assert!(h.app.status.contains("required"));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn creating_makes_intermediates_and_a_trailing_slash_makes_a_directory() {
+        let root = scratch("create");
+        let mut h = rooted(&root, &[]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.clone());
+
+        for (input, check) in [("deep/deeper/c.txt", false), ("sub/", true)] {
+            h.app.begin_edit(&rows, Action::NewFile);
+            for c in input.chars() {
+                h.app.handle_edit_input(InputAction::Char(c));
+            }
+            h.app.handle_edit_input(InputAction::Enter);
+            let made = root.join(input.trim_end_matches('/'));
+            assert_eq!(made.is_dir(), check, "{input}");
+            assert!(made.exists(), "{input}");
+        }
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A delete never asks. It goes to the trash and `Ctrl-Z` brings it back;
+    /// a prompt guarding a reversible act is friction (ADR 0031).
+    #[test]
+    fn a_delete_never_asks_whatever_git_knows() {
+        let root = scratch("delete");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.join("a.txt"));
+
+        // Outside a repository, where git has no copy of anything — the case
+        // that used to prompt.
+        h.app.begin_delete(&rows);
+        assert!(
+            !root.join("a.txt").exists(),
+            "it went straight to the trash"
+        );
+        assert!(h.app.status.contains("trash"), "{}", h.app.status);
+
+        // ...and it is undoable, which is what makes the prompt unnecessary.
+        h.app.undo();
+        assert_eq!(std::fs::read(root.join("a.txt")).unwrap(), b"x");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_delete_moves_the_path_to_the_trash() {
+        let root = scratch("trash");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        h.app.view.focus(root.join("a.txt"));
+
+        h.app.begin_delete(&rows);
+        assert!(!root.join("a.txt").exists(), "it left the tree");
+        assert!(
+            h.app.status.contains("trash"),
+            "the status says where it went: {:?}",
+            h.app.status
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_set_of_paths_is_named_by_count() {
+        assert_eq!(describe(&[PathBuf::from("/r/a.txt")]), "a.txt");
+        assert_eq!(
+            describe(&[PathBuf::from("/r/a"), PathBuf::from("/r/b")]),
+            "2 items"
+        );
+    }
+
+    /// A press that stays on its row is still a click; one that leaves it
+    /// becomes a drag. No threshold to tune (ADR 0032).
+    #[test]
+    fn a_drag_begins_only_when_the_pointer_leaves_its_row() {
+        let root = scratch("drag-begin");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let mut h = rooted(&root, &[("sub", NodeKind::Dir), ("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        // Rows: root (0), sub (1), a.txt (2).
+        super::tests::press(&mut h.app, &rows, 2, false);
+        h.app.update_drag(pane(), &rows, 4, 2);
+        assert!(h.app.drag.is_none(), "still on its own row: a click");
+
+        h.app.update_drag(pane(), &rows, 4, 1);
+        let drag = h.app.drag.as_ref().expect("it left the row");
+        assert_eq!(drag.paths, vec![root.join("a.txt")]);
+        assert_eq!(
+            drag.target.as_ref().map(|t| t.directory.clone()),
+            Some(root.join("sub"))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_drop_moves_the_paths_and_says_where_they_went() {
+        let root = scratch("drag-drop");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let mut h = rooted(&root, &[("sub", NodeKind::Dir), ("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        super::tests::press(&mut h.app, &rows, 2, false);
+        h.app.update_drag(pane(), &rows, 4, 1);
+        h.app.finish_drag();
+
+        assert!(root.join("sub/a.txt").is_file() && !root.join("a.txt").exists());
+        assert!(h.app.status.contains("sub"), "{:?}", h.app.status);
+        assert!(h.app.drag.is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Every refusal is visible during the drag rather than discovered after
+    /// it, and a refused drop moves nothing.
+    #[test]
+    fn a_refused_target_is_refused_before_release() {
+        let root = scratch("drag-refuse");
+        std::fs::create_dir_all(root.join("outer/inner")).unwrap();
+        std::fs::write(root.join("outer/inner/a.txt"), b"x").unwrap();
+        // `keep.txt` beside `inner` stops the two directories compacting into
+        // one chain row, which would otherwise make `outer` unaddressable.
+        std::fs::write(root.join("outer/keep.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("outer", NodeKind::Dir)]);
+        h.app.tree.set_expanded(&root.join("outer"), true);
+        h.app.tree.apply(TreeDelta::Snapshot {
+            dir: root.join("outer"),
+            entries: vec![
+                birch_core::Entry {
+                    name: "inner".into(),
+                    kind: NodeKind::Dir,
+                },
+                birch_core::Entry {
+                    name: "keep.txt".into(),
+                    kind: NodeKind::File,
+                },
+            ],
+        });
+        let rows = h.app.rows();
+        assert_eq!(rows.len(), 4, "root, outer, inner, keep.txt");
+        // Rows: root (0), outer (1), inner (2).
+        super::tests::press(&mut h.app, &rows, 1, false);
+        h.app.update_drag(pane(), &rows, 4, 2);
+        let target = h.app.drag.as_ref().unwrap().target.as_ref().unwrap();
+        assert!(
+            target.refusal.is_some(),
+            "a folder cannot move inside itself"
+        );
+        assert!(h.app.status.contains("inside itself"), "{:?}", h.app.status);
+
+        h.app.finish_drag();
+        assert!(root.join("outer/inner").is_dir(), "nothing moved");
+        assert!(h.app.status.starts_with("Not moved"), "{:?}", h.app.status);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_drop_onto_the_current_parent_is_refused_as_already_there() {
+        let root = scratch("drag-noop");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        let rows = h.app.rows();
+        super::tests::press(&mut h.app, &rows, 1, false);
+        // Row 0 is the root, which is already a.txt's parent.
+        h.app.update_drag(pane(), &rows, 4, 0);
+        let target = h.app.drag.as_ref().unwrap().target.as_ref().unwrap();
+        assert_eq!(target.refusal.as_deref(), Some("already there"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Dragging moves files, so it is a mutation — and mutations never happen
+    /// in the picker, which the gesture must state itself because it does not
+    /// go through `Action::available` (ADR 0032).
+    #[test]
+    fn a_drag_does_nothing_in_the_picker() {
+        let root = scratch("pick-drag");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let mut h = rooted(&root, &[("sub", NodeKind::Dir), ("a.txt", NodeKind::File)]);
+        h.app.mode = Mode::Pick;
+        let rows = h.app.rows();
+
+        super::tests::press(&mut h.app, &rows, 2, false);
+        h.app.update_drag(pane(), &rows, 4, 1);
+        assert!(h.app.drag.is_none(), "no drag begins in the picker");
+        h.app.finish_drag();
+        assert!(root.join("a.txt").is_file(), "and nothing moved");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A compacted chain renders as `a/b/c` while its path is the tail.
+    /// Pre-filling the label would resolve against the tail's parent and move
+    /// the directory somewhere nobody asked for.
+    #[test]
+    fn renaming_a_compacted_chain_edits_its_tail_name() {
+        let root = scratch("chain-rename");
+        std::fs::create_dir_all(root.join("src/utils")).unwrap();
+        let mut h = rooted(&root, &[("src", NodeKind::Dir)]);
+        h.app.tree.set_expanded(&root.join("src"), true);
+        h.app.tree.apply(TreeDelta::Snapshot {
+            dir: root.join("src"),
+            entries: vec![birch_core::Entry {
+                name: "utils".into(),
+                kind: NodeKind::Dir,
+            }],
+        });
+        let rows = h.app.rows();
+        let chain = rows
+            .iter()
+            .find(|row| row.name.contains('/'))
+            .expect("a chain formed");
+        assert_eq!(chain.path, root.join("src/utils"));
+
+        h.app.view.focus(chain.path.clone());
+        h.app.begin_edit(&rows, Action::Rename);
+        assert_eq!(
+            h.app.edit.as_ref().unwrap().buffer(),
+            "utils",
+            "the tail's name, not the chain's label"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Two dragged rows sharing a basename collide with each other, which the
+    /// filesystem cannot yet show.
+    #[test]
+    fn a_drag_refuses_a_collision_inside_its_own_set() {
+        let root = scratch("drag-set-collide");
+        std::fs::create_dir_all(root.join("x")).unwrap();
+        std::fs::create_dir_all(root.join("y")).unwrap();
+        std::fs::create_dir_all(root.join("z")).unwrap();
+        std::fs::write(root.join("x/a.txt"), b"x").unwrap();
+        std::fs::write(root.join("y/a.txt"), b"x").unwrap();
+        let mut h = rooted(
+            &root,
+            &[
+                ("x", NodeKind::Dir),
+                ("y", NodeKind::Dir),
+                ("z", NodeKind::Dir),
+            ],
+        );
+        for dir in ["x", "y"] {
+            h.app.tree.set_expanded(&root.join(dir), true);
+            h.app.tree.apply(TreeDelta::Snapshot {
+                dir: root.join(dir),
+                entries: vec![birch_core::Entry {
+                    name: "a.txt".into(),
+                    kind: NodeKind::File,
+                }],
+            });
+        }
+        h.app.tree.apply(TreeDelta::Snapshot {
+            dir: root.join("z"),
+            entries: Vec::new(),
+        });
+        let rows = h.app.rows();
+        let find = |name: &str, parent: &str| {
+            rows.iter()
+                .position(|r| r.path == root.join(parent).join(name))
+                .expect("row")
+        };
+        let (xa, ya) = (find("a.txt", "x"), find("a.txt", "y"));
+        h.app.view.focus(root.join("x/a.txt"));
+        h.app.view.toggle_selected(&rows, ya);
+        assert_eq!(h.app.view.selection_len(), 2);
+
+        super::tests::press(&mut h.app, &rows, xa, false);
+        let z = rows.iter().position(|r| r.path == root.join("z")).unwrap();
+        h.app.update_drag(pane(), &rows, 4, z as u16);
+        let drag = h.app.drag.as_ref().unwrap();
+        assert_eq!(
+            drag.paths.len(),
+            2,
+            "both rows are being dragged: {:?}",
+            drag.paths
+        );
+        let target = drag.target.as_ref().unwrap();
+        assert!(
+            target
+                .refusal
+                .as_deref()
+                .is_some_and(|why| why.contains("a.txt")),
+            "refused before release: {:?}",
+            target.refusal
+        );
+
+        h.app.finish_drag();
+        assert!(root.join("x/a.txt").is_file() && root.join("y/a.txt").is_file());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A removal that stops partway must not ask about the paths that already
+    /// went — the tree no longer shows those rows, so a report that mentioned
+    /// only the failure would leave them unexplained.
+    #[test]
+    fn a_partial_trash_reports_what_went_and_what_did_not() {
+        let root = scratch("partial-trash");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(&root, &[("a.txt", NodeKind::File)]);
+        // The second path does not exist, so the removal stops after the first.
+        h.app
+            .trash_now(vec![root.join("a.txt"), root.join("ghost.txt")]);
+
+        assert!(!root.join("a.txt").exists(), "the first one went");
+        assert!(
+            h.app.status.contains("went") && h.app.status.contains("not deleted"),
+            "it reports both halves: {:?}",
+            h.app.status
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Hovering a collapsed directory opens it — except an ignored one, which
+    /// stays shut while remaining a legal target (ADR 0032).
+    #[test]
+    fn a_drag_springs_a_directory_open_but_never_an_ignored_one() {
+        let root = scratch("spring");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut h = rooted(
+            &root,
+            &[
+                ("node_modules", NodeKind::Dir),
+                ("sub", NodeKind::Dir),
+                ("a.txt", NodeKind::File),
+            ],
+        );
+        h.app.git_state = Some(Arc::new(parse_porcelain_v2(b"! node_modules/\0", &root)));
+        let rows = h.app.rows();
+        let row_of = |name: &str| rows.iter().position(|r| r.path == root.join(name)).unwrap();
+
+        super::tests::press(&mut h.app, &rows, row_of("a.txt"), false);
+        h.app.update_drag(pane(), &rows, 4, row_of("sub") as u16);
+        assert!(
+            h.app.tree.node_at(&root.join("sub")).unwrap().expanded,
+            "a normal directory springs open"
+        );
+
+        h.app
+            .update_drag(pane(), &rows, 4, row_of("node_modules") as u16);
+        assert!(
+            !h.app
+                .tree
+                .node_at(&root.join("node_modules"))
+                .unwrap()
+                .expanded,
+            "an ignored one stays shut"
+        );
+        let target = h.app.drag.as_ref().unwrap().target.as_ref().unwrap();
+        assert_eq!(
+            target.directory,
+            root.join("node_modules"),
+            "but is still a target"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// `Esc` backs out one layer at a time, outermost first (ADR 0030).
+    #[test]
+    fn esc_backs_out_the_layers_in_order() {
+        let mut h = harness(Mode::Tree);
+        feed(&mut h.app, "/r", &[("a.txt", NodeKind::File)]);
+        h.app.index = Some(super::tests::index_of(&[("a.txt", false)]));
+        h.app.search_push('a');
+        let rows = h.app.rows();
+        assert!(
+            h.app
+                .open_menu(&rows, Some(PathBuf::from("/r/a.txt")), 2, 1)
+        );
+        h.app.edit = Some(Editor::create("/r".into(), false));
+
+        h.app.handle_edit_input(InputAction::Esc);
+        assert!(
+            h.app.edit.is_none() && h.app.menu.is_some(),
+            "then the edit"
+        );
+        assert_eq!(h.app.menu_input(pane(), InputAction::Esc), MenuStep::Close);
+        h.app.menu = None;
+        assert!(!h.app.on_esc(), "then the search, without quitting");
+        assert!(h.app.search.is_none());
+        assert!(h.app.on_esc(), "and only then, quit");
     }
 
     #[test]

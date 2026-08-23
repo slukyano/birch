@@ -93,13 +93,15 @@ Ignored dirs (e.g. `node_modules`) are never auto-expanded, never searched, and 
 | `←` on dir / into parent | Collapse / jump to parent |
 | `Enter` on file | Open (see Opening files). **Enter always opens — never contextual.** |
 | any printable char | Fuzzy filename search |
-| `Esc` | Back out one layer: close the context menu, else clear the search; at top level, quit (ADR 0012) |
+| `Shift-F10` / `Menu` | Open the context menu at the cursor row, without disturbing the selection. On an Apple keyboard the `Menu` key does not exist and `F10` is Mute, so the gesture is `Fn`-`Shift`-`F10` unless standard function keys are enabled. |
+| `Esc` | Back out one layer: cancel an inline edit, else close the context menu, else clear the search; at top level, quit (ADR 0012, ADR 0030) |
 | `F2` | Rename (inline) |
 | `Delete` | Delete (to trash) |
 | `Ctrl-N` | New file / dir |
+| `Ctrl-X` `Ctrl-C` `Ctrl-V` | Cut, copy, paste entries (ADR 0034) |
+| `Ctrl-Z` | Undo the last mutation (ADR 0033) |
 | `Ctrl-F` | Content search source |
-| `Ctrl-Shift-C` | Copy relative path |
-| `Ctrl-C` | Quit (`q` is a search character like any other) |
+| `Ctrl-Q` | Quit (`q` alone is a search character like any other; `Ctrl-C` copies — ADR 0034) |
 
 Printable characters are permanently reserved for search — no letter hotkeys, ever. The context menu is the primary surface for everything else; hotkeys above are accelerators shown in the menu.
 
@@ -107,26 +109,35 @@ Printable characters are permanently reserved for search — no letter hotkeys, 
 
 - **Single-click selects; double-click activates** (ADR 0015 — reversed from the original VS Code-school single-click-activates). In a host pane, a click meant to focus the pane — or just to point — arrives as a normal click, so the first click must be harmless: it only moves selection. A second click on the same row within 450 ms is Enter's twin (open file / toggle dir). Clicking a dir's chevron toggles without moving selection; each chevron click is its own toggle.
 - **A click completes on release** (ADR 0025): the press arms, and the click acts only when the button is released on the same row, in the same zone. Releasing anywhere else abandons it, so a click can be revoked by sliding off. The double-click window measures release to release — two complete clicks.
+- **Drag a row onto a directory to move it** ([ADR 0032](adr/0032-move-by-dragging.md)). A drag is a click that left its row — no threshold, since the click model already tracks which row a press began on — so a click that wobbles inside its row is still a click. A press inside the selection drags all of it; outside it drags that row alone. A file targets its parent, below the last row targets the root, and a compacted chain targets its tail. Hovering a collapsed directory springs it open, except an ignored one, which stays shut while remaining a legal target. **Refusals are visible before release**: a folder into its own descendant, a colliding name, or the source's own parent draw no highlight and the status line says why. A drop never overwrites and never silently renames, and the status line reports what moved and where. **`Ctrl-Z` takes a drop back** ([ADR 0033](adr/0033-undo-is-a-session-stack.md)), including a multi-row one, as a single step. Dragging into the pane's edge scrolls a row per movement; holding still does not keep scrolling.
 - **`Ctrl`-click toggles** a row in or out of the selection; **`Shift`-click** extends the range from the anchor to it. Both are handled whenever the terminal forwards the modifier — many terminals keep `Shift` for their own text selection while an application has the mouse (ghostty's `mouse-shift-capture` defaults to `false`), and birch never claims it back. `Shift` with the arrow keys always works.
 - **Scroll wheel**: `--scroll-lines` rows per tick, 3 by default (1–10).
-- **Hover highlight** (SGR 1003 motion tracking): on inside the context menu, which is the only place motion is asked for today. Hover in the tree is `090-hover-highlight-in-the-tree`.
+- **Hover highlight** (SGR 1003 motion tracking): motion is reported for the whole session — `EnableMouseCapture` requests mode 1003 along with the rest, and birch never turns a mouse mode off while it runs, because resetting one drops reporting below the level the terminal was told to use. The context menu is the only thing that acts on motion today; hover in the tree is `090-hover-highlight-in-the-tree`.
 - **Right-click → context menu**, which is a **projection of the action layer** (ADR 0029), not an authored list: actions declare a label, an accelerator, and an availability rule over the selection, and the menu draws whichever are available. **An action that does not exist yet is absent, not greyed** — the menu grows as its contents land, and no task that adds an action edits the menu. Its full intended shape, in groups (a separator is drawn between any two groups that survive):
 
 ```
-Open                  ↵
-Open with…            (034)
+Open with nvim        ↵      (a file: the resolved open command)
+Expand / Collapse     ↵      (a directory: what Enter will do to it)
+Open with open               (the platform opener, named: open / xdg-open)
+Reveal                       (show it in the desktop's file manager)
+──────────
+Undo Rename of b.txt  ^Z     (093 — names the step it would reverse)
 ──────────
 New File…             ^N     (029)
+New Folder…                  (029)
 Rename…               F2     (029)
 Delete                ⌦      (029)
 ──────────
 Copy Name                    (028)
-Copy Relative Path    ^⇧C    (028)
+Copy Relative Path           (028)
 Copy Absolute Path           (028)
 ──────────
 Reveal Root Here
 ```
 
+- **Every row describes what will happen to *this* selection**, not the category it belongs to. The `Open` row names the program it will run — the program's name, not the whole template, which truncated is noise — and the name is drawn **dim**, so the row reads as an instruction and its parameter rather than as one compound verb. `Open` acts on the **cursor**, not the selection, so its label follows the cursor's row and nothing else: on a directory `Enter` toggles, and the row says `Expand` or `Collapse` accordingly, because naming an editor that will not run describes the wrong thing. In `--pick` it confirms, and the row is a plain `Open`. The second row hands the path to the desktop's own handler, **named** rather than described — `Open with open`, `Open with xdg-open` — because "system" is not a thing anybody runs. It is absent when the resolved command already *is* that handler, so the menu never shows two rows that do one thing, and absent in `--pick`.
+- **A folder gets no plain `Open` row**, which is where birch's menu and VS Code's part ways for a reason: VS Code drops its open entries on a folder entirely (`ExplorerFolderContext.toNegated()`), because there the toggle is only ever a click. birch's menu also teaches the keyboard — it prints the accelerator beside each row — so naming what `Enter` does is worth a row where hiding it is not.
+- **It opens from the keyboard too**, with `Shift-F10` or the `Menu` key, at the cursor row. A right-click has to reconcile a pointer with the selection; a keyboard trigger has no such conflict and moves nothing.
 - **Opening it follows the left button's rule**: a right-press arms, and the menu opens on the release on the row the press started on (ADR 0025, extended). Keyboard works inside it — `↑`/`↓` step entries and skip separators, `Home`/`End` reach the ends, `Enter` invokes, `Esc` closes. **A printable character closes the menu and types into the search**: ADR 0008 has no exception, and a layer that redefines the keyboard is how a modal language starts.
 - **It targets the selection, and only disturbs it when it must**: a right-click inside the current selection acts on all of it, a click outside collapses the selection to that row first, and a click below the last row collapses to the root. A dimmed row is inert here as everywhere (ADR 0023).
 - **Geometry**: drawn as a bordered box over the tree, shifted left to fit at the right edge (rather than flipped, which in a narrow pane throws it across the whole width), flipped upward at the bottom, and clamped-and-scrolled in a pane too short to hold it. Accelerators are dropped before labels ellipsise.
@@ -182,17 +193,20 @@ Content search swaps the pane's **source** (see Architecture): same tree widget,
 
 ## File operations
 
-Exactly four: **rename, delete, new file, new dir.** No move (see below), no copy, no op-history/undo stack. Whether an operation accepts one target or several is settled per operation, when that operation is designed.
+**Rename, delete, new file, new dir — and move, by dragging** ([ADR 0032](adr/0032-move-by-dragging.md)). **Cut (`Ctrl-X`), copy (`Ctrl-C`) and paste (`Ctrl-V`)** ([ADR 0034](adr/0034-cut-copy-paste-and-the-key-that-quits.md)) — one slot, session-only, landing in the selected directory or the selected file's parent; a paste never overwrites and never silently renames, and is one undo step however many rows it carried. **`Ctrl-C` therefore does not quit**: quit is `Esc` and `Ctrl-Q`. **Undo is a session stack** ([ADR 0033](adr/0033-undo-is-a-session-stack.md)): `Ctrl-Z` reverses the last mutation, the menu row names what it would reverse, and every step is validated against the filesystem when it runs rather than when it was recorded. **Delete is taken back too**: birch keeps what each trashed path needs to come back — where the OS put it, or the platform's own trash record — and `Ctrl-Z` restores it, refusing rather than overwriting if the old name has been taken meanwhile. No redo. Whether an operation accepts one target or several is settled per operation: **delete takes the whole selection**, while rename and create take exactly one — a rename edits one row, and several rows do not name one directory to create in. All four are unavailable in `--pick`, where mutations are disabled.
+
+**Typing while an edit is open reaches the field, not the search.** [ADR 0030](adr/0030-the-inline-editor-is-the-only-mode.md) reads [ADR 0008](adr/0008-q-types-into-search.md) as it was always meant — printables go to whatever text field is focused, and an edit focuses a different one — so no letter becomes a command. The inline editor is birch's **only** mode, admissible because it is self-evident, transient, and singly-exited; a second one has to clear the same bar.
 
 - **Rename (F2)**: inline row editing — the selected row becomes a text input (never a bottom command bar; prompt bars grow verbs). Editing to a path (`../other/name.ts`) silently performs a move — rename-with-path is the 80% of "move" without the complexity cliff. Plain `rename()`; no `git mv` magic (git rename detection handles it).
+- **The inline field carries the icon it will have**, from the first character: a create shows the icon its extension resolves to and switches to a folder the moment a trailing slash is typed, and a rename's icon follows the extension as it changes. The glyph columns are built from what the edit *will produce*, through the same code that draws a real row, so the two cannot drift.
 - **New file (Ctrl-N)**: inline input in the target dir. `foo/bar/baz.ts` creates intermediate dirs; trailing slash (`foo/`) creates a dir. One binding, three ops (VS Code's trick). On a compacted chain, creates in the tail. No dedicated new-dir key.
-- **Delete (⌦)**: **to trash** (macOS trash / XDG trash spec) — undoable beats confirmable. Confirmation only where trash can't help, and **git-aware**: deleting a *tracked* file is nearly free (recoverable from repo, shows as deleted badge — the git integration doubles as a safety net); deleting an *untracked* file gets the friction and says why.
+- **Delete (⌦)**: **to trash** (macOS trash / XDG trash spec), immediately and with **no confirmation** ([ADR 0031](adr/0031-delete-goes-to-trash.md)) — *undoable beats confirmable*, and `Ctrl-Z` restores a deleted file out of the trash ([ADR 0033](adr/0033-undo-is-a-session-stack.md)). A prompt guarding a reversible act is friction, and a prompt that appears for only some deletes cannot be learned at all. When the trash is unavailable **nothing is deleted** — the failure is reported and the delete ends there. **There is no permanent delete**, neither as a fallback nor as a choice: this whole design rests on delete being recoverable, and a route around the trash removes the foundation. On an Apple keyboard the key labelled *Delete* sends Backspace, which belongs to the search, so the gesture there is `Fn`-`Delete`.
 - Ops and the watcher share the tree-delta stream: the op layer suppresses/owns watcher events for paths it is mutating (no flicker, no selection jumps mid-edit).
 - Mutations are **human-initiated only** — no socket verbs, and disabled by default in `--pick` mode.
 
 ## Copy name / paths
 
-Three variants (context menu; relative path also on `Ctrl-Shift-C`):
+Three variants, on the context menu. **No accelerator**: `Ctrl-Shift-C` cannot be bound, because in the key encoding birch decodes with `Shift` has no representation alongside a control character — it is the same byte as `Ctrl-C`, which quits. Reaching for copy would quit birch. Making it possible needs the Kitty keyboard protocol (`091-kitty-keyboard-protocol`).
 
 - **Copy Name** — `NewThing.tsx`
 - **Copy Relative Path** — relative to the **birch root** (not cwd; root-relative is what you're looking at)
@@ -200,11 +214,15 @@ Three variants (context menu; relative path also on `Ctrl-Shift-C`):
 
 Raw paths, no quoting/escaping magic (guessing the paste context is a losing game). On a compacted chain: tail's path; segment-click reaches intermediates.
 
-**Clipboard mechanics**, in fallback order:
+With several rows selected, a copy joins them with newlines, in tree order.
 
-1. **OSC 52** — terminal sets the clipboard; works over SSH and inside tmux (`set-clipboard on`); native in ghostty. First because the flagship environment is exactly where subprocess clipboards fail silently.
-2. Native fallback — `pbcopy` / `wl-copy` / `xclip`.
-3. Last resort — print to status line.
+**Clipboard mechanics.** **One transport per copy, chosen from the environment** — never two written together, so a clipboard manager sees one event and nothing fights another process for an X11 selection. OSC 52 is a one-way write with no reply, so a *reactive* chain cannot be built: there is no failure to observe and react to.
+
+1. **A remote session** (`$SSH_TTY`) takes **OSC 52** — the only transport that reaches the terminal the user is sitting at. A native tool there writes a clipboard nobody will ever paste from.
+2. **Otherwise the first native tool available** — `pbcopy`, else `wl-copy` under Wayland, else `xclip`/`xsel` under X11. This is not a backstop: Apple Terminal does not support OSC 52 at all.
+3. **With no native tool**, OSC 52 — whose silence costs nothing there, since there is nothing to fall back to.
+
+The status line then confirms what was copied. It is not a fallback tier: nothing here can know that a copy failed.
 
 "Resolve selected node → name/relpath/abspath" is one primitive with three transports: clipboard (menu), stdout (`--pick`), socket (`get-path`).
 

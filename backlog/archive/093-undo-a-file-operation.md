@@ -2,7 +2,7 @@
 type: Task
 title: Undo a file operation
 description: Sprint 021 makes birch mutate the filesystem; trash covers delete and nothing covers rename, move, or create.
-status: Draft
+status: Done
 priority: medium
 ---
 
@@ -40,6 +40,27 @@ did not survive contact with a maintainer request either.
   does something else entirely, and losing suspend is a real cost in a terminal.
 - **One step or many.** A single-level undo is far simpler and covers most of the value. A stack
   invites "redo", and then birch owns a history model.
+
+## Design
+
+Settled in [ADR 0033](../../docs/adr/0033-undo-is-a-session-stack.md), which answers the questions
+above with three measurements rather than three judgement calls:
+
+- **How far back:** a session-only stack, bounded at 100. A journal on disk is the different product
+  ADR 0031 declined to become.
+- **Delete is the asymmetric one:** `trash`'s `os_limited::restore_all` is compiled only for Windows
+  and Freedesktop systems, so on macOS birch cannot restore at all. A delete therefore records a step
+  that *refuses*, rather than recording nothing — otherwise `Ctrl-Z` after a delete would silently
+  reverse the operation before it.
+- **Undoing a create trashes** rather than unlinks, for ADR 0031's reason, and takes back the
+  shallowest path the create announced.
+- **The world moving underneath:** every step is validated when it runs. A refusal says why, reverses
+  nothing, and is still consumed — a step kept after refusing would jam the stack forever.
+- **`Ctrl-Z` is not a trap:** raw mode runs `cfmakeraw`, which clears `ISIG`, so `Ctrl-Z` has never
+  suspended birch. Nothing is given up by binding it.
+- **One step or many:** a stack, no redo. Redo is a history model, and birch does not own one.
+
+Delivered in sprint 021.
 
 ## Related
 

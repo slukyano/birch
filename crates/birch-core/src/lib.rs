@@ -5,17 +5,21 @@
 //! compiler-enforces the real-tree/render split (see `docs/design.md`).
 
 pub mod action;
+pub mod clipboard;
 pub mod config;
+pub mod disposal;
 pub mod files_source;
 pub mod filter;
 pub mod git;
 pub mod open_cmd;
+pub mod ops;
 pub mod persist;
 pub mod protocol;
 pub mod search;
 pub mod settings;
 pub mod source;
 pub mod tree;
+pub mod undo;
 pub mod watcher;
 
 pub use action::{Action, ActionContext, ActionTarget, MenuRow};
