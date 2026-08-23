@@ -9,6 +9,7 @@ tasks:
 - 029-add-file-operations
 - 034-add-open-with
 - 072-drag-to-move
+- 093-undo-a-file-operation
 ---
 
 # Scope rationale
@@ -287,6 +288,13 @@ Hands-on, all run and observed:
 - [x] 029-add-file-operations — implemented, gates green, verified on disk and with vhs
 - [x] 034-add-open-with — implemented, gates green, configured command verified
 - [x] 072-drag-to-move — implemented, gates green, verified on disk
+- [x] 093-undo-a-file-operation — added to scope mid-sprint at the maintainer's
+  direction; implemented, gates green, verified over a pty for rename, create,
+  drag and delete
+- [x] The live-use round — six defects the maintainer found by using the branch,
+  all fixed with regression tests; menu labels made cursor-accurate and honest;
+  `New Folder`, `Reveal`, and cut/copy/paste added; delete's conditional
+  confirmation and permanent delete both removed
 
 # Open questions
 

@@ -1,8 +1,8 @@
 ---
 type: ADR
 title: Undo is a session stack, and delete is the step it cannot take back
-status: Proposed
-date: 2026-08-22
+status: Accepted
+sprint: sprint-021
 supersedes: []
 amends: [0031, 0032]
 ---

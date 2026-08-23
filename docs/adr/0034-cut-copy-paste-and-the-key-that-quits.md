@@ -1,8 +1,8 @@
 ---
 type: ADR
 title: Cut, copy and paste — and Ctrl-C stops quitting
-status: Proposed
-date: 2026-08-22
+status: Accepted
+sprint: sprint-021
 supersedes: []
 amends: [0032]
 ---
