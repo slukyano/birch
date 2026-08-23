@@ -5,6 +5,15 @@ All notable changes to birch are documented here, following
 
 ## [Unreleased]
 
+### Changed
+
+- **`Ctrl-C` no longer quits — it copies the selected entries.** Quit is `Esc`
+  (at the top level) and the new **`Ctrl-Q`**. `Ctrl-C` is the only key anybody
+  reaches for to copy, and `Ctrl-Shift-C` cannot be represented at all in the
+  key encoding birch decodes, so the conventional binding had to come from
+  somewhere. birch runs in raw mode, where `Ctrl-C` was never a signal — only a
+  binding. If the muscle memory catches you out, it copies, which is harmless.
+
 ### Added
 
 - **File operations.** `F2` renames a row inline, `Ctrl-N` creates a file — or a
@@ -12,19 +21,43 @@ All notable changes to birch are documented here, following
   and `Delete` moves the selection to the platform trash. Renaming to a path
   (`../elsewhere/name.ts`) moves the file. Typing while an edit is open goes to
   the field rather than the search, and `Esc` cancels it having written nothing.
-  **Delete asks only where it has to**: a selection whose every path is tracked
-  in git goes straight to the trash, since it is recoverable twice over; anything
-  untracked confirms once; and when the trash is unavailable the confirmation
-  says the delete is permanent. Confirmations answer to `Enter` and `Esc`, never
-  a letter. On an Apple keyboard the key labelled *Delete* sends Backspace, which
-  belongs to the search, so the gesture there is `Fn`-`Delete`.
+  A refused name keeps the field open with the text intact, so a clash costs a
+  keystroke rather than a retype. **Delete never asks** — `Ctrl-Z` brings the
+  file back out of the trash, and a prompt guarding a reversible act is only
+  friction. When the trash cannot take a path, nothing is deleted and the
+  failure is reported: there is no delete that bypasses the trash. On an Apple
+  keyboard the key labelled *Delete* sends Backspace, which belongs to the
+  search, so the gesture there is `Fn`-`Delete`.
+
+- **Undo, on `Ctrl-Z`.** A session stack covering every operation birch
+  performs, delete included: a deleted file comes back **out of the trash**, a
+  rename returns to its old name, a paste or a drag is reversed as one step
+  however many rows it carried, and undoing a create trashes what it made rather
+  than unlinking it. Every step is checked against the filesystem when it runs,
+  so an undo whose old name has been taken since refuses and says why rather
+  than overwriting. The menu row names what it would reverse. There is no redo.
+
+- **Cut, copy and paste**, on `Ctrl-X`, `Ctrl-C` and `Ctrl-V`. One slot,
+  session-only. A paste lands in the selected directory, or the selected file's
+  parent; it never overwrites and never silently renames, and a copy brings a
+  directory's whole contents. This is the route for moving something *far* —
+  dragging needs both ends on screen, and renaming to a path means typing one.
+
+- **`New Folder`** joins `New File` in the menu — `Ctrl-N` with a trailing slash
+  always made one, and nothing said so — and **`Reveal`** shows the selection in
+  the desktop's file manager instead of opening it.
+
+- **The inline field shows the icon it will have, as you type.** A create carries
+  the icon its extension resolves to from the first character, switching to a
+  folder the moment a trailing slash is typed; a rename's icon follows the
+  extension as it changes.
 
 - **Move by dragging.** Drag a row onto a folder to move it there; a file targets
   its parent and empty space below the tree targets the root. Hovering a
   collapsed folder springs it open. Refusals show before you let go — a folder
   into its own descendant, a name already taken, or the folder it is already in —
-  and a drop never overwrites. There is no undo, so the status line says what
-  moved and where.
+  and a drop never overwrites. The status line says what moved and where, and
+  `Ctrl-Z` takes it back.
 
 - **Copy name and paths**, from the context menu: the file name, the path
   relative to the birch root, or the absolute path. With several rows selected
@@ -32,8 +65,11 @@ All notable changes to birch are documented here, following
   transport per copy: OSC 52 over SSH, since that is the only one that reaches
   the terminal you are sitting at, and otherwise `pbcopy` / `wl-copy` / `xclip`.
 
-- **`Open` says what it will run**, naming the resolved open command, and
-  **`Open system`** beside it hands the path to the desktop's own handler.
+- **Menu rows say what they will do to *this* selection.** `Open with vim` names
+  the resolved open command with the program drawn dim, `Open with open`
+  (`xdg-open` off macOS) hands the path to the desktop's own handler, and on a
+  directory the row reads `Expand` or `Collapse` — because that is what `Enter`
+  will actually do.
 
 - **The context menu opens from the keyboard** with `Shift-F10` or the `Menu`
   key, at the cursor row and without disturbing the selection. On an Apple
@@ -55,8 +91,8 @@ All notable changes to birch are documented here, following
   menu before it clears a search or quits. It targets the selection: a
   right-click inside one acts on all of it, a click outside collapses to that
   row, and a click below the last row targets the root. Entries whose action
-  does not exist yet are absent rather than greyed out, so it currently holds
-  **Open** and **Reveal Root Here** and grows as the file operations land.
+  does not exist yet are absent rather than greyed out, and it has grown as this
+  release's operations landed.
 
 - **`PgUp`, `PgDn`, `Home`, and `End`** move the selection — a page is the
   viewport less a row of overlap — and let the viewport follow. During a search
