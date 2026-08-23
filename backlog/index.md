@@ -56,6 +56,8 @@ okf_version: "0.1"
 * [Hover highlight in the tree](tasks/090-hover-highlight-in-the-tree.md) - Motion tracking so the row under the pointer lights up; the context menu enables it only for its own lifetime.
 * [Adopt the Kitty keyboard protocol where the terminal supports it](tasks/091-kitty-keyboard-protocol.md) - The legacy encoding cannot represent Shift with a control character, so Ctrl-Shift-C is the same byte as Ctrl-C.
 * [Undo a file operation](tasks/093-undo-a-file-operation.md) - Sprint 021 makes birch mutate the filesystem; trash covers delete and nothing covers rename, move, or create.
+* [stale_socket_is_reclaimed_but_files_are_not is intermittently flaky](tasks/094-flaky-ctl-socket-test.md) - The ctl socket test fails roughly one run in five, and passes in isolation and on retry.
+* [The dock's follow watcher stops following, silently and for good](tasks/095-follow-watcher-never-reconnects.md) - No --reconnect, so the first stream end retires it; every diagnostic goes to /dev/null, so nothing says so.
 
 # Publication
 
