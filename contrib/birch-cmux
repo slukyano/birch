@@ -2,75 +2,82 @@
 # birch-cmux — cmux dock integration for birch (see docs/integrations.md).
 #
 # birch runs as a per-window control in the cmux right-sidebar Dock (a beta
-# feature — enable `rightSidebar.beta.dock.enabled`). Unlike the tmux/herdr
-# adapters, nothing here spawns or toggles birch: cmux owns the Dock lifecycle
-# from `dock.json`. This script is only the glue cmux can't provide itself.
+# feature — enable `rightSidebar.beta.dock.enabled`). cmux owns the Dock
+# lifecycle from `dock.json`; this script is only the glue cmux cannot provide.
+#
+# It does three things: make a socket path for this window, launch birch on it,
+# and run a watcher that keeps birch pointed at the selected workspace.
 #
 # Verbs:
-#   dock-run [root]    Dock control entrypoint (dock.json calls this): start
+#   dock-run           Dock control entrypoint (dock.json calls this): start
 #                      this window's follow watcher, then become birch. $BIRCH
-#                      names the binary (default `birch`); [root] defaults to
-#                      the window's currently-selected workspace directory.
-#   preview <file>     open <file> as a new tab in the active window's currently
-#                      selected workspace (birch's --open-cmd target)
+#                      names the binary (default `birch`).
 #   dock-socket        print THIS window's dock-birch control socket path, for
 #                      reverse-reveal / scripting from a workspace pane:
 #                        birch ctl --socket "$(birch-cmux dock-socket)" reveal <file>
 #
-# Design facts about the cmux Dock (all verified, all beta):
-#   - one dock birch per window; the dock's shell exports CMUX_WORKSPACE_ID set
-#     to the *window* uuid (a dock routing id cmux itself rejects), not a real
-#     workspace, so identity comes from `cmux current-window` (the focused
-#     window — which is this window whenever you interact with its dock);
-#   - files opened from the dockless context land in the dock unless the open
-#     names a target, hence --window on the open;
-#   - `workspace.selected` events drive the follow watcher, which re-roots the
-#     dock birch to the active workspace. The watcher is a background sibling of
-#     the dock birch: it dies with the window (shared pty SIGHUP) and with cmux
-#     (the event stream EOFs), so it needs nothing to coordinate or clean up.
+# Design facts about the cmux Dock (verified against contrib/testcmux, all beta):
+#   - one dock birch per window, and a *dock* shell exports CMUX_WORKSPACE_ID
+#     set to its own **window** uuid. cmux rejects that value as a workspace
+#     id, which is the one thing it is not; it is exactly the window identity
+#     this needs, and unlike `cmux current-window` it does not depend on which
+#     window happens to be focused. A workspace pane's shell sets the same
+#     variable to a real workspace uuid, so only `dock-run` may read it;
+#   - a file opened from a dock context lands in the dock unless the open names
+#     a target, hence --window on the open;
+#   - the coupling is to per-window placement, not to the Dock. `dock.json` can
+#     name a `cwd`; this deliberately does not use one, because the tree tracks
+#     the selected workspace rather than a folder;
+#   - a restored Dock snapshot brings back bare terminals rather than controls,
+#     so a dock birch's lifetime is one cmux session.
 
 set -eu
 
 birch="${BIRCH:-birch}"
 
 # cmux CLI: prefer PATH, fall back to the bundle path cmux exports into Dock
-# control shells (which do not always have the CLI shim on PATH).
-if ! command -v cmux >/dev/null 2>&1 && [ -n "${CMUX_BUNDLED_CLI_PATH:-}" ]; then
-    cmux() { "$CMUX_BUNDLED_CLI_PATH" "$@"; }
-fi
+# control shells (which do not always have the CLI shim on PATH). Resolved to
+# an absolute path once, because birch executes the open command with its own
+# environment rather than this shell's.
+cmux_bin="$(command -v cmux 2>/dev/null || true)"
+[ -n "$cmux_bin" ] || cmux_bin="${CMUX_BUNDLED_CLI_PATH:-}"
+[ -n "$cmux_bin" ] || { echo "birch-cmux: no cmux CLI on PATH and no CMUX_BUNDLED_CLI_PATH" >&2; exit 1; }
+cmux() { "$cmux_bin" "$@"; }
 
-# This script's absolute path (baked into birch's --open-cmd).
-case "$0" in
-/*) self="$0" ;;
-*) self="$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")" ;;
-esac
-case "$self" in /*) ;; *) self="$PWD/$self" ;; esac
-
-# POSIX single-quote escaping, for the --open-cmd template birch re-parses.
-shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-
-# Private per-user state dir. macOS's $TMPDIR carries a trailing slash.
+# Private per-user state dir. macOS's $TMPDIR carries a trailing slash. The
+# ownership check is dead weight on macOS's per-user $TMPDIR and load-bearing
+# on Linux with a shared /tmp.
 tmp="${TMPDIR:-/tmp}"
 state_dir="${XDG_RUNTIME_DIR:-${tmp%/}/birch-adapter-$(id -u)}"
-[ -d "$state_dir" ] || mkdir -m 700 "$state_dir"
-owner="$(stat -f %u "$state_dir" 2>/dev/null || stat -c %u "$state_dir" 2>/dev/null)"
-if [ "$owner" != "$(id -u)" ]; then
+mkdir -p -m 700 "$state_dir"
+owner="$(stat -f %u "$state_dir" 2>/dev/null || stat -c %u "$state_dir" 2>/dev/null || true)"
+if [ -z "$owner" ]; then
+    echo "birch-cmux: cannot stat $state_dir" >&2
+    exit 1
+elif [ "$owner" != "$(id -u)" ]; then
     echo "birch-cmux: $state_dir is not owned by the current user" >&2
     exit 1
 fi
 
-# The focused cmux window's UUID (bare line). At dock-birch launch this is the
-# birch's own window; at open / reveal time it is the window you interact with.
-focused_window() { cmux current-window --id-format both 2>/dev/null | head -1; }
+# The focused cmux window's UUID. Only `dock-socket` needs this: it is called
+# from a workspace pane, which has no dock environment to read an identity from.
+focused_window() { cmux current-window 2>/dev/null | head -1; }
 
-# Socket path keyed on a window UUID. cksum keeps it under the ~104-byte limit.
-socket_for() {
-    printf '%s/birch-dock-%s.sock' "$state_dir" "$(printf '%s' "$1" | cksum | awk '{ print $1 }')"
-}
+# Per-window file names, keyed on the window UUID. cksum keeps the socket path
+# under the ~104-byte sun_path limit.
+window_key() { printf '%s' "$1" | cksum | awk '{ print $1 }'; }
+socket_for() { printf '%s/birch-dock-%s.sock' "$state_dir" "$(window_key "$1")"; }
+log_for() { printf '%s/birch-dock-%s.log' "$state_dir" "$(window_key "$1")"; }
 
 # The current directory of a window's selected workspace (no jq dependency).
+# A missing python3 is an error rather than an empty answer: swallowing it is
+# how a control dies with nothing to look at.
 window_selected_dir() {
-    cmux list-workspaces --window "$1" --json 2>/dev/null | python3 -c '
+    command -v python3 >/dev/null 2>&1 || {
+        echo "birch-cmux: python3 not found" >&2
+        return 1
+    }
+    cmux workspace list --window "$1" --json 2>/dev/null | python3 -c '
 import json, sys
 raw = sys.stdin.read()
 if not raw.strip():
@@ -84,68 +91,119 @@ for w in rows:
     if w.get("selected"):
         print(w.get("current_directory", ""))
         break
-' 2>/dev/null
+'
 }
 
-# Re-root this window's dock birch whenever a workspace is selected anywhere.
-# The event is only a trigger; the new root is read from authoritative state, so
-# session restores and directory renames self-correct too. No `--reconnect`, so
-# the stream — and this watcher — end when cmux quits. Started as a background
-# sibling by dock-run, it also dies with the dock birch's pty (SIGHUP).
+# ---- the follow watcher -----------------------------------------------------
+#
+# A supervision loop around the subscription, rather than `cmux events
+# --reconnect` inside it. Three things fall out of that shape:
+#
+#   - a dropped stream is retried instead of retiring the watcher for good;
+#   - every reconnection re-reads authoritative state, so an outage spanning a
+#     workspace switch self-corrects rather than waiting for the next switch —
+#     which `--reconnect` alone would not do, since the re-root happens on an
+#     event and the event that mattered fired while the stream was down;
+#   - birch's liveness is checked in the only place that can still stop the
+#     watcher once the stream no longer does.
+#
+# `--cursor-file` is deliberately unused: cmux's `seq` is process-local to a
+# cmux boot, so a cursor outliving a restart names a sequence from a different
+# one — and replaying missed events buys nothing when the handler ignores the
+# payload and re-reads state anyway.
+
+# Appends one line to this window's log, and keeps it bounded so a reconnect
+# storm cannot fill a disk.
+_log_lines=0
+log() {
+    _log_lines=$((_log_lines + 1))
+    if [ "$_log_lines" -gt 500 ]; then
+        _log_lines=1
+        printf '%s truncated (500 lines)\n' "$(date +%FT%T)" > "$_log"
+    fi
+    printf '%s %s\n' "$(date +%FT%T)" "$*" >> "$_log"
+}
+
+# Points birch at the window's selected workspace, from authoritative state.
+# Never fatal: a transient lookup failure must not end the watcher.
+sync_root() {
+    _dir="$(window_selected_dir "$_win" || true)"
+    if [ -z "$_dir" ]; then
+        log "no selected directory for window $_win"
+        return 0
+    fi
+    if [ ! -S "$_sock" ]; then
+        log "socket is gone, skipping re-root to $_dir"
+        return 0
+    fi
+    if "$birch" ctl --socket "$_sock" set-root "$_dir" >/dev/null 2>&1; then
+        log "re-rooted to $_dir"
+    else
+        log "re-root to $_dir refused"
+    fi
+}
+
 follow_watcher() {
     _win="$1"
     _sock="$2"
-    cmux events --name workspace.selected --no-heartbeat 2>/dev/null | while IFS= read -r _; do
-        # `|| continue`: a transient lookup failure (e.g. empty JSON mid-churn)
-        # must not trip `set -e` and kill the watcher for the window's life.
-        _dir="$(window_selected_dir "$_win")" || continue
-        [ -n "$_dir" ] || continue
-        [ -S "$_sock" ] && "$birch" ctl --socket "$_sock" set-root "$_dir" >/dev/null 2>&1 || true
+    _parent="$3"
+    _log="$(log_for "$_win")"
+    : > "$_log"
+    log "watcher started for window $_win, birch pid $_parent"
+    # birch binds its socket after this starts, so the first sync waits for it
+    # rather than being lost — the launch root is the dock's directory, which
+    # is usually right and never authoritative.
+    _waited=0
+    while [ ! -S "$_sock" ] && [ "$_waited" -lt 50 ]; do
+        sleep 0.1
+        _waited=$((_waited + 1))
     done
+    while kill -0 "$_parent" 2>/dev/null; do
+        sync_root
+        cmux events --name workspace.selected --no-heartbeat 2>/dev/null |
+            while IFS= read -r _; do
+                kill -0 "$_parent" 2>/dev/null || exit 0
+                sync_root
+            done
+        log "event stream ended, reconnecting"
+        sleep 1
+    done
+    log "birch is gone, watcher exiting"
 }
 
 case "${1:-}" in
 dock-run)
-    win="$(focused_window)"
-    [ -n "$win" ] || { echo "birch-cmux: no focused cmux window" >&2; exit 1; }
-    # The Dock is global, so dock.json can't name a folder. Root at the window's
-    # currently-selected workspace; the follow watcher keeps it in sync after.
-    # An explicit arg wins; fall back to the dock's start dir, then PWD.
-    root="${2:-$(window_selected_dir "$win")}"
-    [ -n "$root" ] || root="${CMUX_DOCK_START_DIRECTORY:-$PWD}"
-    case "$root" in /*) ;; *) root="$PWD/$root" ;; esac
+    # This control's own window, from its own environment. `cmux current-window`
+    # answers "which window is focused", which is a different question and only
+    # accidentally the same one.
+    win="${CMUX_WORKSPACE_ID:-$(focused_window)}"
+    [ -n "$win" ] || { echo "birch-cmux: no cmux window identity" >&2; exit 1; }
     sock="$(socket_for "$win")"
     birch_bin="$(command -v -- "$birch" 2>/dev/null || true)"
     [ -n "$birch_bin" ] || { echo "birch-cmux: '$birch' not found (set BIRCH)" >&2; exit 1; }
-    follow_watcher "$win" "$sock" &
+    # `--window` and nothing else, deliberately: cmux resolves the rest itself,
+    # at open time and on its main actor — the window's selected workspace and
+    # that workspace's focused pane. Naming a workspace here would be racy.
+    # `cmux open` focuses what it opens, and that is wanted: pressing Enter on
+    # a file takes you to it, the way an IDE explorer does.
+    parent=$$
+    follow_watcher "$win" "$sock" "$parent" &
     exec "$birch_bin" --socket "$sock" \
-        --open-cmd "$(shquote "$self") preview {}" --open-detached "$root"
-    ;;
-
-preview)
-    [ $# -eq 2 ] || { echo "usage: birch-cmux preview <file>" >&2; exit 64; }
-    win="$(focused_window)"
-    [ -n "$win" ] || exit 0
-    # `--window` and nothing else, deliberately. cmux then resolves the target
-    # itself, at open time and on its main actor: the window's *selected*
-    # workspace, and that workspace's focused pane. Naming a workspace here
-    # instead would be racy — whatever we read is stale by the time `open` runs.
-    #
-    # The flag is also what keeps the file out of the dock. A dock shell exports
-    # CMUX_SURFACE_ID for the dock surface and CMUX_WORKSPACE_ID set to the
-    # *window* uuid (a routing id cmux rejects), and `cmux open` inherits both
-    # only when no --window/--workspace/--pane is given.
-    cmux open "$2" --window "$win" >/dev/null 2>&1 || true
+        --open-cmd "$cmux_bin open {} --window $win" \
+        --open-name cmux --open-detached "$PWD"
     ;;
 
 dock-socket)
+    # `focused_window`, never CMUX_WORKSPACE_ID: this verb is called from a
+    # workspace pane, and there that variable holds a real workspace uuid.
+    # Only a dock shell puts the window uuid in it.
     win="$(focused_window)"
     [ -n "$win" ] || { echo "birch-cmux: no focused cmux window" >&2; exit 1; }
     socket_for "$win"
     ;;
 
 *)
-    echo "usage: birch-cmux [dock-run [root]|preview <file>|dock-socket]" >&2
+    echo "usage: birch-cmux [dock-run|dock-socket]" >&2
     exit 64
     ;;
 esac

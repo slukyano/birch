@@ -158,11 +158,11 @@ designs consume.
 - [x] `085-report-open-cmd-failures` — `OpenEvent`, the `AppEvent::Open` arm, stderr capture
 - [x] `096-open-with-names-the-adapter` — `OpenCmd` display name, `--open-name`, the label path
 - [x] ADR 0035 — `set-open-cmd` verb, `birch ctl` form, protocol fields
-- [ ] `083-birch-cmux-does-three-things` — the adapter reshaped to three things
-- [ ] `084-follow-watcher-outlives-birch` + `095-follow-watcher-never-reconnects` — the supervision
+- [x] `083-birch-cmux-does-three-things` — the adapter reshaped to three things
+- [x] `084-follow-watcher-outlives-birch` + `095-follow-watcher-never-reconnects` — the supervision
       loop, the liveness guard, the log
-- [ ] `086-adr-0016-window-scoped-framing` — the ADR amendment and the docs corrections
-- [ ] `contrib/tests/cmux-integration.sh` — reconnect, re-sync-during-outage, watcher exit, open command
+- [x] `086-adr-0016-window-scoped-framing` — the ADR amendment and the docs corrections
+- [x] `contrib/tests/cmux-integration.sh` — reconnect, re-sync-during-outage, watcher exit, open command
 - [ ] Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`,
       hands-on verification, independent review, publication hygiene
 

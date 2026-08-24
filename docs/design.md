@@ -270,6 +270,7 @@ A running birch instance exposes a Unix domain socket; `birch ctl` (a subcommand
 | `get-root` | Print root |
 | `set <setting> <value>` | Runtime toggles: hidden, ignored, compact, icons, search case, … |
 | `set-root <dir>` | Re-root |
+| `set-open-cmd <template> [--name <text>] [--detached\|--no-detached]` | Replace the open command, what the menu calls it, and its mode (ADR 0035). Absent parts are left alone; nothing here is persisted. |
 | `open` | Open current selection |
 | `quit` | Exit |
 

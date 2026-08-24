@@ -18,6 +18,9 @@ contrib=$(dirname "$here")
 repo=$(dirname "$contrib")
 testcmux="$contrib/testcmux"
 birch="${1:-$repo/target/debug/birch}"
+# Absolutised: the commands below run in a dock shell whose cwd is not this
+# repository, so a relative path resolves to nothing there.
+case "$birch" in /*) ;; *) birch="$(cd "$(dirname "$birch")" && pwd)/$(basename "$birch")" ;; esac
 
 [ -x "$birch" ] || { echo "no birch at $birch (cargo build first)" >&2; exit 1; }
 
@@ -29,10 +32,18 @@ adapter="$(dirname "$birch")/birch-cmux"
 echo "adapter: $adapter"
 
 work="${TESTCMUX_HOME:-${TMPDIR:-/tmp}/birch-testcmux}/work"
+# The adapter's state directory, isolated for this run. The throwaway shares
+# $HOME, so showing its Dock seeds whatever `~/.config/cmux/dock.json` holds —
+# on a birch developer's machine, a birch control for this same window, which
+# would bind this window's socket first and make the birch under test refuse
+# it. A private XDG_RUNTIME_DIR keys the two apart, and keeps the run out of
+# the real adapter state directory either way.
+state="${TESTCMUX_HOME:-${TMPDIR:-/tmp}/birch-testcmux}/state"
 # Exactly one entry per workspace, so `down` then `enter` in the dock birch is
 # unambiguously "open that file". The nested folder for the reveal check is
 # created later, once the preview rounds are done.
-rm -rf "$work"; mkdir -p "$work/ws-alpha" "$work/ws-beta"
+rm -rf "$work" "$state"; mkdir -p "$work/ws-alpha" "$work/ws-beta"
+mkdir -p -m 700 "$state"
 : > "$work/ws-alpha/alpha-file.txt"
 : > "$work/ws-beta/beta-file.txt"
 
@@ -95,7 +106,7 @@ settle 1
 # the CLI to the default socket — a real cmux. So set it explicitly, and quote
 # the paths so a directory with a space does not break the command line.
 cli send --surface "$dock" \
-    "clear; CMUX_SOCKET_PATH='$("$testcmux" sock)' BIRCH='$birch' '$adapter' dock-run\n" >/dev/null
+    "clear; CMUX_SOCKET_PATH='$("$testcmux" sock)' XDG_RUNTIME_DIR='$state' BIRCH='$birch' '$adapter' dock-run\n" >/dev/null
 settle 5
 
 # 1. birch is in the sidebar, rooted at the selected workspace.
@@ -131,7 +142,7 @@ done
 #    window through the bare `cmux` CLI, so it needs the socket in its
 #    environment — set per-invocation, never exported, since an empty value
 #    would silently fall back to a real cmux.
-sock=$(CMUX_SOCKET_PATH="$("$testcmux" sock)" "$adapter" dock-socket 2>/dev/null || true)
+sock=$(CMUX_SOCKET_PATH="$("$testcmux" sock)" XDG_RUNTIME_DIR="$state" "$adapter" dock-socket 2>/dev/null || true)
 case "$sock" in
 /*) got=$([ -S "$sock" ] && echo yes || echo "no socket at $sock") ;;
 *)  got="no path printed" ;;
@@ -164,6 +175,42 @@ case "$(cli capture-pane --surface "$dock" 2>/dev/null)" in
 *)               got=hidden ;;
 esac
 check "reveal through dock-socket shows it" visible "$got"
+
+# 6. The open command names this window. The whole reshape is so that birch runs
+#    `cmux open {} --window <uuid>` itself rather than calling back into the
+#    adapter to re-resolve a window from focus.
+win=$(cli current-window 2>/dev/null)
+case "$(ps -eo command | grep -F "$sock" | grep -v grep | head -1)" in
+*"--window $win"*) got=yes ;;
+*)                 got="no ($win not in the open command)" ;;
+esac
+check "the dock birch opens through its own window" yes "$got"
+
+# 7. Follow survives a dropped subscription. Scoped to the throwaway's own CLI
+#    path so this can never touch a real cmux's watcher.
+events_pattern="birch-testcmux.*Resources/bin/cmux events"
+pkill -f "$events_pattern" >/dev/null 2>&1 || true
+settle 3
+cli workspace select "$beta" >/dev/null; settle 4
+case "$(root_line)" in *ws-beta*) got=yes ;; *) got="no ($(root_line))" ;; esac
+check "follow survives a dropped event subscription" yes "$got"
+
+# 8. ...and corrects itself for a switch that happened *while* it was down,
+#    which is the case a reconnecting stream alone would still get wrong: the
+#    re-root fires on an event, and that event was missed.
+pkill -f "$events_pattern" >/dev/null 2>&1 || true
+settle 1
+cli workspace select "$alpha" >/dev/null
+settle 6
+case "$(root_line)" in *ws-alpha*) got=yes ;; *) got="no ($(root_line))" ;; esac
+check "a switch missed during an outage self-corrects on reconnect" yes "$got"
+
+# 9. The watcher goes when birch does. Nothing signals it — the Dock keeps the
+#    pty open and drops into a shell — so only its own liveness check can.
+cli send-key --surface "$dock" q >/dev/null 2>&1 || true
+settle 5
+if pgrep -f "$events_pattern" >/dev/null 2>&1; then got="still running"; else got=gone; fi
+check "quitting birch retires its follow watcher" gone "$got"
 
 trap - EXIT INT TERM
 "$testcmux" stop

@@ -57,16 +57,17 @@ installed as separate files.
 
 cmux does not use the split-pane pattern. Its right-sidebar **Dock** (a beta feature)
 hosts persistent controls declaratively, so cmux owns birch's lifecycle from a config
-file — the adapter is only the glue cmux can't provide (per-window socket, preview
-routing, workspace follow). Rationale and the load-bearing facts are in
+file — the adapter is only the glue cmux can't provide (per-window socket, workspace
+follow). Rationale and the load-bearing facts are in
 [ADR 0016](adr/0016-cmux-integrates-via-the-dock.md).
 
 **1. Enable the Dock beta.** Command Palette → search "Dock" (Beta features), or set
 `rightSidebar.beta.dock.enabled` in cmux's settings. Without it the Dock is unavailable.
 
 **2. Add a `dock.json`** — project-local `.cmux/dock.json` or global
-`~/.config/cmux/dock.json`. The Dock is global, so the command names no folder; birch
-roots at the active workspace and follows workspace switches from there:
+`~/.config/cmux/dock.json`, first match winning rather than both applying. A control can
+name a `cwd`; birch deliberately does not use one, because the tree tracks the selected
+workspace rather than a folder:
 
 ```json
 {
@@ -80,16 +81,31 @@ roots at the active workspace and follows workspace switches from there:
 }
 ```
 
-Open a fresh cmux window and show the Dock (the config seeds on first show, not into an
-already-open Dock). birch appears with previews and a tree that tracks your workspace.
+Open a fresh cmux window and show the Dock. birch appears, with a tree that tracks your
+workspace and previews that open beside it.
 
-**3. `birch-cmux` verbs** — three, of which cmux and birch invoke two automatically:
+**Two things about Dock lifetimes are worth knowing before the first run**, because both
+look like the config being ignored:
+
+- **Seeding runs only for a Dock with no saved snapshot.** A Dock that has ever been open
+  restores its snapshot instead — including an empty one — so adding the config to an
+  existing Dock shows nothing. A fresh window, or reloading the Dock config from the app,
+  is what applies it.
+- **A restored Dock brings back terminals, not controls.** After cmux quits and relaunches,
+  the pane where birch was comes back as a plain shell: the command is not re-run, and the
+  config does not re-seed. A dock birch's lifetime is one cmux session. Reloading the Dock
+  config from the app puts it back; no CLI verb does.
+
+**3. `birch-cmux` verbs** — two, of which cmux invokes one automatically:
 
 | Verb | Called by | When |
 |------|-----------|------|
-| `dock-run [root]` | cmux, via `dock.json` | seeds the dock birch: resolve the window, start its follow watcher, `exec` birch |
-| `preview <file>` | birch, as `--open-cmd` | on file open — opens the file as a tab in the window's **selected workspace** |
+| `dock-run` | cmux, via `dock.json` | the whole control: a socket for this window, birch on it, and the watcher that follows the workspace |
 | `dock-socket` | you / an editor / an agent | to address this window's birch (reverse-reveal, scripting) |
+
+There is no `preview` verb. birch opens files by running `cmux open {} --window <id>`
+itself, so an open is one command rather than a callback into the adapter, and the menu
+row reads `Open with cmux`.
 
 **4. Reverse-reveal** — a hook computes the window's socket and calls `reveal`:
 
@@ -98,12 +114,16 @@ birch ctl --socket "$(birch-cmux dock-socket)" reveal <file>
 ```
 
 `BIRCH` is only needed to point at a birch that is not the one on `PATH`. One dock birch
-per window; its socket is keyed on the window id, so `dock-socket`
-resolves the same path from the dock birch and from any pane in that window. A
-background watcher re-roots the tree on each workspace switch and dies with the window
-or with cmux — nothing to start at login, nothing to clean up. Requires `python3` (for
-the workspace-directory lookup) and the cmux CLI — on PATH, or the adapter falls back
-to cmux's bundled CLI inside Dock control shells.
+per window; its socket is keyed on the window id, so `dock-socket` resolves the same path
+from the dock birch and from any pane in that window.
+
+A background watcher re-roots the tree on each workspace switch. It reconnects when cmux
+drops the event stream and re-reads the workspace on every reconnection, so an outage that
+spans a workspace switch corrects itself rather than leaving a stale tree; it ends when
+its birch does. What it did is in `birch-dock-<key>.log` beside the socket — one line per
+re-root and reconnect, capped, and the first thing to read if the tree ever stops
+following. Requires `python3` (for the workspace-directory lookup) and the cmux CLI — on
+PATH, or the adapter falls back to cmux's bundled CLI inside Dock control shells.
 
 ## Recipes without an adapter
 
