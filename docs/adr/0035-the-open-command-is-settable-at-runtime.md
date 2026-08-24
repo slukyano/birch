@@ -12,7 +12,7 @@ until launch has one option: compute it in the adapter and bake it in. `birch-cm
 cleanly — it baked a callback into *itself* (`birch-cmux preview {}`), and the callback re-resolved
 the window on every open, from focus, at a moment when focus may be anywhere.
 
-Removing that callback ([`083`](../../backlog/tasks/083-birch-cmux-does-three-things.md)) means the
+Removing that callback ([`083`](../../backlog/archive/083-birch-cmux-does-three-things.md)) means the
 adapter sets the real command — `cmux open {} --window <uuid>`. The window is known at launch, from
 the dock control's own environment, so baking alone would work. It is not enough on its own: a dock
 birch moved between windows would keep a command naming the window it was born in, and nothing
@@ -20,7 +20,7 @@ would correct it. The launch root has exactly this shape already, and `set-root`
 corrected.
 
 A second caller arrives with it.
-[`096`](../../backlog/tasks/096-open-with-names-the-adapter.md) gives the open command a display
+[`096`](../../backlog/archive/096-open-with-names-the-adapter.md) gives the open command a display
 name, so the menu stops reading `Open with birch-cmux`. A command that can be replaced at runtime
 but cannot carry its own name would reintroduce the wrong label through the new surface.
 

@@ -26,7 +26,7 @@ update" deserves a decision rather than an omission.
 
 ## Options, none yet chosen
 
-- **Document it and stop.** [`086`](086-adr-0016-window-scoped-framing.md) already carries the
+- **Document it and stop.** [`086`](../archive/086-adr-0016-window-scoped-framing.md) already carries the
   sentence into `docs/integrations.md`. Cheapest, and honest, and leaves a person retyping a command
   after every cmux update.
 - **Ask cmux for it.** Either re-running a restored control's command, or a CLI verb that reloads

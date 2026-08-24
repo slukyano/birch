@@ -11,7 +11,7 @@ birch decodes keys with crossterm's **legacy encoding**: it never pushes
 encoding `Ctrl` with a letter is transmitted as the control character — `Ctrl-C` is byte `0x03` —
 and **`Shift` has no representation at all** alongside it.
 
-The consequence found while designing [`028`](028-add-copy-paths.md): `Ctrl-Shift-C` and `Ctrl-C`
+The consequence found while designing [`028`](../archive/028-add-copy-paths.md): `Ctrl-Shift-C` and `Ctrl-C`
 are indistinguishable, and `Ctrl-C` is quit ([ADR 0008](../../docs/adr/0008-q-types-into-search.md)).
 So the `Ctrl-Shift-C` accelerator the design doc gave Copy Relative Path was not merely
 undeliverable — binding it would have quit birch when a user reached for copy. It was dropped, and

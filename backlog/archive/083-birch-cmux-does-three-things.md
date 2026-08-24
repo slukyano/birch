@@ -2,7 +2,7 @@
 type: Task
 title: birch-cmux does three things
 description: Reshape the cmux adapter to socket, birch, watcher — the watcher owning both root and open command — and drop the fallbacks that cannot happen.
-status: Designed
+status: Done
 priority: medium
 ---
 
@@ -186,6 +186,6 @@ loud, blanket `2>/dev/null` trimmed to where output is parsed, and `|| true` kep
    phase. `cmux open` focuses its target and that behaviour stays — pressing Enter on a file takes
    you to it, the way an IDE explorer does. No `--no-focus` in the open command.
 2. **Whether `--open-name` is worth a launch flag at all**, given `birch ctl set-open-cmd --name`
-   exists. It is, for [`097`](097-tmux-herdr-set-their-display-name.md): `birch-tmux` and
+   exists. It is, for [`097`](../tasks/097-tmux-herdr-set-their-display-name.md): `birch-tmux` and
    `birch-herdr` bake their command at launch and have no watcher to set anything afterwards, so
    without the flag they cannot fix their label at all.

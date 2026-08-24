@@ -7,6 +7,13 @@ All notable changes to birch are documented here, following
 
 ### Changed
 
+- **cmux: the Dock adapter is three things — a socket, birch, and a watcher.**
+  It no longer routes opens back through itself: birch runs `cmux open` against
+  the window it belongs to, which it now learns from its own environment rather
+  than from whichever window happens to be focused. **`birch-cmux preview` is
+  gone**; nothing but birch's own open command ever called it, and a `dock.json`
+  needs no change.
+
 - **`Ctrl-C` no longer quits — it copies the selected entries.** Quit is `Esc`
   (at the top level) and the new **`Ctrl-Q`**. `Ctrl-C` is the only key anybody
   reaches for to copy, and `Ctrl-Shift-C` cannot be represented at all in the
@@ -143,7 +150,41 @@ All notable changes to birch are documented here, following
   above, space below means more below. Off with `--no-scrollbar`, the `scrollbar` config key, or
   `birch ctl set scrollbar off`. Its column does not accept clicks.
 
+- **An open command that fails now says why.** A fire-and-forget open — the mode
+  every host adapter uses — used to discard the result, so "cmux is not running"
+  and "the open worked" looked identical: you pressed Enter and nothing
+  happened, with nowhere to look. A non-zero exit now reaches the status line
+  carrying the child's own first line of stderr, so the adapter's reason is the
+  message.
+
+- **A name for what `Open` runs**, with `--open-name <text>` at launch or
+  `birch ctl set-open-cmd <template> --name <text>` on a running instance. The
+  menu row names the program, which for a host adapter is the courier rather
+  than the destination — cmux's tree read `Open with birch-cmux`. Without a name
+  nothing changes: `nvim` still reads `nvim`.
+
+- **`birch ctl set-open-cmd`** replaces a running instance's open command, its
+  display name, and whether it is detached. Parts left out of the request are
+  left alone, and none of it is remembered across runs.
+
 ### Fixed
+
+- **cmux: the tree stops falling behind for good.** The follow watcher
+  subscribed to cmux's event stream once. Anything that ended that stream
+  retired it permanently and silently: birch kept running, still drawn, still
+  responsive, pointed at whatever folder it had when the stream died, and the
+  only way back was restarting the control. It now reconnects, and re-reads the
+  workspace on every reconnection — so a switch that happened *while* the stream
+  was down corrects itself instead of persisting until the next switch. What it
+  did is in `birch-dock-<key>.log` beside the socket, which is the first thing
+  to read if the tree ever stops following.
+
+- **cmux: the watcher no longer outlives the tree it serves.** Nothing signalled
+  it when birch exited — the Dock keeps the pane's pty open and drops into a
+  shell — so each quit left a process behind that forked a `cmux` call and a
+  `python3` on every workspace switch, for the life of the app. It now checks
+  whether its birch is still there and retires itself within about half a minute
+  of finding it gone.
 
 - **cmux: a preview opens in the workspace you are in.** The Dock adapter aimed
   at the window's "main pane", which it worked out as the *first* terminal pane

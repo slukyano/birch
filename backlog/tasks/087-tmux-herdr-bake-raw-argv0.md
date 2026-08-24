@@ -26,7 +26,7 @@ the stable `…/bin/birch-cmux` rather than a `Cellar/0.2.0/…` path that `brew
 it does **not** change the script text, so the scripts stay directly runnable and comparable to what
 ships — which ADR 0027 promises.
 
-Note [`083`](083-birch-cmux-does-three-things.md) removes `birch-cmux`'s own use of `$0` entirely, so
+Note [`083`](../archive/083-birch-cmux-does-three-things.md) removes `birch-cmux`'s own use of `$0` entirely, so
 after that lands this is purely about the other two.
 
 Costs to weigh: each script gains a line of comment noting the carrier hands it an absolute `$0`,

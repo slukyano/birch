@@ -8,7 +8,7 @@ blocked_by:
 - 096-open-with-names-the-adapter
 ---
 
-[`096`](096-open-with-names-the-adapter.md) gives the open command a display name and sets it in
+[`096`](../archive/096-open-with-names-the-adapter.md) gives the open command a display name and sets it in
 `birch-cmux`, so the menu row reads `Open with cmux`. The other two adapters bake themselves into
 `--open-cmd` the same way — `contrib/birch-tmux:65` and `contrib/birch-herdr:57` — and keep the
 label they had:

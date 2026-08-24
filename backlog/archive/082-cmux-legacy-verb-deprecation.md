@@ -41,5 +41,5 @@ Worth pairing with any other cmux-CLI drift found by then, rather than spending 
 
 ## Dropped
 
-Folded into [`083`](../tasks/083-birch-cmux-does-three-things.md), which rewrites the call site anyway. Two
+Folded into [`083`](083-birch-cmux-does-three-things.md), which rewrites the call site anyway. Two
 tasks editing the same line is worse than one.

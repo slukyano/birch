@@ -139,8 +139,8 @@ context menu's design would have been more expensive.
 | [`075-configurable-scroll-speed`](../archive/075-configurable-scroll-speed.md) | mid | Rows per wheel tick became a setting (1–10, default 3) across flag, config, and socket. Created during the design phase at the maintainer's request; not in the approved scope. |
 | [`067-select-on-mouse-up`](../archive/067-select-on-mouse-up.md) | mid | A click became a press and a release on the same row and zone, acting on the release. Delivered as designed; the one open question — whether the chevron keeps button-down — resolved to a single rule for every affordance. |
 | [`068-add-scrollbar`](../archive/068-add-scrollbar.md) | mid | A one-column indicator at the right edge, shown only when rows overflow, inert to clicks. Delivered as designed. |
-| [`076-search-unusable-on-large-roots`](../tasks/076-search-unusable-on-large-roots.md) | — | Created this sprint from a maintainer report, `Draft`, not worked: from `$HOME` the index never lands and the status line claims "no matches". |
-| [`077-quit-swallowed-during-terminal-handover`](../tasks/077-quit-swallowed-during-terminal-handover.md) | — | Created this sprint from the independent review, `Draft`, not worked: a pre-existing bug outside the diff. |
+| [`076-search-unusable-on-large-roots`](../archive/076-search-unusable-on-large-roots.md) | — | Created this sprint from a maintainer report, `Draft`, not worked: from `$HOME` the index never lands and the status line claims "no matches". |
+| [`077-quit-swallowed-during-terminal-handover`](../archive/077-quit-swallowed-during-terminal-handover.md) | — | Created this sprint from the independent review, `Draft`, not worked: a pre-existing bug outside the diff. |
 
 # Public-surface delta
 
