@@ -91,7 +91,9 @@ birch --open-cmd 'nvim {}'
 birch --open-cmd 'code -r {}'
 ```
 
-(Host adapters pass `--open-detached` to make an open fire-and-forget — see
+(Host adapters pass `--open-detached` to make an open fire-and-forget, and `--open-name <text>` to
+say what the menu should call the command — otherwise the row names the program, which for an
+adapter is the courier rather than the host it routes to. See
 [Host integration](#host-integration).)
 
 ## Picker
@@ -207,7 +209,9 @@ emacsclient, VS Code) are in [`docs/integrations.md`](docs/integrations.md).
 
 [`contrib/birch-cmux`](contrib/birch-cmux) — integrates via cmux's right-sidebar **Dock**: one
 birch per window, file previews open as tabs in the workspace you are in, and the tree re-roots as
-you switch workspaces ([ADR 0016](docs/adr/0016-cmux-integrates-via-the-dock.md)).
+you switch workspaces, reconnecting if cmux drops the event stream
+([ADR 0016](docs/adr/0016-cmux-integrates-via-the-dock.md)). A dock birch lasts one cmux session:
+a restored Dock brings back terminals rather than controls.
 
 ### tmux
 
@@ -241,6 +245,8 @@ birch ctl set git off          # flip a setting: hidden | ignored | noise | icon
                                #   badges <right|left|none|auto> | branch-badges
 birch ctl get-path --abs       # print the current selection
 birch ctl get-path --abs --all # ...or every selected path, one per line
+birch ctl set-open-cmd 'code -r {}' --name vscode
+                               # replace what Enter runs, and what the menu calls it
 birch ctl quit                 # exit the instance
 ```
 

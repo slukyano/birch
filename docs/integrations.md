@@ -10,7 +10,12 @@ story. The whole promise birch makes to a host is four things:
 3. `birch --open-cmd '<template>'` — `{}` is the path (appended when absent) — plus
    `--open-detached` when the template is a fire-and-forget script rather than a
    terminal editor: birch spawns it with null stdio instead of handing the tty over
-   (adapter open-cmds want this; without it every open suspends the tree pane),
+   (adapter open-cmds want this; without it every open suspends the tree pane), and
+   `--open-name <text>` so the menu row names the host rather than the adapter's own
+   filename. A detached open that exits non-zero reports its first line of stderr on the
+   status line, which is the only way an adapter can say why an open failed. All three
+   are replaceable on a running instance with `birch ctl set-open-cmd`
+   ([ADR 0035](adr/0035-the-open-command-is-settable-at-runtime.md)),
 4. clean exit on SIGHUP/SIGTERM (host closes the pane → birch dies cleanly, socket
    unlinked).
 
