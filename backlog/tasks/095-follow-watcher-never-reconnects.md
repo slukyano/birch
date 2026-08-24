@@ -2,7 +2,7 @@
 type: Task
 title: The dock's follow watcher stops following, silently and for good
 description: The watcher subscribes to cmux events once, without --reconnect; the first stream end retires it, and every diagnostic is redirected to /dev/null so nothing says so.
-status: Draft
+status: Designed
 priority: high
 ---
 
@@ -124,3 +124,114 @@ That is a real regression test for the fix and needs no sleep to run.
 - [`085`](085-report-open-cmd-failures.md) — the same missing failure channel, one layer in.
 - [`086`](086-adr-0016-window-scoped-framing.md) — ADR 0016's window-scoped framing, which the
   stale/wrong-`$_win` shapes above bear on.
+
+## Design
+
+### One loop answers all three parts
+
+The reconnect, the liveness guard ([`084`](084-follow-watcher-outlives-birch.md)) and the
+re-sync-after-outage all fall out of putting a supervision loop *around* the subscription rather
+than flags inside it:
+
+```sh
+follow_watcher() {
+    _win="$1"; _sock="$2"; _parent="$3"
+    while kill -0 "$_parent" 2>/dev/null; do
+        sync_root "$_win" "$_sock"          # authoritative, on every (re)connection
+        cmux events --name workspace.selected --no-heartbeat | while IFS= read -r _; do
+            kill -0 "$_parent" 2>/dev/null || exit 0
+            sync_root "$_win" "$_sock"
+        done
+        log "stream ended, reconnecting"
+        sleep 1
+    done
+    log "birch is gone, watcher exiting"
+}
+```
+
+`_parent` is captured as `$$` **before** the backgrounding, and `exec` preserves the pid, so it is
+birch's own pid — 084's mechanism, unchanged. The inner `exit 0` leaves the pipeline's subshell; the
+outer `kill -0` then ends the watcher for good.
+
+### Why not `cmux events --reconnect`
+
+cmux ships `--reconnect` and `--cursor-file`, and neither is used. Both are refused for the same
+reason: they solve the stream and this problem is the state.
+
+`--reconnect` would hold the subscription open across a drop, and the watcher would still be sitting
+on a stale root — because the re-root happens on an *event*, and the event that mattered fired while
+the stream was down. The supervision loop above re-reads authoritative state on every reconnection,
+so an outage that spans a workspace switch self-corrects instead of persisting until the next
+switch. That is the actual reported symptom.
+
+`--cursor-file` is worse than useless here. The `seq` is process-local to cmux, so a cursor file
+that outlives a cmux restart names a sequence from a different boot; and replaying missed events
+buys nothing when the handler ignores the payload and re-reads state anyway.
+
+The loop also puts the reconnect where the liveness check is. With `--reconnect`, the stream never
+ends, so the only thing that stops a leaked watcher today would be gone and nothing would replace
+it — the coupling 084 warns about, avoided by construction rather than by remembering.
+
+### The diagnostic channel
+
+`$state_dir/birch-dock-<key>.log`, appended by the watcher, truncated when it starts. One line per
+event, timestamped: watcher start with its window and pid, each re-root with the directory it set,
+each empty or failed lookup, each stream end and reconnect, and the exit. Bounded by a write counter
+— past 500 lines the file is truncated and the truncation is logged — so a reconnect storm cannot
+fill a disk.
+
+Always on, not opt-in. The point is that the *next* recurrence arrives diagnosed without anyone
+having prepared for it, and a flag nobody set is a flag that is off when it is needed. At the real
+rate of `workspace.selected` — 46 in 25 hours on the maintainer's machine, measured from
+`~/.cmuxterm/events.jsonl` — this is a few kilobytes a day.
+
+What it makes decidable, on the next report, without re-arguing anything:
+
+| Log ends with | Watcher process | Diagnosis |
+|---|---|---|
+| a re-root | gone | it was retired — reconnect failed, or something killed it |
+| a re-root | alive | follow is working; the complaint is about something else |
+| repeated empty lookups | alive | the window identity went stale |
+| repeated reconnects | alive | cmux is refusing or dropping the subscription |
+
+### The window identity
+
+The second known mechanism is fixed in [`083`](083-birch-cmux-does-three-things.md), not here.
+`dock-run` reads the window from the dock control's own `CMUX_WORKSPACE_ID` instead of inferring it
+from focus, which removes the race at the root. This task keeps the consequence: `sync_root` logs an
+empty lookup rather than silently `continue`ing, so an identity that goes stale for some reason
+nobody has thought of announces itself on the first event instead of never.
+
+The `086` check settled the remaining worry: `cmux current-window` returns a **UUID**, so there are
+no recycled refs and a leaked watcher cannot drive a different window's birch.
+
+### Public-surface delta
+
+| Surface | Shape |
+|---|---|
+| `$state_dir/birch-dock-<key>.log` | New on-disk path, written by the adapter, truncated per watcher, capped at 500 lines |
+
+Nothing in birch changes. No CLI flag, config key, socket message or field, or environment variable.
+
+### Tests
+
+`contrib/tests/cmux-integration.sh` gains the check the current suite cannot express, now that
+reconnection exists to be tested:
+
+1. assert follow works (already covered);
+2. `pkill -f 'cmux events'` against the throwaway instance, which is exactly a dropped subscription;
+3. select another workspace;
+4. assert the tree followed anyway.
+
+And the case `--reconnect` alone would fail: drop the subscription, switch workspace **while it is
+down**, then assert the tree corrects itself on reconnection rather than waiting for a further
+switch.
+
+A third check for 084's half: quit birch with `q`, then assert no `cmux events` process survives.
+
+### What this does not close
+
+The trigger remains unobserved. Both known mechanisms are fixed, so nothing is knowingly left
+half-done, but a third one nobody has named would survive this sprint. That is what the log is for,
+and a recurrence after this lands is a new task with an observation attached rather than a reopening
+of this one.

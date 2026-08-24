@@ -29,7 +29,7 @@ okf_version: "0.1"
 * [Sprint 019 — The cmux integration, finished](sprints/sprint-019.md) - Done.
 * [Sprint 020 — Multi-select and the action surface](sprints/sprint-020.md) - Done.
 * [Sprint 021 — The actions the menu was built for](sprints/sprint-021.md) - Done.
-* [Sprint 022 — The adapter seam: a follow that survives, a failure that speaks](sprints/sprint-022.md) - Designing.
+* [Sprint 022 — The adapter seam: a follow that survives, a failure that speaks](sprints/sprint-022.md) - Implementing.
 * [Sprint 023 — The other two adapters — fixed, and run](sprints/sprint-023.md) - Planned.
 
 # Tasks
@@ -61,6 +61,7 @@ okf_version: "0.1"
 * [The dock's follow watcher stops following, silently and for good](tasks/095-follow-watcher-never-reconnects.md) - No --reconnect, so the first stream end retires it; every diagnostic goes to /dev/null, so nothing says so.
 * [Open with names the adapter instead of the thing it opens](tasks/096-open-with-names-the-adapter.md) - The row reads "Open with birch-cmux"; the open command needs a display name adapters can set.
 * [birch-tmux and birch-herdr still name themselves in the Open row](tasks/097-tmux-herdr-set-their-display-name.md) - The display name 096 adds is set only by birch-cmux; the other two keep the old label.
+* [The dock birch does not survive a cmux restart](tasks/098-dock-birch-does-not-survive-a-restart.md) - A restored Dock snapshot brings back bare terminals, not controls; no CLI verb puts birch back.
 
 # Publication
 

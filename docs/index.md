@@ -52,6 +52,9 @@ Process: see [the task workflow](../backlog/workflow.md#adrs).
 * [0030 — The inline editor is birch's only mode, and printables follow the focused field](adr/0030-the-inline-editor-is-the-only-mode.md)
 * [0031 — Delete goes to trash, and confirmation appears only where neither trash nor git can help](adr/0031-delete-goes-to-trash.md)
 * [0032 — Files move by dragging; rename-to-a-path stays as the keyboard route](adr/0032-move-by-dragging.md)
+* [0033 — Undo is a session stack, and delete is the step it cannot take back](adr/0033-undo-is-a-session-stack.md)
+* [0034 — Cut, copy and paste — and Ctrl-C stops quitting](adr/0034-cut-copy-paste-and-the-key-that-quits.md)
+* [0035 — The open command is settable at runtime, as its own socket verb](adr/0035-the-open-command-is-settable-at-runtime.md)
 
 # Research
 
