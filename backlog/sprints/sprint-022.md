@@ -164,3 +164,10 @@ designs consume.
   `095`'s focus race at the root, and a restored Dock snapshot brings back bare terminals rather
   than controls, so a dock birch lasts one cmux session — filed as
   `098-dock-birch-does-not-survive-a-restart`.
+* **2026-08-23 (cont.)** — All six tasks designed. `085` scoped to the detached path and given a
+  stderr-carrying message; `083` designed with ADR 0035 (Proposed) for the `set-open-cmd` verb, and
+  simplified by `086`'s finding that the dock control knows its own window; `084` and `095` collapse
+  into one supervision loop that reconnects, re-syncs on every reconnection, and checks birch's
+  liveness; `096` takes a display name on both the launch flag and the setter. Maintainer decisions:
+  ADR 0016 is amended rather than superseded; a preview keeps stealing focus; a failed detached open
+  reports whenever the child exits.

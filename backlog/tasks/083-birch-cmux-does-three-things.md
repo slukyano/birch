@@ -180,12 +180,11 @@ loud, blanket `2>/dev/null` trimmed to where output is parsed, and `|| true` kep
 - `contrib/tests/cmux-integration.sh` gains a check that the dock birch's open command names the
   window it belongs to, which is what the whole reshape is for.
 
-### Open decisions
+### Decisions
 
-1. **Does the preview steal focus?** `cmux open` focuses its target, so pressing Enter in the tree
-   moves focus to the opened file. `--no-focus` would keep focus in the tree. Both are defensible:
-   an IDE explorer moves focus to the editor on open, and a tree being browsed for several files
-   wants to keep it. Untested either way today; a product call, not a design one.
+1. ~~Does the preview steal focus?~~ **Settled: it does.** Maintainer decision, sprint-022 design
+   phase. `cmux open` focuses its target and that behaviour stays — pressing Enter on a file takes
+   you to it, the way an IDE explorer does. No `--no-focus` in the open command.
 2. **Whether `--open-name` is worth a launch flag at all**, given `birch ctl set-open-cmd --name`
    exists. It is, for [`097`](097-tmux-herdr-set-their-display-name.md): `birch-tmux` and
    `birch-herdr` bake their command at launch and have no watcher to set anything afterwards, so

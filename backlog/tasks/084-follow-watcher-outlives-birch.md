@@ -49,3 +49,47 @@ running; separately, quit birch with `q` and check the same.
 
 `contrib/tests/cmux-integration.sh` never closes a window and never quits birch, so it cannot see
 this. A check is cheap — close the window, then `pgrep -f 'cmux events'`.
+
+## Design
+
+The mechanism is the one the task specifies — capture `$$` before backgrounding, check `kill -0`
+inside the loop — and it lands as part of
+[`095`](095-follow-watcher-never-reconnects.md)'s supervision loop rather than as a separate edit,
+because the two are the same twelve lines:
+
+```sh
+parent=$$
+follow_watcher "$win" "$sock" "$parent" &
+```
+
+The guard appears twice in that loop, and both are load-bearing:
+
+- **The outer `while kill -0 "$_parent"`** is what makes reconnection safe. Once the watcher retries
+  a dropped stream, the stream ending is no longer what stops it, so the liveness check becomes the
+  *only* thing that does.
+- **The first line of the inner loop** ends a watcher whose birch died while the stream was healthy
+  — the `q` case, where the Dock keeps the pty open and drops into an interactive shell, so no
+  hangup arrives and nothing else would notice.
+
+Ordering is not optional: this must land with or before the reconnect, never after. A watcher that
+retries forever with no liveness check is a worse leak than the one being fixed.
+
+Rejected, as the task already argues: `[ -S "$_sock" ] || exit 0`. It races startup — the watcher
+begins before birch binds the socket, so the first event would kill it — and it tests the wrong
+thing, since a stale socket file outlives the process that made it.
+
+**Pid reuse** is the one hole and it is left open deliberately. If birch's pid is recycled by an
+unrelated process, `kill -0` succeeds and the watcher lives on; it then re-roots a socket that no
+longer exists, which fails harmlessly and is logged. Closing it properly needs a handle the shell
+does not have, and the cost of the hole is one idle process rather than a wrong tree.
+
+### Public-surface delta
+
+**None.** The change is entirely inside `contrib/birch-cmux`.
+
+### Tests
+
+In `contrib/tests/cmux-integration.sh`, which never closes a window or quits birch today: quit the
+dock birch with `q`, settle, then assert `pgrep -f 'cmux events'` finds nothing belonging to the
+throwaway. The same check catches a regression in either direction — a watcher that dies too early
+fails the follow checks above it.

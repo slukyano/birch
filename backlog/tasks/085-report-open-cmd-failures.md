@@ -111,7 +111,10 @@ adapter has to opt in. What changes is that birch stops discarding a result it a
 - Bounding: a child that writes a long line, several lines, and control characters to stderr yields
   a single capped clean line.
 
-### Open decision
+### Settled
+
+**A failure is reported whenever the child exits, with no grace window** — maintainer decision,
+sprint-022 design phase. The reasoning that led there:
 
 **Whether a late failure is still worth reporting.** A detached child usually exits in
 milliseconds — every adapter does — but nothing guarantees it. A GUI editor launched detached and
@@ -119,6 +122,5 @@ closed with a non-zero status an hour later would put `open failed` on the statu
 visible cause. The alternatives are to report whenever it exits, or to report only within a grace
 window after launch.
 
-Reporting whenever it exits is recommended: the grace window is a magic number that would have to be
-guessed, and the case it protects against is both rare and self-limiting — the message is cleared by
-the next keypress. It is stated here rather than assumed because it is a product call.
+The grace window is a magic number that would have to be guessed, and the case it protects against
+is both rare and self-limiting — the message is cleared by the next keypress.
