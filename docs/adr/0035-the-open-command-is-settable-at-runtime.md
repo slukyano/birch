@@ -1,7 +1,7 @@
 ---
 type: ADR
 title: The open command is settable at runtime, as its own socket verb
-status: Proposed
+status: Accepted
 sprint: sprint-022
 ---
 

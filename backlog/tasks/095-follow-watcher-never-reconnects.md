@@ -2,7 +2,7 @@
 type: Task
 title: The dock's follow watcher stops following, silently and for good
 description: The watcher subscribes to cmux events once, without --reconnect; the first stream end retires it, and every diagnostic is redirected to /dev/null so nothing says so.
-status: Draft
+status: Designed
 priority: high
 ---
 

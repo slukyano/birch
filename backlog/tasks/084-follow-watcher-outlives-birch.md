@@ -2,7 +2,7 @@
 type: Task
 title: The cmux follow watcher outlives the birch it serves
 description: The backgrounded watcher is not signalled when the window closes or birch quits, so it keeps forking a cmux call and a python3 on every workspace switch.
-status: Draft
+status: Designed
 priority: medium
 ---
 

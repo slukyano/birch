@@ -2,7 +2,7 @@
 type: Task
 title: An open command that fails says nothing
 description: birch reports only spawn failure for --open-cmd; a non-zero exit is discarded, so a host adapter has no failure channel at all.
-status: Draft
+status: Designed
 priority: medium
 ---
 

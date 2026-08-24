@@ -2,7 +2,7 @@
 type: Task
 title: birch-cmux does three things
 description: Reshape the cmux adapter to socket, birch, watcher — the watcher owning both root and open command — and drop the fallbacks that cannot happen.
-status: Draft
+status: Designed
 priority: medium
 ---
 

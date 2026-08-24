@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: The adapter seam — a follow that survives, a failure that speaks
-status: Designing
+status: Implementing
 branch: sprint/022
 tasks:
 - 086-adr-0016-window-scoped-framing

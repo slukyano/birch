@@ -2,7 +2,7 @@
 type: Task
 title: ADR 0016 describes a Dock coupling the code does not have
 description: birch-cmux is window-scoped, not dock-scoped; and the ADR's "verified facts" about the Dock have aged out of date.
-status: Draft
+status: Designed
 priority: low
 ---
 

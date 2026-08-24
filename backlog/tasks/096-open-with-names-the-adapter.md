@@ -2,7 +2,7 @@
 type: Task
 title: Open with names the adapter instead of the thing it opens
 description: The menu row reads "Open with birch-cmux" because the open command's program is the adapter shim; the open command needs a display name adapters can set.
-status: Draft
+status: Designed
 priority: medium
 ---
 
