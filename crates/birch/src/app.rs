@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -2908,35 +2908,42 @@ impl App {
     // ---- opening ----
 
     /// Fire-and-forget open (GUI dispatchers); a background thread reaps the
-    /// child so it never zombifies.
+    /// child so it never zombifies, and reports a failure through
+    /// [`OpenEvent`] (task 085).
     fn open_detached(&mut self, path: &Path) {
         let argv = self.open_cmd.build(path);
         let (program, args) = argv.split_first().expect("argv is never empty");
-        // stderr is piped rather than discarded so a failure can say *why*
+        // stderr is kept rather than discarded so a failure can say *why*
         // (task 085): a host adapter's "no focused cmux window" is the whole
-        // value of the channel, and an exit code alone is not one. stdout
-        // stays null — it is not a failure channel, and a long-lived child
-        // may never close it.
+        // value of the channel, and an exit code alone is not one.
+        //
+        // It goes to a **file**, not a pipe. A pipe reaches EOF when the last
+        // holder of its write end lets go, which need not be the child — a
+        // command that backgrounds something hands stderr to it too — so
+        // draining a pipe can outlive the process it belongs to, and the
+        // `wait` behind it would never run, leaving a zombie and a parked
+        // thread. A file blocks no writer and makes no reader wait, so the
+        // child is reaped when it exits and read afterwards.
+        //
+        // stdout stays discarded: it is not a failure channel.
+        let capture = ErrCapture::new();
         let spawned = Command::new(program)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
+            .stderr(capture.stdio())
             .spawn();
         match spawned {
             Ok(mut child) => {
                 let events = self.open_events.clone();
                 let name = program_name(program).to_string();
                 thread::spawn(move || {
-                    // Drained before the wait, or a chatty child fills the
-                    // pipe and blocks forever on a write nobody is reading.
-                    let reason = child.stderr.take().map(drain_reason).unwrap_or_default();
                     let Ok(status) = child.wait() else { return };
                     if !status.success() {
                         let _ = events.send(OpenEvent {
                             program: name,
                             code: status.code(),
-                            reason,
+                            reason: capture.take(),
                         });
                     }
                 });
@@ -2993,13 +3000,62 @@ fn program_name(program: &str) -> &str {
         .unwrap_or(program)
 }
 
-/// The child's first line of stderr, cleaned and bounded, with the rest read
-/// and dropped so the child is never blocked on a full pipe.
-fn drain_reason(mut stderr: impl io::Read) -> String {
-    use io::Read as _;
-    let mut buf = Vec::new();
-    let _ = (&mut stderr).take(4096).read_to_end(&mut buf);
-    let _ = io::copy(&mut stderr, &mut io::sink());
+/// A detached child's stderr, held in a file the reaper reads once the child
+/// has exited. Removed when the capture is dropped, whatever happened.
+struct ErrCapture {
+    path: Option<PathBuf>,
+    file: Option<std::fs::File>,
+}
+
+impl ErrCapture {
+    fn new() -> Self {
+        // Unique per open without reaching for a dependency: the counter
+        // separates opens, the pid separates processes.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+        let mut path = std::env::temp_dir();
+        path.push(format!("birch-open-{}-{seq}.err", std::process::id()));
+        match std::fs::File::create(&path) {
+            Ok(file) => Self {
+                path: Some(path),
+                file: Some(file),
+            },
+            // A temp directory that cannot be written is no reason to stop
+            // opening files. The failure then reports its exit code alone.
+            Err(_) => Self {
+                path: None,
+                file: None,
+            },
+        }
+    }
+
+    fn stdio(&self) -> Stdio {
+        match self.file.as_ref().map(|file| file.try_clone()) {
+            Some(Ok(handle)) => Stdio::from(handle),
+            _ => Stdio::null(),
+        }
+    }
+
+    /// What the child said, cleaned and bounded. Consumes the capture, so the
+    /// file is removed on the way out.
+    fn take(self) -> String {
+        let Some(path) = self.path.as_deref() else {
+            return String::new();
+        };
+        std::fs::read(path).map(reason_from).unwrap_or_default()
+    }
+}
+
+impl Drop for ErrCapture {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// The first line a child wrote to stderr, cleaned and bounded.
+fn reason_from(buf: Vec<u8>) -> String {
     String::from_utf8_lossy(&buf)
         .lines()
         .map(str::trim)
@@ -4327,14 +4383,32 @@ mod tests {
 
     #[test]
     fn the_reason_is_the_first_real_line_cleaned_and_bounded() {
+        let reason = |bytes: &[u8]| reason_from(bytes.to_vec());
         assert_eq!(
-            drain_reason(&b"\n\n  boom: it failed \nand more\n"[..]),
+            reason(b"\n\n  boom: it failed \nand more\n"),
             "boom: it failed"
         );
-        assert_eq!(drain_reason(&b"a\x07b\n"[..]), "ab");
+        assert_eq!(reason(b"a\x07b\n"), "ab");
         let long = format!("{}\n", "x".repeat(500));
-        assert_eq!(drain_reason(long.as_bytes()).len(), REASON_LIMIT);
-        assert_eq!(drain_reason(&b""[..]), "");
+        assert_eq!(reason(long.as_bytes()).len(), REASON_LIMIT);
+        assert_eq!(reason(b""), "");
+    }
+
+    #[test]
+    fn a_child_that_leaves_stderr_open_is_still_reaped_promptly() {
+        // A pipe would reach EOF only when the backgrounded `sleep` let go of
+        // the inherited stderr, parking the reaper and zombifying the child.
+        let mut h = harness(Mode::Tree);
+        h.app.open_cmd =
+            OpenCmd::from_template("/bin/sh -c '(sleep 30 &) ; echo boom >&2; exit 3' {}")
+                .expect("template");
+        h.app.open_detached(Path::new("/r/a"));
+        let failure = h
+            .open_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("reported without waiting for the grandchild");
+        assert_eq!(failure.code, Some(3));
+        assert_eq!(failure.reason, "boom");
     }
 
     #[test]

@@ -124,8 +124,8 @@ from the dock birch and from any pane in that window.
 
 A background watcher re-roots the tree on each workspace switch. It reconnects when cmux
 drops the event stream and re-reads the workspace on every reconnection, so an outage that
-spans a workspace switch corrects itself rather than leaving a stale tree; it ends when
-its birch does. What it did is in `birch-dock-<key>.log` beside the socket — one line per
+spans a workspace switch corrects itself rather than leaving a stale tree; and it retires
+itself within about half a minute of its birch exiting. What it did is in `birch-dock-<key>.log` beside the socket — one line per
 re-root and reconnect, capped, and the first thing to read if the tree ever stops
 following. Requires `python3` (for the workspace-directory lookup) and the cmux CLI — on
 PATH, or the adapter falls back to cmux's bundled CLI inside Dock control shells.

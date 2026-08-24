@@ -133,7 +133,8 @@ Two consequences for the adapter, both implemented in sprint-022: the `preview` 
 birch runs `cmux open {} --window <id>` itself, set at launch from the control's own environment and
 correctable afterwards through `set-open-cmd` ([ADR 0035](0035-the-open-command-is-settable-at-runtime.md)) —
 and the follow watcher is supervised rather than fire-and-forget. It reconnects when the event
-stream drops, re-reads the workspace on every reconnection, and ends when its birch does. The
+stream drops, re-reads the workspace on every reconnection, and ends within about half a minute of
+its birch doing so — the stream's heartbeat is what wakes it to look. The
 original claim that it "dies with the window (shared-pty SIGHUP) and with cmux (the event stream
 EOFs)" was half true: the second half held, the first did not, and the first half is now a liveness
 check rather than an assumption about signals. See

@@ -25,8 +25,7 @@ case "$birch" in /*) ;; *) birch="$(cd "$(dirname "$birch")" && pwd)/$(basename 
 [ -x "$birch" ] || { echo "no birch at $birch (cargo build first)" >&2; exit 1; }
 
 # Prefer the built `birch-cmux` binary — that is what an install puts on PATH,
-# and running it also proves the shim hands the script a usable `$0`, since
-# `dock-run` bakes `$0` into birch's --open-cmd and `preview` arrives through it.
+# and running it proves the shim hands the script a runnable copy of itself.
 adapter="$(dirname "$birch")/birch-cmux"
 [ -x "$adapter" ] || adapter="$contrib/birch-cmux"
 echo "adapter: $adapter"
@@ -39,6 +38,12 @@ work="${TESTCMUX_HOME:-${TMPDIR:-/tmp}/birch-testcmux}/work"
 # it. A private XDG_RUNTIME_DIR keys the two apart, and keeps the run out of
 # the real adapter state directory either way.
 state="${TESTCMUX_HOME:-${TMPDIR:-/tmp}/birch-testcmux}/state"
+# The throwaway bundle's own CLI, forced on the adapter with $CMUX. Without it
+# the adapter resolves `cmux` from PATH — the real one — and the watcher's
+# `cmux events` process becomes indistinguishable from a real instance's. The
+# checks below match on this path, so they can neither miss the watcher under
+# test nor touch anyone else's.
+testcmux_cli="${TESTCMUX_HOME:-${TMPDIR:-/tmp}/birch-testcmux}/cmux-testcmux.app/Contents/Resources/bin/cmux"
 # Exactly one entry per workspace, so `down` then `enter` in the dock birch is
 # unambiguously "open that file". The nested folder for the reveal check is
 # created later, once the preview rounds are done.
@@ -106,7 +111,7 @@ settle 1
 # the CLI to the default socket — a real cmux. So set it explicitly, and quote
 # the paths so a directory with a space does not break the command line.
 cli send --surface "$dock" \
-    "clear; CMUX_SOCKET_PATH='$("$testcmux" sock)' XDG_RUNTIME_DIR='$state' BIRCH='$birch' '$adapter' dock-run\n" >/dev/null
+    "clear; CMUX_SOCKET_PATH='$("$testcmux" sock)' XDG_RUNTIME_DIR='$state' CMUX='$testcmux_cli' BIRCH='$birch' '$adapter' dock-run\n" >/dev/null
 settle 5
 
 # 1. birch is in the sidebar, rooted at the selected workspace.
@@ -142,7 +147,8 @@ done
 #    window through the bare `cmux` CLI, so it needs the socket in its
 #    environment — set per-invocation, never exported, since an empty value
 #    would silently fall back to a real cmux.
-sock=$(CMUX_SOCKET_PATH="$("$testcmux" sock)" XDG_RUNTIME_DIR="$state" "$adapter" dock-socket 2>/dev/null || true)
+sock=$(CMUX_SOCKET_PATH="$("$testcmux" sock)" XDG_RUNTIME_DIR="$state" CMUX="$testcmux_cli" \
+    "$adapter" dock-socket 2>/dev/null || true)
 case "$sock" in
 /*) got=$([ -S "$sock" ] && echo yes || echo "no socket at $sock") ;;
 *)  got="no path printed" ;;
@@ -181,14 +187,17 @@ check "reveal through dock-socket shows it" visible "$got"
 #    adapter to re-resolve a window from focus.
 win=$(cli current-window 2>/dev/null)
 case "$(ps -eo command | grep -F "$sock" | grep -v grep | head -1)" in
-*"--window $win"*) got=yes ;;
-*)                 got="no ($win not in the open command)" ;;
+*"--window $win"*|*"--window '$win'"*) got=yes ;;
+*)                                     got="no ($win not in the open command)" ;;
 esac
 check "the dock birch opens through its own window" yes "$got"
 
 # 7. Follow survives a dropped subscription. Scoped to the throwaway's own CLI
-#    path so this can never touch a real cmux's watcher.
-events_pattern="birch-testcmux.*Resources/bin/cmux events"
+#    path so this can never touch a real cmux's watcher — and asserted to exist
+#    first, or the two checks below would pass by killing nothing.
+events_pattern="$testcmux_cli events"
+if pgrep -f "$events_pattern" >/dev/null 2>&1; then got=yes; else got="no watcher found"; fi
+check_fatal "the follow watcher is running and findable" yes "$got"
 pkill -f "$events_pattern" >/dev/null 2>&1 || true
 settle 3
 cli workspace select "$beta" >/dev/null; settle 4
@@ -206,9 +215,14 @@ case "$(root_line)" in *ws-alpha*) got=yes ;; *) got="no ($(root_line))" ;; esac
 check "a switch missed during an outage self-corrects on reconnect" yes "$got"
 
 # 9. The watcher goes when birch does. Nothing signals it — the Dock keeps the
-#    pty open and drops into a shell — so only its own liveness check can.
-cli send-key --surface "$dock" q >/dev/null 2>&1 || true
-settle 5
+#    pty open and drops into a shell — so only its own liveness check can, and
+#    that check is reachable only because heartbeats keep arriving.
+# `Ctrl-Q`, not `q`: printable characters are reserved for search.
+cli send-key --surface "$dock" ctrl+q >/dev/null 2>&1 || true
+# Up to two heartbeat intervals. A quiet stream wakes the watcher every 15s and
+# that wake is when it sees birch has gone; `cmux events` then needs its own
+# next write to notice the pipe has closed.
+settle 40
 if pgrep -f "$events_pattern" >/dev/null 2>&1; then got="still running"; else got=gone; fi
 check "quitting birch retires its follow watcher" gone "$got"
 

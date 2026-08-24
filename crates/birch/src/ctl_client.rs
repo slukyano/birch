@@ -71,7 +71,7 @@ enum VerbCmd {
         name: Option<String>,
         /// Spawn it detached from the tty instead of handing the terminal
         /// over. Omit both flags to leave the current mode alone.
-        #[arg(long, overrides_with = "no_detached")]
+        #[arg(long, conflicts_with = "no_detached")]
         detached: bool,
         /// Hand the terminal over and wait, for a terminal editor.
         #[arg(long)]

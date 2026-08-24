@@ -39,10 +39,14 @@ birch="${BIRCH:-birch}"
 # control shells (which do not always have the CLI shim on PATH). Resolved to
 # an absolute path once, because birch executes the open command with its own
 # environment rather than this shell's.
-cmux_bin="$(command -v cmux 2>/dev/null || true)"
+cmux_bin="$(command -v -- "${CMUX:-cmux}" 2>/dev/null || true)"
 [ -n "$cmux_bin" ] || cmux_bin="${CMUX_BUNDLED_CLI_PATH:-}"
 [ -n "$cmux_bin" ] || { echo "birch-cmux: no cmux CLI on PATH and no CMUX_BUNDLED_CLI_PATH" >&2; exit 1; }
 cmux() { "$cmux_bin" "$@"; }
+
+# POSIX single-quote escaping, for the open template birch re-parses with
+# shell-words. A cmux CLI at a path with a space would otherwise split.
+shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\''/g")"; }
 
 # Private per-user state dir. macOS's $TMPDIR carries a trailing slash. The
 # ownership check is dead weight on macOS's per-user $TMPDIR and load-bearing
@@ -73,11 +77,11 @@ log_for() { printf '%s/birch-dock-%s.log' "$state_dir" "$(window_key "$1")"; }
 # A missing python3 is an error rather than an empty answer: swallowing it is
 # how a control dies with nothing to look at.
 window_selected_dir() {
-    command -v python3 >/dev/null 2>&1 || {
-        echo "birch-cmux: python3 not found" >&2
-        return 1
-    }
-    cmux workspace list --window "$1" --json 2>/dev/null | python3 -c '
+    command -v python3 >/dev/null 2>&1 || return 1
+    # Both streams are kept off the terminal: the watcher is a background
+    # sibling of birch on the *same pty*, so anything it prints lands on top
+    # of the rendered tree. Its diagnostics go to the log instead.
+    cmux workspace list --window "$1" --json 2>>"$_log" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
 if not raw.strip():
@@ -91,7 +95,7 @@ for w in rows:
     if w.get("selected"):
         print(w.get("current_directory", ""))
         break
-'
+' 2>>"$_log"
 }
 
 # ---- the follow watcher -----------------------------------------------------
@@ -105,28 +109,40 @@ for w in rows:
 #     which `--reconnect` alone would not do, since the re-root happens on an
 #     event and the event that mattered fired while the stream was down;
 #   - birch's liveness is checked in the only place that can still stop the
-#     watcher once the stream no longer does.
+#     watcher once the stream no longer does. A retired watcher goes within
+#     about half a minute: one heartbeat to wake the read, and one more for
+#     `cmux events` to notice the closed pipe.
 #
 # `--cursor-file` is deliberately unused: cmux's `seq` is process-local to a
 # cmux boot, so a cursor outliving a restart names a sequence from a different
 # one — and replaying missed events buys nothing when the handler ignores the
 # payload and re-reads state anyway.
+#
+# Heartbeats are deliberately *not* suppressed: they are the only traffic on a
+# quiet stream, and therefore the only thing that makes the liveness check run
+# between workspace switches.
 
-# Appends one line to this window's log, and keeps it bounded so a reconnect
-# storm cannot fill a disk.
-_log_lines=0
+# Appends one line to this window's log, and keeps it bounded so a busy or
+# reconnecting watcher cannot fill a disk. The bound is read from the file
+# rather than counted in a variable: `log` is called from inside the event
+# pipeline, which is a subshell, and a counter incremented there dies with it.
+LOG_LIMIT=500
 log() {
-    _log_lines=$((_log_lines + 1))
-    if [ "$_log_lines" -gt 500 ]; then
-        _log_lines=1
-        printf '%s truncated (500 lines)\n' "$(date +%FT%T)" > "$_log"
-    fi
     printf '%s %s\n' "$(date +%FT%T)" "$*" >> "$_log"
+    if [ "$(wc -l < "$_log")" -gt "$LOG_LIMIT" ]; then
+        # The tail is the useful part: what happened most recently.
+        tail -n 100 "$_log" > "$_log.trim" && mv "$_log.trim" "$_log"
+        printf '%s (older lines dropped at %s)\n' "$(date +%FT%T)" "$LOG_LIMIT" >> "$_log"
+    fi
 }
 
 # Points birch at the window's selected workspace, from authoritative state.
 # Never fatal: a transient lookup failure must not end the watcher.
 sync_root() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        log "python3 not found, cannot read the selected workspace"
+        return 0
+    fi
     _dir="$(window_selected_dir "$_win" || true)"
     if [ -z "$_dir" ]; then
         log "no selected directory for window $_win"
@@ -154,19 +170,42 @@ follow_watcher() {
     # rather than being lost — the launch root is the dock's directory, which
     # is usually right and never authoritative.
     _waited=0
-    while [ ! -S "$_sock" ] && [ "$_waited" -lt 50 ]; do
-        sleep 0.1
+    while [ ! -S "$_sock" ] && [ "$_waited" -lt 5 ]; do
+        # Whole seconds: fractional `sleep` is not POSIX, and under `set -e` a
+        # sleep that refused its argument would end the watcher silently.
+        sleep 1
         _waited=$((_waited + 1))
     done
+    _backoff=1
     while kill -0 "$_parent" 2>/dev/null; do
         sync_root
-        cmux events --name workspace.selected --no-heartbeat 2>/dev/null |
-            while IFS= read -r _; do
+        # Subscribed to everything and matched here, rather than filtered
+        # with `--name`. A server-side filter drops the heartbeats too —
+        # verified: `--name workspace.selected` delivers nothing at all on a
+        # quiet cmux, for minutes — and the heartbeat is the only traffic that
+        # reaches a quiet stream. Without it this loop blocks in `read`
+        # indefinitely, and a watcher whose birch had already quit would sit
+        # there until the next workspace switch anywhere. cmux heartbeats
+        # every 15 seconds; each one wakes the loop, which checks the pid and
+        # goes back to sleep.
+        #
+        # The cost is reading every cmux event instead of one kind. That is a
+        # `case` match per line and no fork — cheap next to the alternative,
+        # which is a watcher that cannot notice its own birch is gone. A burst
+        # large enough to fall behind cmux's subscriber queue ends the stream,
+        # which is now a reconnect rather than a death.
+        cmux events --no-ack 2>>"$_log" |
+            while IFS= read -r _line; do
                 kill -0 "$_parent" 2>/dev/null || exit 0
-                sync_root
+                case "$_line" in
+                *'"name":"workspace.selected"'*) sync_root ;;
+                esac
             done
-        log "event stream ended, reconnecting"
-        sleep 1
+        log "event stream ended, reconnecting in ${_backoff}s"
+        sleep "$_backoff"
+        # A cmux that is not coming back should not be asked once a second
+        # forever; a blip should still be picked up promptly.
+        [ "$_backoff" -ge 30 ] || _backoff=$((_backoff * 2))
     done
     log "birch is gone, watcher exiting"
 }
@@ -189,7 +228,7 @@ dock-run)
     parent=$$
     follow_watcher "$win" "$sock" "$parent" &
     exec "$birch_bin" --socket "$sock" \
-        --open-cmd "$cmux_bin open {} --window $win" \
+        --open-cmd "$(shquote "$cmux_bin") open {} --window $(shquote "$win")" \
         --open-name cmux --open-detached "$PWD"
     ;;
 
