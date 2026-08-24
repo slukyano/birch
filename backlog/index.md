@@ -62,6 +62,7 @@ okf_version: "0.1"
 * [Open with names the adapter instead of the thing it opens](tasks/096-open-with-names-the-adapter.md) - The row reads "Open with birch-cmux"; the open command needs a display name adapters can set.
 * [birch-tmux and birch-herdr still name themselves in the Open row](tasks/097-tmux-herdr-set-their-display-name.md) - The display name 096 adds is set only by birch-cmux; the other two keep the old label.
 * [The dock birch does not survive a cmux restart](tasks/098-dock-birch-does-not-survive-a-restart.md) - A restored Dock snapshot brings back bare terminals, not controls; no CLI verb puts birch back.
+* [Mark symlinked rows](tasks/099-mark-symlinked-rows.md) - The tree knows which rows are links; a marker in the badge band beside the git status would say so.
 
 # Publication
 
