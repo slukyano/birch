@@ -179,6 +179,12 @@ struct Cli {
     /// host-adapter open commands; terminal editors must not use this.
     #[arg(long, requires = "open_cmd")]
     open_detached: bool,
+
+    /// What the menu calls the open command, instead of its program name. For
+    /// host adapters, whose filename names the courier rather than the host it
+    /// routes to.
+    #[arg(long, value_name = "text", requires = "open_cmd")]
+    open_name: Option<String>,
 }
 
 /// One `badges` vocabulary for every surface — see `settings::parse_badges`.
@@ -223,6 +229,19 @@ impl From<ThemeArg> for birch_core::ThemeId {
     }
 }
 
+/// A detached open reporting back (task 085). The reaper thread cannot touch
+/// the status line, so a failure travels the same way every worker's news
+/// does. Only failures are sent; a clean exit says nothing.
+pub struct OpenEvent {
+    /// The program as invoked, without its path.
+    pub program: String,
+    /// The exit code, or `None` when a signal ended it.
+    pub code: Option<i32>,
+    /// The child's first line of stderr, already cleaned and bounded, or
+    /// empty when it said nothing.
+    pub reason: String,
+}
+
 pub enum AppEvent {
     Input(crossterm::event::Event),
     Source(birch_core::SourceEvent),
@@ -230,6 +249,8 @@ pub enum AppEvent {
     Fs(birch_core::watcher::WatchEvent),
     Index(birch_core::search::IndexEvent),
     Ctl(ctl::CtlRequest),
+    /// A detached open exited non-zero.
+    Open(OpenEvent),
     /// SIGHUP/SIGTERM: quit through the normal path (state saved, terminal
     /// restored, socket unlinked).
     Shutdown,
@@ -354,6 +375,9 @@ fn main() -> ExitCode {
                 if cli.open_detached {
                     cmd.mode = OpenMode::Detached;
                 }
+                if let Some(name) = cli.open_name.as_deref() {
+                    cmd.set_name(name);
+                }
                 cmd
             }
             Err(e) => {
@@ -395,6 +419,11 @@ fn main() -> ExitCode {
     let (git_event_tx, git_event_rx) = mpsc::channel();
     let _git = GitWorker::spawn(git_cmd_rx, git_event_tx);
     forward(git_event_rx, event_tx.clone(), AppEvent::Git);
+
+    // Detached opens have no worker of their own — each reap is its own
+    // thread — but they report the same way, so they get the same channel.
+    let (open_event_tx, open_event_rx) = mpsc::channel::<OpenEvent>();
+    forward(open_event_rx, event_tx.clone(), AppEvent::Open);
 
     // Input thread. `paused` gates reads while a child owns the terminal.
     let input_paused = Arc::new(AtomicBool::new(false));
@@ -501,6 +530,7 @@ fn main() -> ExitCode {
             watch_cmds: watch_cmd_tx,
             index_cmds: index_cmd_tx,
             git_cmds: git_cmd_tx,
+            open_events: open_event_tx,
             repo_root,
             socket,
             filter,

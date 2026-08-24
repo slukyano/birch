@@ -16,6 +16,10 @@ pub enum OpenMode {
 pub struct OpenCmd {
     argv: Vec<String>,
     pub mode: OpenMode,
+    /// What the menu calls this command, when the argv[0] basename is the
+    /// wrong answer (task 096). A host adapter is a courier, not a program a
+    /// person opens files with, so it says what it routes to instead.
+    name: Option<String>,
 }
 
 impl OpenCmd {
@@ -37,6 +41,7 @@ impl OpenCmd {
         Ok(Self {
             argv,
             mode: OpenMode::Terminal,
+            name: None,
         })
     }
 
@@ -59,6 +64,7 @@ impl OpenCmd {
                 return Self {
                     argv,
                     mode: OpenMode::Terminal,
+                    name: None,
                 };
             }
         }
@@ -73,6 +79,7 @@ impl OpenCmd {
         Self {
             argv: vec![Self::platform_program().into(), "{}".into()],
             mode: OpenMode::Detached,
+            name: None,
         }
     }
 
@@ -101,6 +108,7 @@ impl OpenCmd {
         Self {
             argv,
             mode: OpenMode::Detached,
+            name: None,
         }
     }
 
@@ -123,6 +131,33 @@ impl OpenCmd {
         })
     }
 
+    /// What the menu shows beside `Open`: the display name when one was set,
+    /// otherwise the program. `nvim +{line} {}` still reads `nvim`; a host
+    /// adapter reads the host it routes to rather than its own filename.
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or_else(|| self.program())
+    }
+
+    /// The display name as set, or `None` when the program shows through.
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// Sets the display name, cleaned. An empty result clears it, so the
+    /// program shows through again rather than the row going blank.
+    pub fn set_name(&mut self, raw: &str) {
+        let cleaned = sanitize_name(raw);
+        self.name = (!cleaned.is_empty()).then_some(cleaned);
+    }
+
+    /// Whether this is the desktop handler, ignoring any display name — the
+    /// menu suppresses its `Open with the system handler` row when `Open`
+    /// already runs it, and renaming a command does not change what it runs.
+    pub fn is_platform_opener(&self) -> bool {
+        let platform = Self::platform_opener();
+        self.argv == platform.argv && self.mode == platform.mode
+    }
+
     /// Substitutes the template into a concrete argv. If no arg contains
     /// `{}`, the path is appended.
     pub fn build(&self, path: &Path) -> Vec<String> {
@@ -142,6 +177,23 @@ impl OpenCmd {
         }
         argv
     }
+}
+
+/// The most a display name may occupy in a menu row. `Open with ` plus this
+/// already overflows a narrow pane, so the cap costs nothing a caller wanted
+/// and removes the question of what a careless value does to the frame.
+pub const NAME_LIMIT: usize = 32;
+
+/// Cleans a display name at the boundary it arrives on. One path is a launch
+/// flag and the other is the control socket, and two paths with different
+/// rules is how one of them ends up wrong — so both take this.
+pub fn sanitize_name(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| !c.is_control())
+        .take(NAME_LIMIT)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -214,5 +266,44 @@ mod tests {
 
         let cmd = OpenCmd::default_from(None, None);
         assert_eq!(cmd.mode, OpenMode::Detached);
+    }
+
+    #[test]
+    fn the_display_name_replaces_the_program_only_when_set() {
+        let mut cmd = OpenCmd::from_template("birch-cmux preview {}").expect("template");
+        assert_eq!(cmd.display_name(), "birch-cmux");
+        assert_eq!(cmd.name(), None);
+        cmd.set_name("cmux");
+        assert_eq!(cmd.display_name(), "cmux");
+        // The program is untouched: the row is renamed, not the command.
+        assert_eq!(cmd.program(), "birch-cmux");
+    }
+
+    #[test]
+    fn a_name_is_cleaned_and_bounded_where_it_arrives() {
+        let mut cmd = OpenCmd::from_template("adapter {}").expect("template");
+        cmd.set_name("cm\nux\u{7}");
+        assert_eq!(cmd.display_name(), "cmux");
+        cmd.set_name(&"x".repeat(200));
+        assert_eq!(cmd.display_name().chars().count(), NAME_LIMIT);
+    }
+
+    #[test]
+    fn an_empty_name_lets_the_program_show_through_again() {
+        let mut cmd = OpenCmd::from_template("adapter {}").expect("template");
+        cmd.set_name("cmux");
+        cmd.set_name("   ");
+        assert_eq!(cmd.name(), None);
+        assert_eq!(cmd.display_name(), "adapter");
+    }
+
+    #[test]
+    fn renaming_the_platform_opener_does_not_make_it_something_else() {
+        let mut cmd = OpenCmd::platform_opener();
+        assert!(cmd.is_platform_opener());
+        cmd.set_name("desktop");
+        // The menu suppresses its system-handler row when `Open` already runs
+        // it, and a display name changes nothing about what runs.
+        assert!(cmd.is_platform_opener());
     }
 }

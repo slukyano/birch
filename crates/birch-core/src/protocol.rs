@@ -19,6 +19,11 @@ pub enum Verb {
     Set,
     SetRoot,
     Open,
+    /// Replace the running instance's open command, its display name, and its
+    /// terminal/detached mode (ADR 0035). Its own verb rather than a `Set`
+    /// key: `set` is the display-settings verb, it feeds persistence, and it
+    /// is otherwise incapable of making birch execute anything.
+    SetOpenCmd,
     Quit,
 }
 
@@ -68,6 +73,15 @@ pub struct Request {
     pub setting: Option<SettingKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// `set-open-cmd`: what the menu should call the command. Absent leaves
+    /// the current display name alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `set-open-cmd`: fire-and-forget, or hand the terminal over and wait.
+    /// Absent leaves the current mode alone — a template swapped without its
+    /// mode could hand a Dock pane's terminal to a GUI dispatcher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detached: Option<bool>,
 }
 
 impl Request {
@@ -79,6 +93,8 @@ impl Request {
             form: None,
             setting: None,
             value: None,
+            name: None,
+            detached: None,
         }
     }
 }
@@ -199,6 +215,39 @@ pub fn by_root_link(dir: &Path, root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_open_cmd_round_trips_and_omits_what_it_does_not_say() {
+        let mut req = Request::new(Verb::SetOpenCmd);
+        req.value = Some("cmux open {} --window w1".into());
+        let line = serde_json::to_string(&req).unwrap();
+        // Absent means "leave it alone", so neither field is on the wire.
+        assert!(!line.contains("name"), "{line}");
+        assert!(!line.contains("detached"), "{line}");
+        let back: Request = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.verb, Verb::SetOpenCmd);
+        assert_eq!(back.value.as_deref(), Some("cmux open {} --window w1"));
+        assert_eq!(back.name, None);
+        assert_eq!(back.detached, None);
+
+        req.name = Some("cmux".into());
+        req.detached = Some(true);
+        let line = serde_json::to_string(&req).unwrap();
+        let back: Request = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.name.as_deref(), Some("cmux"));
+        assert_eq!(back.detached, Some(true));
+    }
+
+    #[test]
+    fn a_client_that_never_heard_of_the_new_fields_still_parses() {
+        // ADR 0011's additive rule, from the other direction: an older
+        // client's line has no `name`/`detached` and must still be a request.
+        let line = r#"{"v":1,"verb":"set-open-cmd","value":"vim {}","future":42}"#;
+        let back: Request = serde_json::from_str(line).unwrap();
+        assert_eq!(back.verb, Verb::SetOpenCmd);
+        assert_eq!(back.name, None);
+        assert_eq!(back.detached, None);
+    }
 
     #[test]
     fn requests_round_trip_and_tolerate_unknown_fields() {
