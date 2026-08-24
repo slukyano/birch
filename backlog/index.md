@@ -29,7 +29,7 @@ okf_version: "0.1"
 * [Sprint 019 — The cmux integration, finished](sprints/sprint-019.md) - Done.
 * [Sprint 020 — Multi-select and the action surface](sprints/sprint-020.md) - Done.
 * [Sprint 021 — The actions the menu was built for](sprints/sprint-021.md) - Done.
-* [Sprint 022 — The adapter seam: a follow that survives, a failure that speaks](sprints/sprint-022.md) - Implementing.
+* [Sprint 022 — The adapter seam: a follow that survives, a failure that speaks](sprints/sprint-022.md) - Done.
 * [Sprint 023 — The other two adapters — fixed, and run](sprints/sprint-023.md) - Planned.
 
 # Tasks
@@ -49,19 +49,14 @@ okf_version: "0.1"
 * [Add the Git Changes source](tasks/032-add-git-changes-source.md) - A third source listing changed files, reusing the source-as-delta-stream interface.
 * [Add the Project View source](tasks/033-add-project-view-source.md) - A curated/virtual tree source, reusing the source-as-delta-stream interface.
 * [Verify the herdr integration live](tasks/035-verify-herdr-integration.md) - SGR mouse passthrough, open-in-main, toggle, reverse-reveal in a live herdr session.
-* [birch-cmux does three things](tasks/083-birch-cmux-does-three-things.md) - Socket, birch, watcher; the watcher owns root and open command, the preview verb goes, and the unreachable fallbacks go with it.
-* [The cmux follow watcher outlives the birch it serves](tasks/084-follow-watcher-outlives-birch.md) - Nothing signals the backgrounded watcher, so it forks a cmux call and a python3 per workspace switch forever.
-* [An open command that fails says nothing](tasks/085-report-open-cmd-failures.md) - birch discards a non-zero exit from --open-cmd, so host adapters have no failure channel at all.
-* [ADR 0016 describes a Dock coupling the code does not have](tasks/086-adr-0016-window-scoped-framing.md) - birch-cmux is window-scoped, not dock-scoped; and the ADR's Dock facts have aged out.
 * [birch-tmux and birch-herdr bake a raw $0 into --open-cmd](tasks/087-tmux-herdr-bake-raw-argv0.md) - Resolve argv[0] in the Rust carrier so all three adapters inherit it.
 * [A keyboard way to build a discontiguous selection](tasks/089-keyboard-toggle-for-multi-select.md) - Shift with the arrows extends a contiguous range; nothing on the keyboard toggles one row in or out.
 * [Hover highlight in the tree](tasks/090-hover-highlight-in-the-tree.md) - Motion tracking so the row under the pointer lights up; the context menu enables it only for its own lifetime.
 * [Adopt the Kitty keyboard protocol where the terminal supports it](tasks/091-kitty-keyboard-protocol.md) - The legacy encoding cannot represent Shift with a control character, so Ctrl-Shift-C is the same byte as Ctrl-C.
 * [stale_socket_is_reclaimed_but_files_are_not is intermittently flaky](tasks/094-flaky-ctl-socket-test.md) - The ctl socket test fails roughly one run in five, and passes in isolation and on retry.
-* [The dock's follow watcher stops following, silently and for good](tasks/095-follow-watcher-never-reconnects.md) - No --reconnect, so the first stream end retires it; every diagnostic goes to /dev/null, so nothing says so.
-* [Open with names the adapter instead of the thing it opens](tasks/096-open-with-names-the-adapter.md) - The row reads "Open with birch-cmux"; the open command needs a display name adapters can set.
 * [birch-tmux and birch-herdr still name themselves in the Open row](tasks/097-tmux-herdr-set-their-display-name.md) - The display name 096 adds is set only by birch-cmux; the other two keep the old label.
 * [The dock birch does not survive a cmux restart](tasks/098-dock-birch-does-not-survive-a-restart.md) - A restored Dock snapshot brings back bare terminals, not controls; no CLI verb puts birch back.
+* [Mark symlinked rows](tasks/099-mark-symlinked-rows.md) - The tree knows which rows are links; a marker in the badge band beside the git status would say so.
 
 # Publication
 
@@ -72,6 +67,12 @@ so outside the `docs/design.md` scope fence.
 
 # Done
 
+* [birch-cmux does three things](archive/083-birch-cmux-does-three-things.md) - Socket, birch, watcher; the watcher owns root and open command, the preview verb goes, and the unreachable fallbacks go with it.
+* [The cmux follow watcher outlives the birch it serves](archive/084-follow-watcher-outlives-birch.md) - Nothing signals the backgrounded watcher, so it forks a cmux call and a python3 per workspace switch forever.
+* [An open command that fails says nothing](archive/085-report-open-cmd-failures.md) - birch discards a non-zero exit from --open-cmd, so host adapters have no failure channel at all.
+* [ADR 0016 describes a Dock coupling the code does not have](archive/086-adr-0016-window-scoped-framing.md) - birch-cmux is window-scoped, not dock-scoped; and the ADR's Dock facts have aged out.
+* [The dock's follow watcher stops following, silently and for good](archive/095-follow-watcher-never-reconnects.md) - No --reconnect, so the first stream end retires it; every diagnostic goes to /dev/null, so nothing says so.
+* [Open with names the adapter instead of the thing it opens](archive/096-open-with-names-the-adapter.md) - The row reads "Open with birch-cmux"; the open command needs a display name adapters can set.
 * [Undo a file operation](archive/093-undo-a-file-operation.md) - Sprint 021 makes birch mutate the filesystem; trash covers delete and nothing covers rename, move, or create.
 * [Move files and folders by dragging](archive/072-drag-to-move.md) - Drag a row onto a directory to move it; arguable since ADR 0028, against the File operations section's own "No move".
 * [Add copy name and paths](archive/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.

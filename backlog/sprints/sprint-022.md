@@ -1,7 +1,7 @@
 ---
 type: Sprint
 title: The adapter seam — a follow that survives, a failure that speaks
-status: Implementing
+status: Done
 branch: sprint/022
 tasks:
 - 086-adr-0016-window-scoped-framing
@@ -17,19 +17,19 @@ tasks:
 Sprint 019 declared the cmux integration finished. Live use since then has filed five defects
 against it, and four of them land inside the same twelve lines — `contrib/birch-cmux:95-105`, the
 follow watcher. Taken one at a time that loop gets rewritten four times; taken together it gets
-rewritten once, into the shape [`083`](../tasks/083-birch-cmux-does-three-things.md) already
+rewritten once, into the shape [`083`](../archive/083-birch-cmux-does-three-things.md) already
 specifies.
 
 The set has a single theme, and it is not "cmux". It is **what an adapter does when something goes
 wrong**. Today the answer everywhere is *nothing*: a `--open-cmd` that exits non-zero is discarded
-by birch ([`085`](../tasks/085-report-open-cmd-failures.md)); a follow watcher whose event stream
-ends retires in silence ([`095`](../tasks/095-follow-watcher-never-reconnects.md)); a watcher whose
-birch is gone runs forever, equally silently ([`084`](../tasks/084-follow-watcher-outlives-birch.md));
+by birch ([`085`](../archive/085-report-open-cmd-failures.md)); a follow watcher whose event stream
+ends retires in silence ([`095`](../archive/095-follow-watcher-never-reconnects.md)); a watcher whose
+birch is gone runs forever, equally silently ([`084`](../archive/084-follow-watcher-outlives-birch.md));
 and every diagnostic inside the adapter is redirected to `/dev/null`. The observed symptom of all
 four is the same — a tree that stops responding, with nowhere to look. The sprint's job is to make
 each of them say so, and then to survive the ones that can be survived.
 
-[`096`](../tasks/096-open-with-names-the-adapter.md), filed while this scope was being drawn, is the
+[`096`](../archive/096-open-with-names-the-adapter.md), filed while this scope was being drawn, is the
 same silence seen from the front: the menu's `Open` row names the adapter shim it runs rather than
 the host it routes to, because argv[0] is all the label has to go on. An adapter that cannot say
 what it is gets described by its filename.
@@ -153,6 +153,78 @@ Commit `backlog/sprints/sprint-022.md` to `main`; cut branch `sprint/022` from i
 opens with `086`'s live checks and `095`'s instrumentation, both of which produce facts the later
 designs consume.
 
+# Implementation checklist
+
+- [x] `085-report-open-cmd-failures` — `OpenEvent`, the `AppEvent::Open` arm, stderr capture
+- [x] `096-open-with-names-the-adapter` — `OpenCmd` display name, `--open-name`, the label path
+- [x] ADR 0035 — `set-open-cmd` verb, `birch ctl` form, protocol fields
+- [x] `083-birch-cmux-does-three-things` — the adapter reshaped to three things
+- [x] `084-follow-watcher-outlives-birch` + `095-follow-watcher-never-reconnects` — the supervision
+      loop, the liveness guard, the log
+- [x] `086-adr-0016-window-scoped-framing` — the ADR amendment and the docs corrections
+- [x] `contrib/tests/cmux-integration.sh` — reconnect, re-sync-during-outage, watcher exit, open command
+- [x] Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`,
+      hands-on verification, independent review, publication hygiene
+
+# Sprint summary
+
+Six tasks, all `Done`. The theme was what an adapter does when something goes wrong, where the
+answer everywhere was nothing.
+
+**Follow stops silently, and now it does not.** The cmux watcher subscribed once. Anything that
+ended that stream retired it permanently: birch kept running, drawn and responsive, pointed at
+whatever folder it held when the stream died, with no message anywhere and no way back but
+restarting the control. It now reconnects, and re-reads the workspace on **every** reconnection, so
+a switch that happened while the stream was down corrects itself rather than persisting until the
+next switch. `cmux events --reconnect` would have covered the stream and not the state; the design
+records why it was refused, along with `--cursor-file`, whose sequence numbers are local to one cmux
+boot.
+
+**A watcher whose birch is gone now goes too**, within about half a minute. Nothing signals it — the
+Dock keeps the pane's pty open and drops into a shell — so it has to notice on its own. That check
+turned out to be unreachable as first written: filtered to one event name, the subscription
+delivers nothing at all on a quiet cmux, heartbeats included, so the loop sat in `read` until the
+next workspace switch anywhere. The subscription is unfiltered and matched in the adapter instead,
+which makes the 15-second heartbeat the thing that wakes it.
+
+**An open that fails says why.** A fire-and-forget open — the mode every adapter uses — discarded
+the result, so "cmux is not running" and "it worked" were the same event. The child's first line of
+stderr now reaches the status line. It is captured to a file rather than a pipe, because a pipe
+reaches EOF only when the last holder of its write end lets go, which need not be the child.
+
+**The menu row names the host.** `Open with birch-cmux` was the adapter describing itself. The open
+command takes a display name, at launch or over the socket, and `birch-cmux` sets `cmux`.
+
+**The adapter is three things**, and the reshape got simpler mid-design: a dock control's
+`CMUX_WORKSPACE_ID` holds its own window uuid, so it states its identity instead of inferring it
+from whichever window is focused. That removed one of the two known ways follow could stop, at the
+root rather than by detecting it later.
+
+## What the live checks settled
+
+Run against `contrib/testcmux`, never a real instance:
+
+| Question | Answer |
+|---|---|
+| `cmux current-window` — ref or uuid? | A uuid. The socket key and ADR 0016 were right; recycled refs are not a risk. |
+| Can config seed two birch controls into one window? | No — precedence is first match wins, never a union. By hand it can happen, and the second birch refuses legibly. |
+| What does a restored Dock snapshot do to a control? | Replaces it with a bare shell. A dock birch's lifetime is one cmux session. |
+
+## Limitations, and what they cost
+
+- **A dock birch does not survive a cmux restart.** cmux owns the Dock lifecycle, so birch cannot
+  fix this; both documents now say it. Held by `098-dock-birch-does-not-survive-a-restart`.
+- **`095`'s trigger was never observed.** Both known mechanisms are closed, so nothing is knowingly
+  half-fixed, but a third nobody has named would survive. That is what the log is for: its last line
+  plus whether the process exists names which mechanism failed.
+- **The launch root is the dock's directory** until the watcher's first sync, which is usually the
+  right folder and never authoritative. On a machine where that directory is `$HOME`, birch lists
+  and starts git discovery there for up to a second.
+- **`birch-tmux` and `birch-herdr` still name themselves** in the `Open` row.
+  `097-tmux-herdr-set-their-display-name` carries the one-line fix to the sprint that runs them.
+- **`--open-name` needs `--open-cmd`**, so it cannot be used with an `open-cmd` from the config file.
+  Same shape as the existing `--open-detached`; not made worse, not fixed.
+
 # Session log
 
 * **2026-08-23** — Sprint opened; branch cut. Design phase started with
@@ -171,3 +243,10 @@ designs consume.
   liveness; `096` takes a display name on both the launch flag and the setter. Maintainer decisions:
   ADR 0016 is amended rather than superseded; a preview keeps stealing focus; a failed detached open
   reports whenever the child exits.
+* **2026-08-24** — Implemented, gated and closed out. Three implementation commits plus one round of
+  review fixes; `cargo fmt`/`clippy`/`test` green at 361 tests, and
+  `contrib/tests/cmux-integration.sh` at 14 checks, up from 9. An independent review found the
+  watcher's liveness check unreachable and three of the new integration checks unable to fail; both
+  are fixed, and the retirement check was watched failing before it passed. Hands-on in a live
+  throwaway cmux: the menu row reads `Open with cmux`, `birch ctl set-open-cmd` retargets a running
+  dock birch, and a failed open reports the child's own words.

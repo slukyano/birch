@@ -2,7 +2,7 @@
 type: Task
 title: Open with names the adapter instead of the thing it opens
 description: The menu row reads "Open with birch-cmux" because the open command's program is the adapter shim; the open command needs a display name adapters can set.
-status: Designed
+status: Done
 priority: medium
 ---
 
@@ -33,7 +33,7 @@ Give the open command an optional **display name**, set by whoever knows what th
 and prefer it over the argv[0] basename when present. `birch-cmux` sets `cmux`. Absent a display
 name nothing changes — `nvim` still reads `nvim`.
 
-`birch-tmux` and `birch-herdr` set theirs in [`097`](097-tmux-herdr-set-their-display-name.md), one
+`birch-tmux` and `birch-herdr` set theirs in [`097`](../tasks/097-tmux-herdr-set-their-display-name.md), one
 line each, alongside the live session that observes them. This task is the mechanism plus the host
 the bug was reported against.
 
@@ -83,7 +83,7 @@ Both surfaces, one answer, as the sprint ordering requires:
 
 | Surface | Shape | Who uses it |
 |---|---|---|
-| `--open-name <text>` | Launch flag beside `--open-cmd` | `birch-cmux` at launch, and `birch-tmux`/`birch-herdr` in [`097`](097-tmux-herdr-set-their-display-name.md), which bake and never set |
+| `--open-name <text>` | Launch flag beside `--open-cmd` | `birch-cmux` at launch, and `birch-tmux`/`birch-herdr` in [`097`](../tasks/097-tmux-herdr-set-their-display-name.md), which bake and never set |
 | `name` field on `set-open-cmd` | Optional; absent leaves the current name unchanged | ADR 0035's setter, so a command replaced at runtime cannot lose or contradict its label |
 
 Baking alone would leave the runtime setter able to reintroduce the bug it was built beside;
@@ -122,4 +122,4 @@ an absent name changes nothing — `nvim` still reads `nvim`.
 ### Scope
 
 The mechanism, and `birch-cmux` setting `cmux`. `birch-tmux` and `birch-herdr` set theirs in
-[`097`](097-tmux-herdr-set-their-display-name.md), in the sprint that runs those hosts.
+[`097`](../tasks/097-tmux-herdr-set-their-display-name.md), in the sprint that runs those hosts.

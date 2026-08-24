@@ -17,10 +17,24 @@ a path that is not a socket returns `AlreadyExists` and is never removed, and th
 file's contents survive. So the likely fault is in the test's own sequencing rather than in `serve`
 — but "likely" is not where this should be left.
 
+## The failing assertion, captured
+
+Caught during sprint-022's gate runs, on a run that passed on the immediate retry:
+
+```
+---- ctl::tests::stale_socket_is_reclaimed_but_files_are_not stdout ----
+thread 'ctl::tests::stale_socket_is_reclaimed_but_files_are_not' panicked at crates/birch/src/ctl.rs:279:14:
+dead socket is reclaimed: Custom { kind: AddrInUse, error: "…/birch-ctl-test-stale-55139.sock is in use by a live instance" }
+```
+
+So the reclaim path found the socket **live** where the test had just made it dead. That points at
+the second hypothesis below rather than the first: `serve` decides liveness by connecting, and a
+previous accept thread still holding the bound listener answers. Nothing about the file is wrong —
+the process behind it has not let go yet.
+
 ## What a fix has to answer
 
-- **Which assertion fails.** Not yet captured: four deliberate reproduction attempts after forced
-  rebuilds all passed. It needs a run loop that keeps the failing output rather than a manual retry.
+- ~~**Which assertion fails.**~~ Answered above.
 - **Whether the accept thread outlives `cleanup`.** `ServeHandle::cleanup` unlinks the socket
   synchronously but nothing joins the accept thread, which still holds the bound listener. If any
   ordering between that thread and the test's next `serve` matters, the test is racing a thread it

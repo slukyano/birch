@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -34,7 +34,7 @@ use birch_tui::theme::Theme;
 use ratatui::layout::Rect;
 
 use crate::ctl::{CtlRequest, SocketHandle};
-use crate::{AppEvent, term};
+use crate::{AppEvent, OpenEvent, term};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -61,6 +61,8 @@ pub struct AppWiring {
     pub watch_cmds: Sender<WatchCmd>,
     pub index_cmds: Sender<IndexCmd>,
     pub git_cmds: Sender<GitCmd>,
+    /// Where a detached open's reaper thread reports a failure (task 085).
+    pub open_events: Sender<OpenEvent>,
     /// Present when a repo was discovered and git is enabled.
     pub repo_root: Option<PathBuf>,
     /// The control socket, when one was bound (never in picker mode).
@@ -96,6 +98,7 @@ struct App {
     watch_cmds: Sender<WatchCmd>,
     index_cmds: Sender<IndexCmd>,
     git_cmds: Sender<GitCmd>,
+    open_events: Sender<OpenEvent>,
     repo_root: Option<PathBuf>,
     socket: Option<SocketHandle>,
     filter: Option<Filter>,
@@ -358,6 +361,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathB
         watch_cmds,
         index_cmds,
         git_cmds,
+        open_events,
         repo_root,
         socket,
         filter,
@@ -378,6 +382,7 @@ pub fn run(terminal: &mut term::Term, wiring: AppWiring) -> io::Result<Vec<PathB
         watch_cmds,
         index_cmds,
         git_cmds,
+        open_events,
         repo_root,
         socket,
         filter,
@@ -498,6 +503,10 @@ impl App {
                 }
             }
             AppEvent::Ctl(ctl) => return self.handle_ctl(terminal, events, ctl),
+            // A detached open that failed. Last writer wins, like every
+            // other status message, and the keypress that triggered the open
+            // has already cleared the line — so this lands after its cause.
+            AppEvent::Open(failure) => self.status = open_failure_message(&failure),
             AppEvent::Shutdown => return true,
             AppEvent::Input(raw) => return self.handle_input(terminal, events, raw),
         }
@@ -1015,12 +1024,43 @@ impl App {
                 }
                 None => Response::err("no selection"),
             },
+            Verb::SetOpenCmd => self.handle_set_open_cmd(&request),
             Verb::Quit => {
                 effect = CtlEffect::Quit;
                 Response::ok(None)
             }
         };
         (response, effect)
+    }
+
+    /// Replaces the open command (ADR 0035). The template is required; the
+    /// display name and the mode are each left alone when absent, so a caller
+    /// correcting one does not silently reset the others.
+    fn handle_set_open_cmd(&mut self, request: &Request) -> Response {
+        let Some(template) = request.value.as_deref() else {
+            return Response::err("set-open-cmd needs a command template");
+        };
+        let mut cmd = match OpenCmd::from_template(template) {
+            Ok(cmd) => cmd,
+            Err(e) => return Response::err(e),
+        };
+        cmd.mode = match request.detached {
+            Some(true) => OpenMode::Detached,
+            Some(false) => OpenMode::Terminal,
+            None => self.open_cmd.mode,
+        };
+        match request.name.as_deref() {
+            Some(name) => cmd.set_name(name),
+            // `from_template` starts nameless, so carrying the old name over
+            // is what "absent leaves it alone" has to mean.
+            None => {
+                if let Some(existing) = self.open_cmd.name() {
+                    cmd.set_name(existing);
+                }
+            }
+        }
+        self.open_cmd = cmd;
+        Response::ok(None)
     }
 
     fn handle_set(&mut self, key: Option<SettingKey>, value: Option<&str>) -> Response {
@@ -1377,7 +1417,7 @@ impl App {
             picker: self.mode.is_pick(),
             // The whole command, not just its program: `open -a Preview` runs
             // `open` without being the platform handler.
-            open_is_platform: self.open_cmd == OpenCmd::platform_opener(),
+            open_is_platform: self.open_cmd.is_platform_opener(),
             open_program: program,
             system_program: OpenCmd::platform_program(),
             undo: self.undo_label.as_deref(),
@@ -1442,7 +1482,7 @@ impl App {
         }
         let rows = self.rows();
         let targets = self.action_targets(&rows);
-        let context = self.action_context(&targets, self.open_cmd.program());
+        let context = self.action_context(&targets, self.open_cmd.display_name());
         let Some(menu) = Menu::open(context, column, row) else {
             return false;
         };
@@ -1586,7 +1626,7 @@ impl App {
     fn perform(&mut self, action: Action) -> Performed {
         let rows = self.rows();
         let targets = self.action_targets(&rows);
-        if !action.available(self.action_context(&targets, self.open_cmd.program())) {
+        if !action.available(self.action_context(&targets, self.open_cmd.display_name())) {
             return Performed::Nothing;
         }
         if let Some(form) = action.copy_form() {
@@ -1711,7 +1751,7 @@ impl App {
     /// target directory (create). Nothing touches the tree until `Enter`.
     fn begin_edit(&mut self, rows: &[Row], action: Action) {
         let targets = self.action_targets(rows);
-        if !action.available(self.action_context(&targets, self.open_cmd.program())) {
+        if !action.available(self.action_context(&targets, self.open_cmd.display_name())) {
             return;
         }
         let Some(target) = targets.first() else {
@@ -1839,7 +1879,7 @@ impl App {
         } else {
             Action::Cut
         };
-        if !action.available(self.action_context(&targets, self.open_cmd.program())) {
+        if !action.available(self.action_context(&targets, self.open_cmd.display_name())) {
             return;
         }
         let paths: Vec<PathBuf> = targets.iter().map(|t| t.path.clone()).collect();
@@ -1859,7 +1899,7 @@ impl App {
     /// it is one, otherwise its parent, which is where a create goes too.
     fn paste(&mut self, rows: &[Row]) {
         let targets = self.action_targets(rows);
-        if !Action::Paste.available(self.action_context(&targets, self.open_cmd.program())) {
+        if !Action::Paste.available(self.action_context(&targets, self.open_cmd.display_name())) {
             return;
         }
         let Some(target) = targets.first() else {
@@ -1990,7 +2030,7 @@ impl App {
     /// (ADR 0031).
     fn begin_delete(&mut self, rows: &[Row]) {
         let targets = self.action_targets(rows);
-        if !Action::Delete.available(self.action_context(&targets, self.open_cmd.program())) {
+        if !Action::Delete.available(self.action_context(&targets, self.open_cmd.display_name())) {
             return;
         }
         self.trash_now(targets.iter().map(|t| t.path.clone()).collect());
@@ -2868,20 +2908,44 @@ impl App {
     // ---- opening ----
 
     /// Fire-and-forget open (GUI dispatchers); a background thread reaps the
-    /// child so it never zombifies.
+    /// child so it never zombifies, and reports a failure through
+    /// [`OpenEvent`] (task 085).
     fn open_detached(&mut self, path: &Path) {
         let argv = self.open_cmd.build(path);
         let (program, args) = argv.split_first().expect("argv is never empty");
+        // stderr is kept rather than discarded so a failure can say *why*
+        // (task 085): a host adapter's "no focused cmux window" is the whole
+        // value of the channel, and an exit code alone is not one.
+        //
+        // It goes to a **file**, not a pipe. A pipe reaches EOF when the last
+        // holder of its write end lets go, which need not be the child — a
+        // command that backgrounds something hands stderr to it too — so
+        // draining a pipe can outlive the process it belongs to, and the
+        // `wait` behind it would never run, leaving a zombie and a parked
+        // thread. A file blocks no writer and makes no reader wait, so the
+        // child is reaped when it exits and read afterwards.
+        //
+        // stdout stays discarded: it is not a failure channel.
+        let capture = ErrCapture::new();
         let spawned = Command::new(program)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(capture.stdio())
             .spawn();
         match spawned {
             Ok(mut child) => {
+                let events = self.open_events.clone();
+                let name = program_name(program).to_string();
                 thread::spawn(move || {
-                    let _ = child.wait();
+                    let Ok(status) = child.wait() else { return };
+                    if !status.success() {
+                        let _ = events.send(OpenEvent {
+                            program: name,
+                            code: status.code(),
+                            reason: capture.take(),
+                        });
+                    }
                 });
             }
             Err(e) => self.status = format!("open failed: {program}: {e}"),
@@ -2921,6 +2985,105 @@ enum CtlEffect {
     None,
     Open(PathBuf),
     Quit,
+}
+
+/// The most of a child's stderr that reaches the status line. Wider than the
+/// line itself on any sane terminal, so the cap only stops a runaway.
+const REASON_LIMIT: usize = 120;
+
+/// A program as invoked, without its directory — the status line names what
+/// was run, not where it lives.
+fn program_name(program: &str) -> &str {
+    program
+        .rsplit(std::path::MAIN_SEPARATOR)
+        .next()
+        .unwrap_or(program)
+}
+
+/// A detached child's stderr, held in a file the reaper reads once the child
+/// has exited. Removed when the capture is dropped, whatever happened.
+struct ErrCapture {
+    path: Option<PathBuf>,
+    file: Option<std::fs::File>,
+}
+
+impl ErrCapture {
+    fn new() -> Self {
+        // Unique per open without reaching for a dependency: the counter
+        // separates opens, the pid separates processes.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+        let mut path = std::env::temp_dir();
+        path.push(format!("birch-open-{}-{seq}.err", std::process::id()));
+        match std::fs::File::create(&path) {
+            Ok(file) => Self {
+                path: Some(path),
+                file: Some(file),
+            },
+            // A temp directory that cannot be written is no reason to stop
+            // opening files. The failure then reports its exit code alone.
+            Err(_) => Self {
+                path: None,
+                file: None,
+            },
+        }
+    }
+
+    fn stdio(&self) -> Stdio {
+        match self.file.as_ref().map(|file| file.try_clone()) {
+            Some(Ok(handle)) => Stdio::from(handle),
+            _ => Stdio::null(),
+        }
+    }
+
+    /// What the child said, cleaned and bounded. Consumes the capture, so the
+    /// file is removed on the way out.
+    fn take(self) -> String {
+        let Some(path) = self.path.as_deref() else {
+            return String::new();
+        };
+        std::fs::read(path).map(reason_from).unwrap_or_default()
+    }
+}
+
+impl Drop for ErrCapture {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// The first line a child wrote to stderr, cleaned and bounded.
+fn reason_from(buf: Vec<u8>) -> String {
+    String::from_utf8_lossy(&buf)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| {
+            line.chars()
+                .filter(|c| !c.is_control())
+                .take(REASON_LIMIT)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What a failed detached open says. The reason when the child gave one, the
+/// exit status when it did not — the same wording terminal-mode opens use.
+fn open_failure_message(failure: &OpenEvent) -> String {
+    let OpenEvent {
+        program,
+        code,
+        reason,
+    } = failure;
+    if !reason.is_empty() {
+        return format!("open failed: {program}: {reason}");
+    }
+    match code {
+        Some(code) => format!("open failed: {program} exited with {code}"),
+        None => format!("open failed: {program} was killed"),
+    }
 }
 
 /// Resolves `.` and `..` segments lexically, touching no filesystem.
@@ -2996,6 +3159,8 @@ mod tests {
         _watch_rx: mpsc::Receiver<WatchCmd>,
         _index_rx: mpsc::Receiver<IndexCmd>,
         _git_rx: mpsc::Receiver<GitCmd>,
+        /// Detached-open failures the app would have reported (task 085).
+        pub(super) open_rx: mpsc::Receiver<OpenEvent>,
     }
 
     pub(super) fn harness(mode: Mode) -> Harness {
@@ -3003,6 +3168,7 @@ mod tests {
         let (watch_tx, watch_rx) = mpsc::channel();
         let (index_tx, index_rx) = mpsc::channel();
         let (git_tx, git_rx) = mpsc::channel();
+        let (open_tx, open_rx) = mpsc::channel();
         let root = PathBuf::from("/r");
         let mut app = App {
             tree: Tree::new(root.clone()),
@@ -3016,6 +3182,7 @@ mod tests {
             source_cmds: source_tx,
             watch_cmds: watch_tx,
             index_cmds: index_tx,
+            open_events: open_tx,
             git_cmds: git_tx,
             repo_root: None,
             socket: None,
@@ -3057,6 +3224,7 @@ mod tests {
             _watch_rx: watch_rx,
             _index_rx: index_rx,
             _git_rx: git_rx,
+            open_rx,
         }
     }
 
@@ -4180,6 +4348,162 @@ mod tests {
             assert_eq!(seen, 1);
             assert_eq!(stop, expected);
         }
+    }
+
+    #[test]
+    fn a_failed_detached_open_says_why_when_the_child_said_anything() {
+        let reason = OpenEvent {
+            program: "birch-cmux".into(),
+            code: Some(1),
+            reason: "no focused cmux window".into(),
+        };
+        assert_eq!(
+            open_failure_message(&reason),
+            "open failed: birch-cmux: no focused cmux window"
+        );
+        let silent = OpenEvent {
+            program: "birch-cmux".into(),
+            code: Some(3),
+            reason: String::new(),
+        };
+        assert_eq!(
+            open_failure_message(&silent),
+            "open failed: birch-cmux exited with 3"
+        );
+        let killed = OpenEvent {
+            program: "birch-cmux".into(),
+            code: None,
+            reason: String::new(),
+        };
+        assert_eq!(
+            open_failure_message(&killed),
+            "open failed: birch-cmux was killed"
+        );
+    }
+
+    #[test]
+    fn the_reason_is_the_first_real_line_cleaned_and_bounded() {
+        let reason = |bytes: &[u8]| reason_from(bytes.to_vec());
+        assert_eq!(
+            reason(b"\n\n  boom: it failed \nand more\n"),
+            "boom: it failed"
+        );
+        assert_eq!(reason(b"a\x07b\n"), "ab");
+        let long = format!("{}\n", "x".repeat(500));
+        assert_eq!(reason(long.as_bytes()).len(), REASON_LIMIT);
+        assert_eq!(reason(b""), "");
+    }
+
+    #[test]
+    fn a_child_that_leaves_stderr_open_is_still_reaped_promptly() {
+        // A pipe would reach EOF only when the backgrounded `sleep` let go of
+        // the inherited stderr, parking the reaper and zombifying the child.
+        let mut h = harness(Mode::Tree);
+        h.app.open_cmd =
+            OpenCmd::from_template("/bin/sh -c '(sleep 30 &) ; echo boom >&2; exit 3' {}")
+                .expect("template");
+        h.app.open_detached(Path::new("/r/a"));
+        let failure = h
+            .open_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("reported without waiting for the grandchild");
+        assert_eq!(failure.code, Some(3));
+        assert_eq!(failure.reason, "boom");
+    }
+
+    #[test]
+    fn the_status_line_names_the_program_not_its_path() {
+        assert_eq!(program_name("/opt/homebrew/bin/birch-cmux"), "birch-cmux");
+        assert_eq!(program_name("nvim"), "nvim");
+    }
+
+    #[test]
+    fn a_detached_open_that_fails_reports_it_and_one_that_works_says_nothing() {
+        let mut h = harness(Mode::Tree);
+        h.app.open_cmd =
+            OpenCmd::from_template("/bin/sh -c 'echo boom >&2; exit 3' {}").expect("template");
+        h.app.open_detached(Path::new("/r/a"));
+        let failure = h
+            .open_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a failing open reports");
+        assert_eq!(failure.program, "sh");
+        assert_eq!(failure.code, Some(3));
+        assert_eq!(failure.reason, "boom");
+
+        h.app.open_cmd = OpenCmd::from_template("/bin/sh -c 'exit 0' {}").expect("template");
+        h.app.open_detached(Path::new("/r/a"));
+        assert!(
+            h.open_rx.recv_timeout(Duration::from_millis(500)).is_err(),
+            "a clean exit says nothing"
+        );
+    }
+
+    #[test]
+    fn set_open_cmd_replaces_the_command_and_leaves_absent_parts_alone() {
+        let mut h = harness(Mode::Tree);
+        h.app.open_cmd = OpenCmd::from_template("old {}").expect("template");
+        h.app.open_cmd.set_name("host");
+        h.app.open_cmd.mode = OpenMode::Detached;
+
+        let mut req = Request::new(Verb::SetOpenCmd);
+        req.value = Some("cmux open {} --window w1".into());
+        assert!(h.app.ctl_response(req).0.ok);
+        // Template replaced; name and mode carried over, because neither was
+        // named in the request.
+        assert_eq!(
+            h.app.open_cmd.build(Path::new("/r/a")).first().unwrap(),
+            "cmux"
+        );
+        assert_eq!(h.app.open_cmd.display_name(), "host");
+        assert_eq!(h.app.open_cmd.mode, OpenMode::Detached);
+
+        let mut req = Request::new(Verb::SetOpenCmd);
+        req.value = Some("vim {}".into());
+        req.name = Some("editor".into());
+        req.detached = Some(false);
+        assert!(h.app.ctl_response(req).0.ok);
+        assert_eq!(h.app.open_cmd.display_name(), "editor");
+        assert_eq!(h.app.open_cmd.mode, OpenMode::Terminal);
+    }
+
+    #[test]
+    fn set_open_cmd_refuses_a_missing_or_unparseable_template() {
+        let mut h = harness(Mode::Tree);
+        let response = h.app.ctl_response(Request::new(Verb::SetOpenCmd)).0;
+        assert!(!response.ok);
+        assert!(response.error.unwrap_or_default().contains("template"));
+
+        let mut req = Request::new(Verb::SetOpenCmd);
+        req.value = Some("nvim +{line} {}".into());
+        let response = h.app.ctl_response(req).0;
+        assert!(
+            !response.ok,
+            "the once-documented placeholder is still refused"
+        );
+    }
+
+    #[test]
+    fn the_menu_row_names_the_host_when_the_command_has_a_display_name() {
+        let mut h = harness(Mode::Tree);
+        h.app.open_cmd = OpenCmd::from_template("birch-cmux preview {}").expect("template");
+        let targets = vec![ActionTarget {
+            path: PathBuf::from("/r/a"),
+            is_dir: false,
+            expanded: false,
+            missing: false,
+        }];
+        let label = Action::Open.label_in(
+            h.app
+                .action_context(&targets, h.app.open_cmd.display_name()),
+        );
+        assert_eq!(label.text(), "Open with birch-cmux");
+        h.app.open_cmd.set_name("cmux");
+        let label = Action::Open.label_in(
+            h.app
+                .action_context(&targets, h.app.open_cmd.display_name()),
+        );
+        assert_eq!(label.text(), "Open with cmux");
     }
 
     #[test]

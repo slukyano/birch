@@ -2,7 +2,7 @@
 type: Task
 title: ADR 0016 describes a Dock coupling the code does not have
 description: birch-cmux is window-scoped, not dock-scoped; and the ADR's "verified facts" about the Dock have aged out of date.
-status: Designed
+status: Done
 priority: low
 ---
 
@@ -84,7 +84,7 @@ Dock with the config contents") is in-app only.
 **A dock birch's lifetime is therefore one cmux session.** This is cmux's design, not a defect in
 the adapter — cmux owns the Dock lifecycle, which is the whole premise of ADR 0016 — but it is the
 integration's sharpest edge and nothing states it. Recorded as
-[`098`](098-dock-birch-does-not-survive-a-restart.md), which owns whatever birch can do about it;
+[`098`](../tasks/098-dock-birch-does-not-survive-a-restart.md), which owns whatever birch can do about it;
 this task owns saying it.
 
 ### The correction with teeth: the control already knows its own window

@@ -21,6 +21,6 @@ lands.
   0.6, and says so explicitly.
 - Backlog audit — every not-yet-built part of the design doc must be a task. Sweep
   result: all sections map to existing drafts; two mentions added to
-  [add-file-operations](../tasks/029-add-file-operations.md) that were only in the design doc
+  [add-file-operations](029-add-file-operations.md) that were only in the design doc
   (F2 on a chain edits the full `a/b/c` fragment; mouse segment-clicks scope the
   context menu to individual chain members).

@@ -25,7 +25,7 @@ unreachable in that host entirely, however well it works in a plain terminal.
 
 - **Which key.** Printables are gone, so the candidates are modified or non-printable. What is
   known about each, in the legacy encoding birch decodes with (see
-  [`091`](091-kitty-keyboard-protocol.md)):
+  [`091`](../tasks/091-kitty-keyboard-protocol.md)):
   - **`Ctrl-Space`** arrives as `NUL` and reaches crossterm as `Char(' ')` with `CONTROL` — viable,
     and distinguishable from everything birch binds.
   - **`Shift-F10`** is the Windows/Linux convention for "context menu". Function keys travel as CSI
@@ -87,7 +87,7 @@ A third binding on a `Ctrl`+letter would work on a stock Mac with no configurati
 **deliberately not added**. `Ctrl`-modified keys are the scarcest space birch has — printables are
 permanently reserved ([ADR 0008](../../docs/adr/0008-q-types-into-search.md)), `Cmd` is not
 expressible in the key encoding birch decodes with at all
-([`091`](091-kitty-keyboard-protocol.md)), and `Alt` is unreliable on macOS because Option produces
+([`091`](../tasks/091-kitty-keyboard-protocol.md)), and `Alt` is unreliable on macOS because Option produces
 special characters unless the terminal is configured otherwise. `Ctrl-C`, `Ctrl-N`, and `Ctrl-F` are
 already spent; the rest is the whole budget for every future accelerator, and `029`'s rename field
 puts readline's `Ctrl-A`/`E`/`K`/`W`/`U` out of reach on top of that. Spending one of the few

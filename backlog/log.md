@@ -357,3 +357,17 @@
 * Filed rather than scoped: `091-kitty-keyboard-protocol` (the only route to `Ctrl-Shift-*` and to
   `Cmd` at all) and `093-undo-a-file-operation` (after this sprint, only delete has a way back).
 
+## 2026-08-24 (sprint 022)
+
+* **Sprint 022 done**: the adapter seam. The cmux follow watcher reconnects and re-reads workspace
+  state on every reconnection, so a stream that drops no longer strands the tree at whatever folder
+  it held; it also retires itself when its birch exits, which needed the subscription unfiltered
+  because a filtered one drops the heartbeats that make the check reachable. A failed detached open
+  reaches the status line with the child's own stderr, and the open command takes a display name so
+  the menu names the host rather than the adapter
+  ([ADR 0035](../docs/adr/0035-the-open-command-is-settable-at-runtime.md)). `birch-cmux` is a
+  socket, a birch and a watcher: the `preview` verb is gone and the window comes from the control's
+  own environment. ADR 0016 amended with four facts verified against `contrib/testcmux`, one of
+  which — a restored Dock returns terminals rather than controls — became
+  `098-dock-birch-does-not-survive-a-restart`. Independent review found the liveness check
+  unreachable and three integration checks unable to fail; both fixed before close-out.

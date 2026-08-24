@@ -270,6 +270,7 @@ A running birch instance exposes a Unix domain socket; `birch ctl` (a subcommand
 | `get-root` | Print root |
 | `set <setting> <value>` | Runtime toggles: hidden, ignored, compact, icons, search case, … |
 | `set-root <dir>` | Re-root |
+| `set-open-cmd <template> [--name <text>] [--detached\|--no-detached]` | Replace the open command, what the menu calls it, and its mode (ADR 0035). Absent parts are left alone; nothing here is persisted. |
 | `open` | Open current selection |
 | `quit` | Exit |
 
@@ -316,7 +317,7 @@ An adapter's job (~a screen of code):
 **Adapters live with the host, not in the birch repo.** The host knows its own pane, keybinding, and hook APIs; birch stays free of N host integrations (same instinct as "no plugins"). The birch repo ships three *reference* adapters as documentation of the pattern — installed on `PATH` beside `birch` since [ADR 0027](adr/0027-adapters-ship-as-binaries.md), because a binding that cannot be named is not usable documentation — plus plain recipes for hosts without adapter hooks:
 
 - **tmux**: pane spawn + `send-keys` open-cmd + toggle binding (recipe, not adapter — tmux has no hook surface worth wrapping).
-- **cmux**: integrates via cmux's native right-sidebar **Dock** rather than a workspace split — cmux owns the lifecycle from `dock.json`; the adapter supplies a per-window socket, preview-as-tab, and a workspace-follow watcher (ADR 0016, rides the Dock beta).
+- **cmux**: integrates via cmux's native right-sidebar **Dock** rather than a workspace split — cmux owns the lifecycle from `dock.json`; the adapter supplies a per-window socket and a workspace-follow watcher, and points birch's open command at the window it belongs to (ADR 0016, rides the Dock beta).
 - **Forward** (tree → editor) without any adapter: `--open-cmd` per target — `nvim --server $NVIM --remote`, `emacsclient`, `code -r`.
 - **Reverse** without any adapter: two-line editor autocmd calling `birch ctl reveal <file>` on buffer switch.
 

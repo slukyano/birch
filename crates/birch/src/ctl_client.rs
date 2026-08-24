@@ -62,6 +62,21 @@ enum VerbCmd {
     },
     /// Re-root the tree.
     SetRoot { dir: PathBuf },
+    /// Replace the open command, and optionally what the menu calls it.
+    SetOpenCmd {
+        /// Command template: {} is the path (appended when absent).
+        template: String,
+        /// What the menu shows beside `Open`, instead of the program name.
+        #[arg(long, value_name = "text")]
+        name: Option<String>,
+        /// Spawn it detached from the tty instead of handing the terminal
+        /// over. Omit both flags to leave the current mode alone.
+        #[arg(long, conflicts_with = "no_detached")]
+        detached: bool,
+        /// Hand the terminal over and wait, for a terminal editor.
+        #[arg(long)]
+        no_detached: bool,
+    },
     /// Open the current selection.
     Open,
     /// Exit the instance.
@@ -181,6 +196,19 @@ fn build_request(verb: &VerbCmd) -> Result<Request, String> {
             let mut request = Request::new(Verb::Set);
             request.setting = Some((*setting).into());
             request.value = Some(value.clone());
+            request
+        }
+        VerbCmd::SetOpenCmd {
+            template,
+            name,
+            detached,
+            no_detached,
+        } => {
+            let mut request = Request::new(Verb::SetOpenCmd);
+            request.value = Some(template.clone());
+            request.name = name.clone();
+            // Neither flag means "unchanged", so the field stays absent.
+            request.detached = detached.then_some(true).or(no_detached.then_some(false));
             request
         }
         VerbCmd::SetRoot { dir } => {
