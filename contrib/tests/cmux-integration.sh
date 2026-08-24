@@ -131,7 +131,7 @@ case "$(root_line)" in *ws-alpha*) got=yes ;; *) got="no ($(root_line))" ;; esac
 check "selecting AlphaWs re-roots it back" yes "$got"
 
 # 3. a preview opens in the workspace you are in. Driven through birch itself:
-#    move onto the file row and press enter, which runs the adapter's `preview`.
+#    move onto the file row and press enter, which runs birch's own open command.
 for ws in "$beta" "$alpha"; do
     cli workspace select "$ws" >/dev/null; settle 3
     want=$(selected)
