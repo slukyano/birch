@@ -154,3 +154,13 @@ opens with `086`'s live checks and `095`'s instrumentation, both of which produc
 designs consume.
 
 # Session log
+
+* **2026-08-23** — Sprint opened; branch cut. Design phase started with
+  `086-adr-0016-window-scoped-framing`'s three live checks against `contrib/testcmux`: all three
+  answered, `086` designed. `cmux current-window` returns a UUID; a config-seeded control lands in
+  the window Dock (`dock:global`) and config precedence is first-match-wins, so two birch controls
+  cannot be seeded into one window; a hand-started second one refuses legibly. Two findings beyond
+  the checks: a dock control's `CMUX_WORKSPACE_ID` holds its own **window UUID**, which removes
+  `095`'s focus race at the root, and a restored Dock snapshot brings back bare terminals rather
+  than controls, so a dock birch lasts one cmux session — filed as
+  `098-dock-birch-does-not-survive-a-restart`.
