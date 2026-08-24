@@ -149,11 +149,10 @@ hatches are in-app.
 **None.** No CLI flag, config key, socket field, environment variable, on-disk path, or public API
 changes. This task edits an ADR, a document, and comments.
 
-### Open decision
+### Settled
 
-Whether ADR 0016 is **amended** or **superseded**. Amendment is recommended and assumed above: the
-decision stands and only its description is wrong, which is what the sprint-019 amendment already
-did to the same ADR. Supersession would be right if the coupling restatement counts as a new
-decision rather than a correction — the repository rule reserves a superseding ADR for *reversing*
-an accepted decision, and nothing here is reversed.
+ADR 0016 is **amended**, not superseded — maintainer decision, sprint-022 design phase. An
+`## Amendment (sprint-022)` section carrying the three corrections above; `status` stays `Accepted`.
+The decision the ADR records is untouched, only its description was wrong, which is what the
+sprint-019 amendment already did to the same ADR.
 
