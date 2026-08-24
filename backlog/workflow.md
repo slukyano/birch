@@ -24,6 +24,9 @@ Development happens in **sprints**, driven interactively in **sessions**:
 - A **sprint** is one batch of tasks taken from scope approval through design and
   implementation to a final merge. A sprint usually spans several sessions.
 
+One sprint runs at a time. Sprints that will run later may be **planned ahead** — scoped into their
+own concept and left at status `Planned` until one is started.
+
 The bundle holds three concept types:
 
 - `Task` — one backlog item per file, named `NNN-slug.md` (a zero-padded number is part of the
@@ -66,24 +69,41 @@ sprint" is recorded in the sprint concept, not on the task.
 One sprint moves through:
 
 ```
-  (scope approved)          (design approved)         (implementation approved)
-        │                          │                            │
-        ▼                          ▼                            ▼
-    Designing ──────────────► Implementing ──────────────────► Done
-        │                          │
-        └────────── Aborted ◄──────┘   (maintainer decision; record why)
+(scope drafted ahead) (scope approved)          (design approved)  (implementation approved)
+       │                      │                         │                      │
+       ▼                      ▼                         ▼                      ▼
+    Planned ────────────► Designing ────────────► Implementing ────────────► Done
+       │                      │                         │
+       └──────────────────► Aborted ◄───────────────────┘   (maintainer decision; record why)
 ```
+
+`Planned` is optional. A sprint scoped and started in one sitting begins at `Designing` and never
+holds `Planned` at all; the state exists for scope that is settled before there is room to run it.
+
+A `Planned` sprint is a **queue entry, not a commitment**. It has no branch, its tasks stay `Draft`,
+and its scope is re-presented for approval when it starts — the backlog it was drawn from will have
+moved. Any number may be `Planned` at once; they run in sprint-number order unless the maintainer
+says otherwise. Aborting one is a maintainer decision like any other, and the body records why.
+
+A task appears in the `tasks` list of **at most one** sprint that is not `Done` or `Aborted`.
+Two sprints claiming the same task is the one thing this state can get wrong, so moving a task
+between a running sprint and a planned one edits both lists in the same commit.
 
 ## 1. Session start
 
 Every session begins by checking for unfinished work: is there any `Sprint` concept in
-`backlog/sprints/` whose `status` is not `Done` or `Aborted`?
+`backlog/sprints/` whose `status` is `Designing` or `Implementing`?
 
 - **An active sprint exists** → check out its branch (the branch always has the freshest
   sprint state) and resume from the sprint body: the task checklist, open questions, and
   session log say exactly where work stopped.
-- **No active sprint** (including: no sprint concept has ever been created) → propose scope
-  for a new one. Also glance at `git branch --list 'sprint/*'` for a stray branch.
+- **No active sprint, but a `Planned` one exists** → take the lowest-numbered `Planned` sprint as
+  the starting proposal, re-check its scope against the backlog as it stands now, and present it
+  for approval. What was planned is a draft to argue with, not a decision already taken.
+- **Neither** (including: no sprint concept has ever been created) → propose scope for a new one.
+
+In every case, glance at `git branch --list 'sprint/*'` for a stray branch. A `Planned` sprint has
+no branch; one that exists for a `Planned` sprint's number is a leftover, not state.
 
 ## 2. Scoping
 
@@ -95,6 +115,13 @@ approves.
 (status `Designing`, the task list, the branch name), commit it to `main`, then create the
 sprint branch `sprint/NNN` from it. All subsequent work happens on the branch.
 
+**Planning a sprint ahead** creates the same file with status `Planned` and no branch cut. It is a
+commit to `main` like any other scope commit, and it needs the same approval — what it does *not*
+do is start anything. Use it when scope is settled before there is room to run it: work deferred out
+of a sprint that is closing, or a batch the maintainer wants recorded rather than re-derived. When
+its turn comes, the sprint is re-presented per **Session start** above, and approval flips
+`Planned → Designing` and cuts the branch.
+
 The scope is **presented for approval** in the chat protocol (below), with:
 
 - the sprint id, theme, and branch;
@@ -103,7 +130,8 @@ The scope is **presented for approval** in the chat protocol (below), with:
 - **ordering / dependencies** among the in-scope tasks;
 - **considered but out of scope** — tasks weighed and deferred, each with a one-line why;
 - the **scope rationale** — what ties the set together and what is deliberately held back;
-- the **sprint-start action** requested (commit `backlog/sprints/sprint-NNN.md`, cut `sprint/NNN`).
+- the **sprint-start action** requested (commit `backlog/sprints/sprint-NNN.md`, cut `sprint/NNN`)
+  — or, for a sprint being planned rather than started, that no branch is cut and nothing begins.
 
 ## 3. Design phase (interactive)
 
@@ -411,13 +439,14 @@ unless the maintainer explicitly opts into a partial.
 |-------|----------|------|-------|
 | `type` | yes | string | Always `Sprint`. |
 | `title` | yes | string | Short theme, e.g. "CLI ergonomics". |
-| `status` | yes | string | `Designing` \| `Implementing` \| `Done` \| `Aborted`. |
-| `branch` | yes | string | The sprint branch, e.g. `sprint/001`. |
+| `status` | yes | string | `Planned` \| `Designing` \| `Implementing` \| `Done` \| `Aborted`. |
+| `branch` | yes | string | The sprint branch, e.g. `sprint/001`. For a `Planned` sprint, the branch it will get; the branch itself is cut when the sprint starts. |
 | `tasks` | yes | list | concept names of the tasks in scope. |
 
 The **body** is the working state: scope rationale, a per-task checklist (`[ ]` → `[x]`) kept
 current during implementation, `## Open questions` (the stop-and-ask log), and a short
-`## Session log` (one line per session: what moved).
+`## Session log` (one line per session: what moved). A `Planned` sprint carries the rationale and
+the ledger only; the checklist and the log start when it does.
 
 # Task frontmatter schema
 
