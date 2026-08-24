@@ -65,19 +65,36 @@ all leave the loop spinning while every iteration no-ops, and all are equally in
 
 ## Fix
 
-**Reconnect, per cmux's own contract**: `--reconnect` with a `--cursor-file` under `$state_dir`, so
-a resumed stream replays what was missed rather than starting blind. The event is only a trigger and
-the root is re-read from authoritative state, so a gap costs nothing — but resuming keeps the first
-post-reconnect event from being dropped.
+**The bar is that follow survives every mechanism this task can name, not that it survives the
+likeliest one.** Two are known and both are in scope; a third that only a recurrence can reveal is
+handled by making the failure legible rather than by guessing at it.
+
+**1. Reconnect, per cmux's own contract.** `--reconnect` with a `--cursor-file` under `$state_dir`,
+so a resumed stream replays what was missed rather than starting blind. The event is only a trigger
+and the root is re-read from authoritative state, so a gap costs nothing — but resuming keeps the
+first post-reconnect event from being dropped.
+
+**2. Stop trusting a window identity resolved once, at launch.** The stale and wrong-`$_win` shapes
+above are defects in their own right, not merely alternative explanations for this report: a watcher
+whose window UUID no longer resolves loops forever doing nothing, and two docks that race
+`focused_window()` onto one UUID also contend for one socket path. Whatever `$_win` becomes — a
+re-resolution on each event, a validity check, or an identity the dock control can state about
+itself rather than infer — it must be a thing that can go stale and be noticed, rather than a
+constant captured at `:109`. [`086`](086-adr-0016-window-scoped-framing.md)'s live check of whether
+`cmux current-window` returns a ref or a UUID decides how much of this is needed: recycled refs make
+it a correctness requirement rather than a robustness one.
+
+**3. Make it observable.** Some channel that survives the control's life — a line per re-root, per
+reconnect, and per skipped event to a file under `$state_dir`, or the diagnostic stream
+[`085`](085-report-open-cmd-failures.md) asks birch for. This is what makes the fix honest: if a
+mechanism outside 1 and 2 is the real trigger, the next recurrence names it instead of restarting
+the argument. A mechanism found and not fixed becomes its own `Draft` task, named — never a silent
+remainder inside this one.
 
 **`--reconnect` makes [`084`](084-follow-watcher-outlives-birch.md) mandatory, not optional.** Today
 the stream EOF is the only thing that ever stops a watcher whose birch has gone; reconnecting
 removes it and every leaked watcher becomes immortal. The `kill -0 "$parent"` guard from 084 has to
 land in the same change, or before it. The two tasks are one seam and should share a sprint.
-
-**Make it observable.** Some channel that survives the control's life — a line per re-root and per
-reconnect to a file under `$state_dir`, or the diagnostic stream 085 asks birch for. Enough that
-the next "it broke again" arrives with an answer attached.
 
 ## Verify first
 

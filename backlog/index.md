@@ -29,6 +29,8 @@ okf_version: "0.1"
 * [Sprint 019 — The cmux integration, finished](sprints/sprint-019.md) - Done.
 * [Sprint 020 — Multi-select and the action surface](sprints/sprint-020.md) - Done.
 * [Sprint 021 — The actions the menu was built for](sprints/sprint-021.md) - Done.
+* [Sprint 022 — The adapter seam: a follow that survives, a failure that speaks](sprints/sprint-022.md) - Designing.
+* [Sprint 023 — The other two adapters — fixed, and run](sprints/sprint-023.md) - Planned.
 
 # Tasks
 
@@ -55,9 +57,10 @@ okf_version: "0.1"
 * [A keyboard way to build a discontiguous selection](tasks/089-keyboard-toggle-for-multi-select.md) - Shift with the arrows extends a contiguous range; nothing on the keyboard toggles one row in or out.
 * [Hover highlight in the tree](tasks/090-hover-highlight-in-the-tree.md) - Motion tracking so the row under the pointer lights up; the context menu enables it only for its own lifetime.
 * [Adopt the Kitty keyboard protocol where the terminal supports it](tasks/091-kitty-keyboard-protocol.md) - The legacy encoding cannot represent Shift with a control character, so Ctrl-Shift-C is the same byte as Ctrl-C.
-* [Undo a file operation](tasks/093-undo-a-file-operation.md) - Sprint 021 makes birch mutate the filesystem; trash covers delete and nothing covers rename, move, or create.
 * [stale_socket_is_reclaimed_but_files_are_not is intermittently flaky](tasks/094-flaky-ctl-socket-test.md) - The ctl socket test fails roughly one run in five, and passes in isolation and on retry.
 * [The dock's follow watcher stops following, silently and for good](tasks/095-follow-watcher-never-reconnects.md) - No --reconnect, so the first stream end retires it; every diagnostic goes to /dev/null, so nothing says so.
+* [Open with names the adapter instead of the thing it opens](tasks/096-open-with-names-the-adapter.md) - The row reads "Open with birch-cmux"; the open command needs a display name adapters can set.
+* [birch-tmux and birch-herdr still name themselves in the Open row](tasks/097-tmux-herdr-set-their-display-name.md) - The display name 096 adds is set only by birch-cmux; the other two keep the old label.
 
 # Publication
 
@@ -68,6 +71,7 @@ so outside the `docs/design.md` scope fence.
 
 # Done
 
+* [Undo a file operation](archive/093-undo-a-file-operation.md) - Sprint 021 makes birch mutate the filesystem; trash covers delete and nothing covers rename, move, or create.
 * [Move files and folders by dragging](archive/072-drag-to-move.md) - Drag a row onto a directory to move it; arguable since ADR 0028, against the File operations section's own "No move".
 * [Add copy name and paths](archive/028-add-copy-paths.md) - OSC 52 copy split out of the 0.5 bundle.
 * [Add file operations](archive/029-add-file-operations.md) - Rename/delete/new inline ops with git-aware delete; context menu split to 071, copy paths to 028.
