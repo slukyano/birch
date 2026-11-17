@@ -89,61 +89,47 @@ the source-shaped neighbour, and could later reuse the same producers.
   the set *is* (the user did not necessarily choose it — an agent may have), and the existing
   `branch-badges` surface keeping its meaning.
 
-## Decisions for the maintainer (proposed, not taken)
+## Decisions taken (2026-11-16)
 
-1. **How a highlight looks against the git badges.**
-   - **Proposed: the `078` column, one producer at a time.** The column keeps its position and
-     width; the glyph names the producer (branch mark for a branch diff, a clock for recent, a
-     history or commit mark for since-commit, a pin for custom), and the root annotation names the
-     set — `(vs upstream/develop, fetched 2h ago)`, `(changed in the last 30m)`,
-     `(since a1b2c3d)`, `(highlight: 12 paths)`. Each new glyph needs a Nerd Font codepoint plus a
-     plain fallback measured against the five fonts `078` measured.
-   - Alternatives: a single neutral mark for every mode, with only the annotation telling them
-     apart (no font audit, but an agent can swap the set under a user with nothing on the row
-     changing); colouring the file name, which collides with the git status colour; a row tint,
-     which collides with selection and hover.
-2. **Whether several sets can be active at once.**
-   - **Proposed: one active set.** One column, one meaning; setting a new highlight replaces the
-     current one.
-   - Alternatives: several named layers with a precedence in one column (the mark then cannot say
-     which layer put it there); a column per layer (width, in the pane the fence is drawn for).
-3. **What "changed" means for the time-based mode.**
-   - **Proposed: git-anchored.** A file is recent if it is uncommitted with an mtime inside the
-     window, or touched by a commit whose committer date is inside it. Cheap — the dirty files come
-     from the `git status` already run, the committed ones from one `git log --since` — and immune
-     to a `checkout`, which rewrites the mtime of every file it touches and would otherwise light up
-     the whole tree for N minutes. Outside a git repository the mode is unavailable, as the branch
-     column is without a base.
-   - Alternative: plain mtime of every non-ignored file. Works outside git and matches "what did
-     the agent just touch" literally, but stats the repository on every refresh and every tick, and
-     floods after a branch switch.
-4. **How a custom set is cleared.**
-   - **Proposed: explicitly, back to the configured default.** `clear` restores whatever the
-     config and flags chose at launch (the branch diff, by default); `off` hides the column
-     outright; any new highlight replaces the set. Runtime highlights are never persisted — a set an
-     agent chose must not outlive the instance (the same reasoning as ADR 0035 for the open
-     command).
-   - Alternatives: an optional time-to-live on a set; clearing when the setting client disconnects
-     (`birch ctl` is one-shot, so a set would vanish as soon as it was made).
-5. **The shape of the control commands.**
-   - **Proposed: one new verb, `highlight`, with a `mode`** — `branch` (optional `value`: a ref, or
-     a remote name meaning that remote's `HEAD`), `recent` (`value`: a duration), `since` (`value`:
-     a commit), `paths` (a new request field `paths`), `off`, `clear`. Client form:
-     `birch ctl highlight branch [<ref>] | recent <duration> | since <commit> | paths [<path>…] [--stdin [-0]] | off | clear`.
-     A matching `get-highlight` reports the active set, so an agent can check before replacing what
-     a user chose. The custom set is replace-only: the caller sends the whole set each time.
-   - Alternatives: a `SettingKey` under `set` with an encoded value (`recent:30m`) — rejected by
-     the same argument as ADR 0035: `set` feeds persistence and carries scalars, and a path list is
-     neither; a verb per mode, which grows the closed set four times over.
-   - Likely an ADR: the verb, and that runtime highlights are not persisted.
-6. **What happens to the `branch-badges` surface.** Proposed: it keeps working and keeps meaning
-   "the highlight column is shown"; a new config key `highlight` (and launch flag `--highlight`)
-   chooses the default producer, defaulting to today's branch diff against the remote base.
+Settled before design; the design phase builds on them rather than reopening them.
+
+1. **Look: the `078` column, one producer at a time.** The column keeps its position and width; the
+   glyph names the mode (branch mark for a branch diff, a clock for recent, a commit mark for
+   since-commit, a pin for custom), and the root annotation names the set —
+   `(vs upstream/develop, fetched 2h ago)`, `(changed in the last 30m)`, `(since a1b2c3d)`,
+   `(custom: 12 paths)`. Each new glyph needs a Nerd Font codepoint plus a plain fallback measured
+   against the five fonts `078` measured. Rejected: a single neutral mark for every mode (an agent
+   could swap the set under a user with nothing on the row changing), colouring the file name
+   (collides with the git status colour), a row tint (collides with selection and hover).
+2. **One active set.** One column, one meaning; setting a highlight replaces the current one.
+   Rejected: named layers with a precedence in one column (the mark cannot say which layer put it
+   there), a column per layer (width, in the pane the fence is drawn for).
+3. **"Changed" in the time-based mode is git-anchored.** A file is recent if it is uncommitted with
+   an mtime inside the window, or touched by a commit whose committer date is inside it. The dirty
+   files come from the `git status` already run and the committed ones from one `git log --since`,
+   and a `checkout` — which rewrites the mtime of every file it touches — does not light up the
+   tree. Outside a git repository the mode is unavailable, as the branch column is without a base.
+   Rejected: plain mtime of every non-ignored file, which stats the repository on every refresh and
+   tick and floods after a branch switch.
+4. **Custom is a mode like the others, carrying its list.** There is no `clear`: a custom set ends
+   when another mode is set, `off` included. Runtime highlights are never persisted — a set an agent
+   chose must not outlive the instance (the reasoning of ADR 0035 for the open command).
+5. **One new socket verb, `highlight`, with a `mode`:** `branch` (optional `value`: a ref, or a
+   remote name meaning that remote's `HEAD`), `recent` (`value`: a duration), `since` (`value`: a
+   commit), `custom` (the list, in a new request field `paths`), and `off`. Client form:
+   `birch ctl highlight branch [<ref>] | recent <duration> | since <commit> | custom [<path>…] [--stdin [-0]] | off`.
+   A matching `get-highlight` reports the active set, so an agent can check before replacing what a
+   user chose. A custom set is replace-only: the caller sends the whole list each time. Rejected: a
+   `SettingKey` under `set` with an encoded value (`set` feeds persistence and carries scalars, and
+   a path list is neither), a verb per mode (grows the closed set four times over). Likely an ADR:
+   the verb, and that runtime highlights are not persisted.
+6. **The `branch-badges` surface keeps working** and means "the highlight column is shown". A new
+   config key `highlight` and launch flag `--highlight` choose the mode at launch, defaulting to
+   today's branch diff against the remote base.
 
 Smaller questions the design phase settles: whether the git-based modes include uncommitted changes
-(the branch diff today does not; since-commit arguably should), whether a directory in a custom set
-highlights its whole subtree or only itself, and whether `Clear Highlight` belongs in the context
-menu as an action-layer entry.
+(the branch diff today does not; since-commit arguably should), and whether a directory in a custom
+set highlights its whole subtree or only itself.
 
 ## Weight
 

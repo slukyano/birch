@@ -371,3 +371,12 @@
   which — a restored Dock returns terminals rather than controls — became
   `098-dock-birch-does-not-survive-a-restart`. Independent review found the liveness check
   unreachable and three integration checks unable to fail; both fixed before close-out.
+
+## 2026-11-16
+
+* **Filed `100-add-context-highlights`** and **planned [`sprint-024`](sprints/sprint-024.md)** to
+  carry it: the branch column becomes one mode of a highlighted set chosen at runtime — a diff
+  against any ref, recent changes, changes since a commit, or a custom list — set over a new
+  `highlight` socket verb. Its headline decisions are recorded in the task body: one active set in
+  the `078` column, a glyph per mode, git-anchored recency, custom as a mode with no `clear`, and
+  runtime highlights never persisted.

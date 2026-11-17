@@ -31,6 +31,7 @@ okf_version: "0.1"
 * [Sprint 021 — The actions the menu was built for](sprints/sprint-021.md) - Done.
 * [Sprint 022 — The adapter seam: a follow that survives, a failure that speaks](sprints/sprint-022.md) - Done.
 * [Sprint 023 — The other two adapters — fixed, and run](sprints/sprint-023.md) - Planned.
+* [Sprint 024 — Context highlights](sprints/sprint-024.md) - Planned.
 
 # Tasks
 
